@@ -1,0 +1,40 @@
+name: Bug report
+description: Something in ReadingGym misbehaved.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The local log at
+        `~/Library/Application Support/ReadingGym/logs/app.log` usually explains
+        what happened — skim it and attach the relevant lines if you can.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what actually happened?
+      placeholder: |
+        1. Imported X.epub
+        2. Clicked Start Reading
+        3. Expected the reader to open on chapter 1
+        4. Instead it showed the cover
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: "e.g. 15.4 (Sequoia)"
+    validations:
+      required: true
+  - type: input
+    id: book-type
+    attributes:
+      label: Book type
+      placeholder: "EPUB or plain text? Which book, if shareable?"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines (optional)
+      description: From ~/Library/Application Support/ReadingGym/logs/app.log
+      render: json

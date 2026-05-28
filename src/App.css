@@ -1,0 +1,477 @@
+:root {
+  --bg: #f7f5ef;
+  --panel: #fffefb;
+  --ink: #1c1b18;
+  --muted: #6b6660;
+  --line: #e8e3d8;
+  --accent: #2f4e3a;
+  --accent-ink: #fffefb;
+  --warn: #a04a00;
+  --alert: #8a1d1d;
+  --ok: #2f4e3a;
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161a;
+  --panel: #1a1d22;
+  --ink: #e8e6e1;
+  --muted: #8d8a82;
+  --line: #2a2e34;
+  --accent: #a7c5b1;
+  --accent-ink: #14161a;
+  --warn: #d99a55;
+  --alert: #d97a7a;
+  --ok: #a7c5b1;
+}
+
+* { box-sizing: border-box; }
+
+/* ── Accessibility floor ─────────────────────────────────────────────────
+   Visible focus ring stronger than browser default, applied via :focus-visible
+   so mouse-clicked buttons don't get a halo but keyboard users do.
+   Cites: guard-accessibility-baseline-wcag-aa item 1; concept-usability-heuristic-set h1.
+   ─────────────────────────────────────────────────────────────────────── */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+button:focus-visible,
+.recovery-btn:focus-visible,
+.today-import:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Skip-to-main link — invisible until focused via Tab. First focusable in App. */
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -40px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  text-decoration: none;
+  z-index: 100;
+  transition: top 0.12s ease;
+}
+.skip-link:focus { top: 8px; }
+
+html, body, #root, .app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+/* The <main> landmark sits between .app and the screens; preserve the flex column. */
+main#main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.brand { font-weight: 600; letter-spacing: 0.02em; }
+.spacer { flex: 1; }
+
+button {
+  font: inherit;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+button:hover { border-color: var(--muted); }
+button.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+button.primary.big { padding: 14px 22px; font-size: 16px; }
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+button.ghost:hover { color: var(--ink); border-color: var(--line); }
+
+.screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 32px;
+  max-width: 640px;
+  width: 100%;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+}
+.card.today-card { padding: 36px; }
+.card.welcome { text-align: center; }
+
+.kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.title {
+  font-size: 28px;
+  margin: 0 0 4px 0;
+  letter-spacing: -0.01em;
+}
+.author {
+  color: var(--muted);
+  margin-bottom: 24px;
+  font-style: italic;
+}
+
+.section-block {
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  margin: 16px 0 24px 0;
+}
+.section-label { font-size: 18px; font-weight: 500; }
+.section-meta {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.dot { opacity: 0.5; }
+.pace { font-weight: 500; }
+.pace-ok { color: var(--ok); }
+.pace-warn { color: var(--warn); }
+.pace-alert { color: var(--alert); }
+.pace-muted { color: var(--muted); }
+
+.muted { color: var(--muted); }
+.hint { color: var(--muted); font-size: 13px; margin-top: 12px; }
+.small { font-size: 12px; }
+
+/* Reader */
+.reader {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  background: var(--bg);
+}
+.reader-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.reader-title { font-size: 13px; }
+
+.reader-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 40px 24px 120px 24px;
+  display: flex;
+  justify-content: center;
+}
+.reader-text {
+  font-family: "Iowan Old Style", "Georgia", "Charter", "Hoefler Text", serif;
+  color: var(--ink);
+  margin: 0;
+}
+
+/* Panels (note + ending) */
+.panel-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px;
+  width: 92%;
+  max-width: 560px;
+  max-height: 90vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.panel-header { display: flex; align-items: center; justify-content: space-between; }
+.panel-header h2 { margin: 0; font-size: 18px; }
+.panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.panel select,
+.panel textarea,
+.panel input {
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  width: 100%;
+}
+.panel textarea { resize: vertical; }
+.panel .row { display: flex; gap: 16px; }
+.panel-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.warn { color: var(--warn); font-size: 13px; margin: 0; }
+
+/* Streak + recovery */
+.streak {
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.today-import {
+  margin-top: 10px;
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.today-import:hover { color: var(--ink); text-decoration-color: var(--muted); }
+.card.recovery-card {
+  margin-top: 16px;
+  border-color: var(--warn);
+}
+.recovery-headline {
+  margin: 4px 0 8px 0;
+  font-size: 17px;
+  font-weight: 500;
+}
+.recovery-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.recovery-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.recovery-btn {
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+.recovery-btn:hover { border-color: var(--muted); }
+.recovery-detail { padding-left: 4px; }
+.recovery-message {
+  margin-top: 12px;
+  color: var(--ok);
+  font-size: 13px;
+}
+.recovery-confirm {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--alert);
+  border-radius: 8px;
+  background: rgba(138, 29, 29, 0.06);
+}
+.recovery-confirm .warn { margin-bottom: 10px; }
+
+/* Reader column wrapper (text reader) */
+.reader-column {
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* EPUB viewer host. The host carries the same background as the theme so
+   iframe swaps between spine documents don't flash white. */
+.epub-host {
+  padding: 0;
+  display: block;
+  height: 100%;
+  position: relative;
+  background: var(--bg);
+}
+.epub-host[data-theme="dark"] { background: #14161a; }
+.epub-host[data-theme="light"] { background: #f7f5ef; }
+.epub-viewer {
+  width: 100%;
+  height: 100%;
+  min-height: calc(100vh - 100px);
+  background: inherit;
+}
+.epub-viewer iframe {
+  border: 0;
+  width: 100%;
+  background: inherit !important;
+}
+
+/* Settings */
+.settings-card {
+  max-width: 720px;
+}
+.settings-header { display: flex; align-items: center; justify-content: space-between; }
+.settings-h2 {
+  margin: 20px 0 4px 0;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+.settings-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.settings-input {
+  flex: 1;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.settings-readonly {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 8px 0 4px 0;
+}
+.settings-ok { color: var(--ok); font-size: 13px; margin-top: 6px; }
+.settings-err { color: var(--alert); font-size: 13px; margin-top: 6px; }
+.ai-posture {
+  margin: 6px 0;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.ai-posture-on {
+  border-color: var(--ok);
+}
+.ai-posture-off {
+  border-color: var(--alert);
+  background: rgba(138, 29, 29, 0.08);
+}
+.ai-banner-off {
+  background: rgba(138, 29, 29, 0.08);
+  border: 1px solid var(--alert);
+  color: var(--alert);
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin: 6px 0;
+}
+.settings-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* AI panel */
+.ai-button {
+  /* secondary, summoned — don't shout */
+  color: var(--muted);
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+.ai-button:hover { color: var(--ink); }
+.ai-panel { max-width: 720px; }
+.ai-banner {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.ai-selection {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+}
+.ai-selection-text,
+.ai-preview-text {
+  font: inherit;
+  font-size: 13px;
+  background: var(--bg);
+  border-radius: 6px;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  margin: 6px 0;
+  max-height: 260px;
+  overflow: auto;
+}
+/* Response gets more room than the selection preview, and refuses to be
+   flex-squeezed by sibling sections of the panel column. */
+.ai-preview-text {
+  min-height: 240px;
+  max-height: 520px;
+  flex-shrink: 0;
+}
+.ai-section-h {
+  margin-top: 12px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}

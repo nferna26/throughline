@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest an improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: please read the **non-goals** in
+        [CLAUDE.md](../blob/main/CLAUDE.md). ReadingGym deliberately omits cloud
+        sync, accounts, telemetry, gamification, quizzes/SRS, a library-first or
+        dashboard-first UI, and remote-AI-by-default. Requests for those will be
+        declined — the product's value is in what it refuses to do.
+  - type: textarea
+    id: job
+    attributes:
+      label: What job are you trying to get done?
+      description: Describe the underlying need, not just the feature. (Jobs-to-be-done framing.)
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+  - type: checkboxes
+    id: non-goals
+    attributes:
+      label: Non-goals check
+      options:
+        - label: I've read the non-goals in CLAUDE.md and this request doesn't violate them.
+          required: true

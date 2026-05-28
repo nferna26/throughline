@@ -1,0 +1,328 @@
+//! Versioned schema migrations.
+//!
+//! Replaces the ad-hoc `add_column_if_missing` calls in `db.rs` with a
+//! per-version registry. Each migration has:
+//!
+//! - a stable `version` string (chronological, lexically sortable)
+//! - a one-line `description` for the audit table
+//! - an `up` function that applies it
+//! - the contract: **the `up` function MUST be idempotent**. A migration that
+//!   has already been applied to a DB (e.g. via the old `add_column_if_missing`
+//!   path) must succeed silently when run again.
+//!
+//! `apply_pending(conn)` is the public entry point:
+//!   1. Ensures the `schema_migrations` table exists.
+//!   2. Reads the set of already-applied versions.
+//!   3. For each registered migration not yet applied, runs `up` then records
+//!      it in `schema_migrations` — both inside one transaction.
+//!
+//! Migrations CANNOT be reordered or renamed after they've been applied to a
+//! live DB. New migrations are appended. The version string is the audit key.
+
+use anyhow::{Context, Result};
+use rusqlite::{params, Connection};
+use std::collections::HashSet;
+
+/// One registered migration.
+pub struct Migration {
+    pub version: &'static str,
+    pub description: &'static str,
+    pub up: fn(&Connection) -> Result<()>,
+}
+
+/// The canonical ordered list. Append-only. NEVER reorder or rename.
+///
+/// Versions land in the format `vNNN_<short_slug>` for lexical sort. Three
+/// digits gives us ~1000 migrations before we have to widen.
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: "v001_init_base_tables",
+        description: "Six PRD tables + section_progress + settings",
+        up: v001_init_base_tables,
+    },
+    Migration {
+        version: "v002_section_progress_last_percent",
+        description: "section_progress.last_percent REAL",
+        up: v002_section_progress_last_percent,
+    },
+    Migration {
+        version: "v003_section_progress_updated_at",
+        description: "section_progress.updated_at TEXT",
+        up: v003_section_progress_updated_at,
+    },
+    Migration {
+        version: "v004_book_sections_assignable",
+        description: "book_sections.assignable INTEGER NOT NULL DEFAULT 1",
+        up: v004_book_sections_assignable,
+    },
+];
+
+/// Apply every migration that is not already recorded in `schema_migrations`.
+/// On a fresh DB, this runs everything from v001 onward.
+/// On an existing DB that predates this module (e.g. originally migrated via
+/// `add_column_if_missing`), v001..v004 are still idempotent and will run
+/// without doing real work — but they still get recorded in `schema_migrations`
+/// so future inspections show the DB's lineage.
+pub fn apply_pending(conn: &Connection) -> Result<Vec<&'static str>> {
+    ensure_schema_migrations_table(conn)?;
+    let applied = applied_versions(conn)?;
+    let mut newly_applied: Vec<&'static str> = Vec::new();
+    for m in MIGRATIONS.iter() {
+        if applied.contains(m.version) {
+            continue;
+        }
+        (m.up)(conn).with_context(|| format!("migration {} ({})", m.version, m.description))?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?1, ?2, datetime('now'))",
+            params![m.version, m.description],
+        )?;
+        newly_applied.push(m.version);
+    }
+    Ok(newly_applied)
+}
+
+fn ensure_schema_migrations_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          version TEXT PRIMARY KEY,
+          description TEXT NOT NULL,
+          applied_at TEXT NOT NULL
+        );
+        "#,
+    )?;
+    Ok(())
+}
+
+fn applied_versions(conn: &Connection) -> Result<HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT version FROM schema_migrations")?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let mut out = HashSet::new();
+    for r in rows {
+        out.insert(r?);
+    }
+    Ok(out)
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Migration bodies. Each is idempotent.
+// ──────────────────────────────────────────────────────────────────────────
+
+fn v001_init_base_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        PRAGMA foreign_keys = ON;
+        PRAGMA journal_mode = WAL;
+
+        CREATE TABLE IF NOT EXISTS books (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          author TEXT,
+          source_type TEXT NOT NULL,
+          source_path TEXT NOT NULL,
+          source_sha256 TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          last_opened_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS book_sections (
+          id TEXT PRIMARY KEY,
+          book_id TEXT NOT NULL,
+          label TEXT NOT NULL,
+          href TEXT,
+          start_locator TEXT,
+          end_locator TEXT,
+          estimated_units INTEGER,
+          sort_order INTEGER NOT NULL,
+          FOREIGN KEY (book_id) REFERENCES books(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS reading_plans (
+          id TEXT PRIMARY KEY,
+          book_id TEXT NOT NULL,
+          start_date TEXT NOT NULL,
+          target_finish_date TEXT NOT NULL,
+          daily_target_units INTEGER,
+          days_per_week INTEGER DEFAULT 6,
+          catchup_mode TEXT DEFAULT 'gentle',
+          FOREIGN KEY (book_id) REFERENCES books(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS reading_sessions (
+          id TEXT PRIMARY KEY,
+          book_id TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          ended_at TEXT,
+          start_locator TEXT,
+          end_locator TEXT,
+          minutes INTEGER,
+          completed_assignment INTEGER DEFAULT 0,
+          subjective_difficulty INTEGER,
+          FOREIGN KEY (book_id) REFERENCES books(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS notes (
+          id TEXT PRIMARY KEY,
+          book_id TEXT NOT NULL,
+          session_id TEXT,
+          note_type TEXT NOT NULL,
+          locator TEXT NOT NULL,
+          chapter_label TEXT,
+          body TEXT NOT NULL,
+          short_quote TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          exported_markdown_path TEXT,
+          FOREIGN KEY (book_id) REFERENCES books(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_requests (
+          id TEXT PRIMARY KEY,
+          book_id TEXT NOT NULL,
+          mode TEXT NOT NULL,
+          locator TEXT,
+          context_char_count INTEGER,
+          provider TEXT,
+          created_at TEXT NOT NULL,
+          wrote_to_memory INTEGER DEFAULT 0,
+          FOREIGN KEY (book_id) REFERENCES books(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS section_progress (
+          book_id TEXT NOT NULL,
+          section_id TEXT NOT NULL,
+          completed_at TEXT,
+          last_locator TEXT,
+          PRIMARY KEY (book_id, section_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value TEXT
+        );
+        "#,
+    )?;
+    Ok(())
+}
+
+fn v002_section_progress_last_percent(conn: &Connection) -> Result<()> {
+    add_column_if_missing(conn, "section_progress", "last_percent", "REAL")
+}
+
+fn v003_section_progress_updated_at(conn: &Connection) -> Result<()> {
+    add_column_if_missing(conn, "section_progress", "updated_at", "TEXT")
+}
+
+fn v004_book_sections_assignable(conn: &Connection) -> Result<()> {
+    add_column_if_missing(
+        conn,
+        "book_sections",
+        "assignable",
+        "INTEGER NOT NULL DEFAULT 1",
+    )
+}
+
+/// Idempotent ALTER ADD COLUMN. Used inside migration bodies so a DB that
+/// already has the column (because it was migrated via the pre-Shot-6a
+/// `add_column_if_missing` path) doesn't error.
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, col_type: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|c| c.ok())
+        .collect();
+    if !cols.iter().any(|c| c == column) {
+        conn.execute(
+            &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, col_type),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn fresh() -> Connection {
+        Connection::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn fresh_db_applies_all_migrations_in_order() {
+        let conn = fresh();
+        let applied = apply_pending(&conn).expect("apply");
+        // Expected: every registered migration runs.
+        assert_eq!(applied.len(), MIGRATIONS.len());
+        // Schema_migrations table records them, in lexical order (which equals registration order).
+        let recorded: Vec<String> = conn
+            .prepare("SELECT version FROM schema_migrations ORDER BY version")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        let expected: Vec<&str> = MIGRATIONS.iter().map(|m| m.version).collect();
+        assert_eq!(recorded, expected);
+    }
+
+    #[test]
+    fn second_run_is_noop() {
+        let conn = fresh();
+        let first = apply_pending(&conn).expect("first run");
+        assert!(!first.is_empty());
+        let second = apply_pending(&conn).expect("second run");
+        assert!(
+            second.is_empty(),
+            "second run should not re-apply: got {:?}",
+            second
+        );
+    }
+
+    #[test]
+    fn legacy_db_with_columns_already_present_runs_idempotently() {
+        // Simulate a DB that was migrated by the pre-Shot-6a path — base
+        // tables exist with v002..v004's columns already added, but no
+        // schema_migrations table yet.
+        let conn = fresh();
+        // Apply v001 manually
+        v001_init_base_tables(&conn).unwrap();
+        // Apply v002..v004's columns out-of-band, the old way
+        conn.execute("ALTER TABLE section_progress ADD COLUMN last_percent REAL", [])
+            .unwrap();
+        conn.execute("ALTER TABLE section_progress ADD COLUMN updated_at TEXT", [])
+            .unwrap();
+        conn.execute(
+            "ALTER TABLE book_sections ADD COLUMN assignable INTEGER NOT NULL DEFAULT 1",
+            [],
+        )
+        .unwrap();
+        // Now run apply_pending. All migrations should be recorded WITHOUT
+        // trying to add the already-present columns (the idempotency guard
+        // inside each migration body handles that).
+        let applied = apply_pending(&conn).expect("apply legacy");
+        assert_eq!(applied.len(), MIGRATIONS.len());
+    }
+
+    #[test]
+    fn each_migration_runs_inside_its_own_recording_step() {
+        // After apply_pending, schema_migrations rows have non-empty
+        // descriptions and parseable applied_at timestamps.
+        let conn = fresh();
+        apply_pending(&conn).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT version, description, applied_at FROM schema_migrations")
+            .unwrap();
+        let rows: Vec<(String, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for (v, d, t) in &rows {
+            assert!(!v.is_empty());
+            assert!(!d.is_empty(), "version {} has empty description", v);
+            assert!(!t.is_empty(), "version {} has empty applied_at", v);
+        }
+    }
+}

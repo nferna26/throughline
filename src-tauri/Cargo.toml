@@ -1,0 +1,43 @@
+[package]
+name = "reading-gym"
+version = "0.1.0"
+description = "ReadingGym — local-first macOS reading app for serious readers"
+authors = ["Nick Fernandez"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/nferna26/ReadingGym"
+readme = "../README.md"
+keywords = ["reading", "epub", "local-first", "tauri", "macos"]
+categories = ["text-processing"]
+default-run = "reading-gym"
+
+[lib]
+name = "reading_gym_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
+hex = "0.4"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
+anyhow = "1"
+thiserror = "1"
+epub = "2.1"
+zip = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "sync", "time"] }
+futures-util = "0.3"
+url = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+tracing-appender = "0.2"
