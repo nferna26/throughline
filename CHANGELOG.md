@@ -16,6 +16,24 @@ documented in [`docs/IPC.md`](./docs/IPC.md).
 - **Notes browser** — a "Notes" tab on the book page lists the active book's
   notes (newest first), read-only. The app still opens to Today.
 
+### Changed
+
+- **Import is now idempotent (dedup).** Re-importing a file whose SHA-256
+  already matches an imported book no longer creates a duplicate — the existing
+  book is made active and returned. Additive; `COMMAND_API_VERSION` stays 1.
+
+### Engineering
+
+- **Frontend test suite (Vitest).** Added Vitest + React Testing Library with
+  jsdom; `npm test` runs the suite and CI gates on it. Initial coverage: locator
+  /error helpers, the notes browser, the book switcher, and the Today screen.
+- **Shipped ADR-002** (cto-kb `adr-002-reading-gym-sqlite-synchronous-normal`):
+  set `PRAGMA synchronous = NORMAL` alongside WAL — one fsync per commit instead
+  of two, with no corruption risk (the durable artifact is the Markdown export).
+- **Recorded ADR-003** (cto-kb `adr-003-reading-gym-schema-migrations-table`):
+  the `schema_migrations` provenance table shipped in Shot 6a; the ADR is now
+  reconciled to the as-built implementation and marked accepted.
+
 ## [0.1.0] — 2026-05-28
 
 First release. The complete core loop plus a local AI tutor, built as a

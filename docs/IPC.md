@@ -65,6 +65,8 @@ Read-only display of local data locations. Useful for rollback instructions and 
   - `Validation { message }` — unsupported extension or DRM-detected EPUB
   - `Db { message }` — sqlite error
 
+**Dedup (skip & switch):** if the file's SHA-256 already matches an imported book, no duplicate is created — the existing book is made active (`last_opened_at` bumped) and returned. Re-import is idempotent. Added in 0.1.x; additive, `COMMAND_API_VERSION` stays `1`.
+
 #### `cmd_read_book_bytes`
 - args: `{ bookId: string }`
 - returns: `number[]` — raw bytes of the source file (for `epub.js` to consume)

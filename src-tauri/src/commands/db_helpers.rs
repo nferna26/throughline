@@ -184,3 +184,18 @@ pub fn fetch_book(conn: &Connection, book_id: &str) -> rusqlite::Result<Option<B
         Ok(Some(book_from_row(row)?))
     } else { Ok(None) }
 }
+
+/// Find an already-imported book by its source file's SHA-256. Returns the
+/// **oldest** match so re-imports collapse onto the original. Used by import
+/// dedup: both importers store the hash of the raw copied source file, so the
+/// hash of the file on disk matches this column exactly.
+pub fn fetch_book_by_sha(conn: &Connection, sha: &str) -> rusqlite::Result<Option<Book>> {
+    let mut s = conn.prepare(
+        "SELECT id, title, author, source_type, source_path, source_sha256, created_at, last_opened_at
+         FROM books WHERE source_sha256 = ?1 ORDER BY created_at ASC LIMIT 1",
+    )?;
+    let mut rows = s.query(params![sha])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(book_from_row(row)?))
+    } else { Ok(None) }
+}

@@ -22,6 +22,24 @@ use crate::{epub_classify, export, import, log, models, paths, plan, recovery};
 pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<Book, AppError> {
     eprintln!("[rg] cmd_import_book called with path={}", path);
     let src = PathBuf::from(&path);
+
+    // Dedup (skip & switch): if a book with this file's SHA-256 is already
+    // imported, make it the active book and return it instead of creating a
+    // duplicate. Hashing the source directly matches the stored hash because
+    // both importers store the hash of the raw copied file.
+    if let Ok(sha) = import::hash_file(&src) {
+        let conn = state.0.lock()?;
+        if let Some(existing) = fetch_book_by_sha(&conn, &sha)? {
+            eprintln!(
+                "[rg] cmd_import_book: dedup hit (sha {}…) -> existing book_id={}",
+                &sha[..8.min(sha.len())],
+                existing.id
+            );
+            bump_last_opened_at(&conn, &existing.id)?;
+            return Ok(existing);
+        }
+    }
+
     let result = match import::import_any(&src) {
         Ok(r) => r,
         Err(e) => {
@@ -379,6 +397,30 @@ mod tests {
         let err = activate_book(&conn, "ghost").expect_err("unknown book must error");
         assert!(matches!(err, AppError::NotFound { .. }));
         assert_eq!(fetch_active_book(&conn).unwrap().unwrap().id, "b");
+    }
+
+    /// Import dedup keys on `source_sha256` and resolves to the OLDEST matching
+    /// row, so a re-import of the same file collapses onto the original book
+    /// rather than creating yet another duplicate.
+    #[test]
+    fn fetch_book_by_sha_finds_oldest_and_misses_unknown() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        conn.execute_batch(
+            "CREATE TABLE books (
+                id TEXT PRIMARY KEY, title TEXT, author TEXT, source_type TEXT,
+                source_path TEXT, source_sha256 TEXT, created_at TEXT, last_opened_at TEXT
+             );",
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, source_type, source_path, source_sha256, created_at, last_opened_at)
+             VALUES ('b_old', 'Dup', 'epub', '', 'deadbeef', '2026-01-01T00:00:00Z', NULL),
+                    ('b_new', 'Dup', 'epub', '', 'deadbeef', '2026-02-01T00:00:00Z', NULL)",
+            [],
+        ).unwrap();
+
+        let found = fetch_book_by_sha(&conn, "deadbeef").unwrap().expect("should find by sha");
+        assert_eq!(found.id, "b_old", "dedup must resolve to the oldest matching import");
+        assert!(fetch_book_by_sha(&conn, "no-such-hash").unwrap().is_none());
     }
 
     /// **CONTRACT**: The list the reader navigates over (returned by

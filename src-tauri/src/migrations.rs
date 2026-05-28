@@ -18,6 +18,12 @@
 //!
 //! Migrations CANNOT be reordered or renamed after they've been applied to a
 //! live DB. New migrations are appended. The version string is the audit key.
+//!
+//! Records the decision in cto-kb `adr-003-reading-gym-schema-migrations-table`
+//! (accepted). This module is the as-built implementation: it goes beyond the
+//! ADR draft with a `description` column and a `vNNN_<slug>` version format, and
+//! applies migrations via `apply_pending` (recording one row per migration)
+//! rather than the draft's proposed `apply_migration_once` helper.
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
