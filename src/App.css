@@ -475,3 +475,150 @@ button.ghost:hover { color: var(--ink); border-color: var(--line); }
   letter-spacing: 0.1em;
   color: var(--muted);
 }
+
+/* ── Book header: switcher chip + Today/Notes tabs (Shot 10) ──────────────
+   A slim band under the global topbar that scopes everything below it to the
+   active book. Stays quiet so the app keeps its "calm desk" posture and never
+   becomes library-first. */
+.book-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+/* `display: contents` keeps the wrapper out of layout so the screen below it
+   stays a direct flex child of <main> and still fills/centers as designed. */
+.tabpanel { display: contents; }
+
+.book-switcher { position: relative; }
+.book-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 360px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.book-chip:hover { border-color: var(--muted); }
+.book-chip-glyph { font-size: 13px; line-height: 1; }
+.book-chip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+.book-chip-caret { color: var(--muted); font-size: 11px; }
+
+.book-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  min-width: 260px;
+  max-width: 360px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.book-menu-status { padding: 8px 10px; }
+.book-menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.book-menu-item:hover { background: var(--bg); border-color: var(--line); }
+.book-menu-check { width: 14px; flex: none; color: var(--accent); }
+.book-menu-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.book-menu-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.book-menu-item.is-active .book-menu-title { font-weight: 600; }
+.book-menu-author {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.book-menu-sep { height: 1px; background: var(--line); margin: 4px 2px; }
+.book-menu-import { color: var(--muted); }
+
+.book-tabs {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px;
+  flex: none;
+}
+.book-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 4px 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.book-tab:hover { color: var(--ink); }
+.book-tab.is-active {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+/* ── Notes browser (Shot 10) ─────────────────────────────────────────────── */
+.notes-card { max-width: 680px; }
+.notes-empty { margin-top: 10px; }
+.notes-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0 0;
+}
+.notes-list .note-row {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+.notes-list .note-row:first-child { border-top: none; padding-top: 8px; }
+.note-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.note-type {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: var(--accent);
+}
+.note-date { margin-left: auto; }
+.note-body { margin: 0; color: var(--ink); white-space: pre-wrap; }
+.note-quote {
+  margin: 8px 0 0 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+  font-style: italic;
+}

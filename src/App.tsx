@@ -4,8 +4,12 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import Today from "./screens/Today";
 import Reader from "./screens/Reader";
 import Settings from "./screens/Settings";
+import BookSwitcher from "./screens/BookSwitcher";
+import NotesBrowser from "./screens/NotesBrowser";
 import "./App.css";
 import type { TodayCard } from "./types";
+
+type BookTab = "today" | "notes";
 
 type View =
   | { kind: "today" }
@@ -15,6 +19,7 @@ type View =
 export default function App() {
   const [today, setToday] = useState<TodayCard | null | undefined>(undefined);
   const [view, setView] = useState<View>({ kind: "today" });
+  const [tab, setTab] = useState<BookTab>("today");
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (localStorage.getItem("rg.theme") as "light" | "dark") || "light"
   );
@@ -51,6 +56,16 @@ export default function App() {
       // anything else (network errors thrown by tauri-api itself, etc.).
       const msg = e?.message ?? (typeof e === "string" ? e : JSON.stringify(e));
       alert(`Import failed: ${msg}`);
+      return;
+    }
+    await refreshToday();
+  }
+
+  async function switchBook(bookId: string) {
+    try {
+      await invoke("cmd_set_active_book", { bookId });
+    } catch (e: any) {
+      alert(`Could not switch book: ${e?.message ?? e}`);
       return;
     }
     await refreshToday();
@@ -98,7 +113,50 @@ export default function App() {
 
       <main id="main-content">
         {view.kind === "today" && (
-          <Today today={today} onImport={importBook} onStart={startReading} onRefresh={refreshToday} />
+          today === null ? (
+            // No books yet — the welcome card owns the import action; no book chrome.
+            <Today today={null} onImport={importBook} onStart={startReading} onRefresh={refreshToday} />
+          ) : (
+            <>
+              <div className="book-header">
+                <BookSwitcher activeBook={today.book} onSwitch={switchBook} onImport={importBook} />
+                <div className="book-tabs" role="tablist" aria-label="Book views">
+                  <button
+                    role="tab"
+                    id="tab-today"
+                    aria-selected={tab === "today"}
+                    aria-controls="book-panel"
+                    className={tab === "today" ? "book-tab is-active" : "book-tab"}
+                    onClick={() => setTab("today")}
+                  >
+                    Today
+                  </button>
+                  <button
+                    role="tab"
+                    id="tab-notes"
+                    aria-selected={tab === "notes"}
+                    aria-controls="book-panel"
+                    className={tab === "notes" ? "book-tab is-active" : "book-tab"}
+                    onClick={() => setTab("notes")}
+                  >
+                    Notes
+                  </button>
+                </div>
+              </div>
+              <div
+                className="tabpanel"
+                id="book-panel"
+                role="tabpanel"
+                aria-labelledby={tab === "today" ? "tab-today" : "tab-notes"}
+              >
+                {tab === "today" ? (
+                  <Today today={today} onImport={importBook} onStart={startReading} onRefresh={refreshToday} />
+                ) : (
+                  <NotesBrowser book={today.book} />
+                )}
+              </div>
+            </>
+          )
         )}
         {view.kind === "reader" && (
           <Reader today={view.today} onExit={exitReader} />

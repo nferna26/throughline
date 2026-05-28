@@ -324,9 +324,62 @@ pub fn cmd_list_books(state: State<DbState>) -> Result<Vec<Book>, AppError> {
     Ok(out)
 }
 
+/// Make `book_id` the active book — the one `cmd_today` composes its card from.
+/// Switching books in the Today header is conceptually "opening" that book, the
+/// same `last_opened_at` signal that import and `cmd_start_session` already
+/// emit, so the selection survives the next `cmd_today` with no extra state.
+fn activate_book(conn: &Connection, book_id: &str) -> Result<(), AppError> {
+    if fetch_book(conn, book_id)?.is_none() {
+        return Err(AppError::not_found("book", Some(book_id.to_string())));
+    }
+    bump_last_opened_at(conn, book_id)?;
+    Ok(())
+}
+
+/// Book-switcher command. Bumps the target book's `last_opened_at` so the next
+/// `cmd_today` returns it. Returns `()` — the frontend re-invokes `cmd_today`.
+#[tauri::command]
+pub fn cmd_set_active_book(book_id: String, state: State<DbState>) -> Result<(), AppError> {
+    let conn = state.0.lock()?;
+    activate_book(&conn, &book_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The book switcher's contract: activating a book makes it the active book
+    /// (the one `cmd_today` reads from), and activating an unknown id is a
+    /// `NotFound` rather than a silent no-op that leaves the user on the wrong
+    /// book. Exercises the same `bump_last_opened_at` path the command uses.
+    #[test]
+    fn activate_book_changes_active_and_rejects_unknown() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        conn.execute_batch(
+            "CREATE TABLE books (
+                id TEXT PRIMARY KEY, title TEXT, author TEXT, source_type TEXT,
+                source_path TEXT, source_sha256 TEXT, created_at TEXT, last_opened_at TEXT
+             );",
+        ).unwrap();
+        // `a` was created later than `b` and neither has been opened, so `a`
+        // wins the COALESCE(last_opened_at, created_at) tiebreaker initially.
+        conn.execute(
+            "INSERT INTO books (id, title, source_type, source_path, source_sha256, created_at, last_opened_at)
+             VALUES ('a', 'Book A', 'txt', '', '', '2026-01-02T00:00:00Z', NULL),
+                    ('b', 'Book B', 'txt', '', '', '2026-01-01T00:00:00Z', NULL)",
+            [],
+        ).unwrap();
+        assert_eq!(fetch_active_book(&conn).unwrap().unwrap().id, "a");
+
+        // Switching to `b` bumps its last_opened_at to now → it becomes active.
+        activate_book(&conn, "b").expect("activate existing book");
+        assert_eq!(fetch_active_book(&conn).unwrap().unwrap().id, "b");
+
+        // Unknown id is a NotFound, and leaves the active book unchanged.
+        let err = activate_book(&conn, "ghost").expect_err("unknown book must error");
+        assert!(matches!(err, AppError::NotFound { .. }));
+        assert_eq!(fetch_active_book(&conn).unwrap().unwrap().id, "b");
+    }
 
     /// **CONTRACT**: The list the reader navigates over (returned by
     /// `cmd_assignable_sections`) MUST equal `sections.filter(assignable)`.

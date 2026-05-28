@@ -99,6 +99,13 @@ This is the list both readers index into. Frontends MUST use this, not `cmd_list
 - returns: `Book[]` — all books, oldest-first by `created_at`
 - errors: `Db`
 
+#### `cmd_set_active_book`
+- args: `{ bookId: string }`
+- returns: void
+- errors: `NotFound` if the book doesn't exist; `Db`
+
+Makes `bookId` the active book by bumping its `last_opened_at`, so the next `cmd_today` composes that book's card. This is what the Today-header book switcher calls; the frontend re-invokes `cmd_today` afterward. Added in 0.1.x — additive, `COMMAND_API_VERSION` stays `1`.
+
 ---
 
 ### Sessions, progress, plan adjustments

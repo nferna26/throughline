@@ -74,6 +74,7 @@ pub fn run() {
             commands::books::cmd_list_sections,
             commands::books::cmd_assignable_sections,
             commands::books::cmd_list_books,
+            commands::books::cmd_set_active_book,
             // ── sessions / plan / progress ──
             commands::sessions::cmd_start_session,
             commands::sessions::cmd_end_session,

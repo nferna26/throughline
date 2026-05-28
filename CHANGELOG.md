@@ -5,6 +5,17 @@ All notable changes to ReadingGym are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 1)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [Unreleased]
+
+### Added
+
+- **Book switcher** — a quiet chip in the Today header lists every imported
+  book and switches the active one in place. Backed by the new additive
+  `cmd_set_active_book` command (bumps `last_opened_at`; `COMMAND_API_VERSION`
+  stays 1).
+- **Notes browser** — a "Notes" tab on the book page lists the active book's
+  notes (newest first), read-only. The app still opens to Today.
+
 ## [0.1.0] — 2026-05-28
 
 First release. The complete core loop plus a local AI tutor, built as a
