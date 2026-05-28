@@ -15,6 +15,11 @@ documented in [`docs/IPC.md`](./docs/IPC.md).
   stays 1).
 - **Notes browser** — a "Notes" tab on the book page lists the active book's
   notes (newest first), read-only. The app still opens to Today.
+- **AI request history viewer (adr-001).** Settings → AI now shows every prompt
+  preview and Ask call, newest first, each labelled as a preview that never left
+  the machine or a call sent to a host — the audit trail that makes the
+  local-only posture real rather than asserted. Commands: `cmd_list_ai_requests`,
+  `cmd_forget_ai_history` (additive; `COMMAND_API_VERSION` stays 1).
 
 ### Changed
 
@@ -33,6 +38,10 @@ documented in [`docs/IPC.md`](./docs/IPC.md).
 - **Recorded ADR-003** (cto-kb `adr-003-reading-gym-schema-migrations-table`):
   the `schema_migrations` provenance table shipped in Shot 6a; the ADR is now
   reconciled to the as-built implementation and marked accepted.
+- **Shipped ADR-001** (cto-kb `adr-001-reading-gym-ai-requests-retention`): the
+  `ai_requests_retention_days` setting (default 90) and a once-per-launch sweep
+  delete audit rows older than the window that never became a note; rows saved
+  as notes are kept. Pinned by `sweep_deletes_old_unsaved_keeps_saved_and_recent`.
 
 ## [0.1.0] — 2026-05-28
 

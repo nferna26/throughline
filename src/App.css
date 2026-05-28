@@ -622,3 +622,27 @@ button.ghost:hover { color: var(--ink); border-color: var(--line); }
   color: var(--muted);
   font-style: italic;
 }
+
+/* ── AI request history (Shot 12) ────────────────────────────────────────── */
+.ai-history { margin-top: 8px; }
+.ai-history-empty { margin-top: 8px; }
+.ai-history-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0 0;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.ai-history-list .ai-req-row { padding: 10px 12px; border-top: 1px solid var(--line); }
+.ai-history-list .ai-req-row:first-child { border-top: none; }
+.ai-req-head { display: flex; align-items: baseline; gap: 8px; }
+.ai-req-mode { font-weight: 500; }
+.ai-req-when { margin-left: auto; }
+.ai-req-meta { margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* Glyph-free but tone-coded; the words "Preview"/"Sent" carry the meaning so
+   color is not the only signal (WCAG 1.4.1). */
+.ai-req-preview { color: var(--ok); }
+.ai-req-sent { color: var(--warn); font-weight: 500; }
+.ai-req-note { color: var(--accent); }

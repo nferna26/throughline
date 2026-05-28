@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useDialog } from "../hooks/useDialog";
+import AiHistory from "./AiHistory";
 import type { ConnTestResult, SettingsDto } from "../types";
 
 interface Props {
@@ -261,6 +262,8 @@ export default function Settings({ onClose }: Props) {
             {conn.message}
           </p>
         )}
+
+        {dto && <AiHistory retentionDays={dto.ai_requests_retention_days} onSettingsChanged={refresh} />}
 
         <h2 className="settings-h2">Quote safety</h2>
         <p className="muted small">{dto?.quote_policy}</p>

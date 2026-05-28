@@ -45,9 +45,16 @@ pub fn cmd_set_ai_settings(
     base_url: Option<String>,
     model: Option<String>,
     local_only: Option<bool>,
+    retention_days: Option<i64>,
     state: State<DbState>,
 ) -> Result<settings::SettingsDto, AppError> {
     let conn = state.0.lock()?;
+    if let Some(days) = retention_days {
+        // adr-001: clamp to >= 0 (0 disables the sweep / keeps everything).
+        let days = days.max(0);
+        settings::set_string(&conn, settings::KEY_AI_RETENTION_DAYS, &days.to_string())
+            .map_err(AppError::from)?;
+    }
     if let Some(u) = base_url.as_ref() {
         // Validate against the *desired* local_only setting (the one in this call,
         // or the existing one). This prevents saving a remote URL while local-only

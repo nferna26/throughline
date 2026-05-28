@@ -222,6 +222,34 @@ Deliberately bypasses the circuit breaker's `check()` — an operator clicking "
 - returns: `Note`
 - errors: same as `cmd_save_ai_preview_as_note`
 
+#### `cmd_list_ai_requests`
+- args: none
+- returns: `AiRequest[]` — the AI audit trail, newest first, with the book title LEFT-JOINed (`book_title` is null if the book was removed)
+- errors: `Db`
+
+```ts
+type AiRequest = {
+  id: string;
+  book_id: string;
+  book_title: string | null;
+  mode: string;
+  locator: string | null;
+  context_char_count: number | null;
+  provider: string | null;   // null = preview that never left the machine; else the host an Ask call was sent to
+  created_at: string;
+  wrote_to_memory: boolean;   // true = this request became a Note (kept past the retention window)
+};
+```
+
+Backs the AI request history viewer (adr-001). Added in 0.1.x; additive, `COMMAND_API_VERSION` stays `1`.
+
+#### `cmd_forget_ai_history`
+- args: none
+- returns: `number` — count of audit rows deleted
+- errors: `Db`
+
+Applies the retention window now ("Forget now"): deletes `ai_requests` rows older than `ai_requests_retention_days` that have `wrote_to_memory = 0`. Rows that became a note are kept. Added in 0.1.x; additive.
+
 ---
 
 ### Settings
@@ -242,6 +270,7 @@ type SettingsDto = {
   ai_local_only: boolean;
   quote_policy: string;
   quote_warn_chars: number;
+  ai_requests_retention_days: number;  // AI audit retention window (adr-001); 0 = keep forever
 };
 ```
 
@@ -251,9 +280,11 @@ type SettingsDto = {
 - errors: `Config` (bad path), `Io` (mkdir fails)
 
 #### `cmd_set_ai_settings`
-- args: `{ baseUrl?: string; model?: string; localOnly?: boolean }`
+- args: `{ baseUrl?: string; model?: string; localOnly?: boolean; retentionDays?: number }`
 - returns: `SettingsDto` (updated)
 - errors: `Ai` (non-loopback URL rejected while local-only ON), `Config` (turning local-only ON while URL is non-loopback), `Db`
+
+`retentionDays` sets the AI audit retention window (adr-001), clamped to ≥ 0 (0 disables the sweep). It can be set independently of the AI URL/model fields. Added in 0.1.x; additive, `COMMAND_API_VERSION` stays `1`.
 
 ---
 
@@ -262,6 +293,7 @@ type SettingsDto = {
 - **Local-only mode (default ON):** `cmd_ai_ask` and `cmd_list_ai_models` refuse any non-loopback URL at the call site via `ai_client::validate_base_url`. Test: `local_only_rejects_remote_and_allows_loopback`.
 - **Selection-only context:** every AI command takes a `selection` field; the book body is never sent in bulk.
 - **Save-by-approval:** `ai_requests.wrote_to_memory` flips to 1 only via the explicit save commands. No autonomous writes from AI output.
+- **Auditable + bounded (adr-001):** every preview and Ask call is logged to `ai_requests` and visible via `cmd_list_ai_requests`; `provider` distinguishes a preview (never sent) from a real call (the host). A launch sweep + `cmd_forget_ai_history` delete rows older than `ai_requests_retention_days` that never became a note, so discarded previews fade while the save-by-approval trace persists.
 - **No telemetry:** structured logs go to `{app_support}/logs/app.log` and never leave the machine.
 
 ---

@@ -9,6 +9,7 @@ pub const KEY_EXPORT_PATH: &str = "export_path";
 pub const KEY_AI_BASE_URL: &str = "ai_base_url";
 pub const KEY_AI_MODEL: &str = "ai_model";
 pub const KEY_LOCAL_ONLY: &str = "ai_local_only";
+pub const KEY_AI_RETENTION_DAYS: &str = "ai_requests_retention_days";
 pub const DEFAULT_AI_BASE_URL: &str = "http://localhost:1234/v1";
 pub const DEFAULT_AI_MODEL: &str = "";
 pub const QUOTE_WARN_TEXT: &str =
@@ -36,6 +37,9 @@ pub struct SettingsDto {
     /// Quote warn threshold in characters. Surfaced so the settings UI shows
     /// the exact policy number, not just prose.
     pub quote_warn_chars: u64,
+    /// AI audit retention window in days (adr-001). Rows older than this that
+    /// never became a note are swept on launch. 0 disables the sweep.
+    pub ai_requests_retention_days: i64,
 }
 
 pub fn get_export_path(conn: &Connection) -> Result<PathBuf> {
@@ -146,6 +150,14 @@ pub fn get_ai_model(conn: &Connection) -> String {
     get_string(conn, KEY_AI_MODEL).unwrap_or_else(|| DEFAULT_AI_MODEL.to_string())
 }
 
+/// AI audit retention window in days. Defaults to `DEFAULT_RETENTION_DAYS` (90).
+/// A non-positive stored value means "keep everything" (sweep disabled).
+pub fn get_ai_retention_days(conn: &Connection) -> i64 {
+    get_string(conn, KEY_AI_RETENTION_DAYS)
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .unwrap_or(crate::ai_retention::DEFAULT_RETENTION_DAYS)
+}
+
 pub fn build_dto(conn: &Connection) -> Result<SettingsDto> {
     let export = get_export_path(conn)?;
     let local_only = get_local_only(conn);
@@ -159,6 +171,7 @@ pub fn build_dto(conn: &Connection) -> Result<SettingsDto> {
         ai_local_only: local_only,
         quote_policy: QUOTE_WARN_TEXT.to_string(),
         quote_warn_chars: 300,
+        ai_requests_retention_days: get_ai_retention_days(conn),
     })
 }
 

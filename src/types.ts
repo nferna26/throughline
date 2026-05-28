@@ -56,6 +56,20 @@ export interface Note {
   exported_markdown_path: string | null;
 }
 
+export interface AiRequest {
+  id: string;
+  book_id: string;
+  book_title: string | null;
+  mode: string;
+  locator: string | null;
+  context_char_count: number | null;
+  /** null = prompt preview that never left this machine; otherwise the host a
+   *  real Ask call was sent to. */
+  provider: string | null;
+  created_at: string;
+  wrote_to_memory: boolean;
+}
+
 export type PaceState =
   | { kind: "on_pace" }
   | { kind: "behind"; days_behind: number }
@@ -144,6 +158,7 @@ export interface SettingsDto {
   ai_local_only: boolean;
   quote_policy: string;
   quote_warn_chars: number;
+  ai_requests_retention_days: number;
 }
 
 export type StreamEvent =

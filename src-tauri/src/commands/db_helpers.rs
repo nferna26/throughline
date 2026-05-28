@@ -5,7 +5,7 @@
 use chrono::Utc;
 use rusqlite::{params, Connection};
 
-use crate::models::{Book, BookSection, Note, ReadingPlan, ReadingSession};
+use crate::models::{AiRequest, Book, BookSection, Note, ReadingPlan, ReadingSession};
 
 // ── Row hydrators ──────────────────────────────────────────────────────
 
@@ -61,6 +61,21 @@ pub fn session_from_row(row: &rusqlite::Row) -> rusqlite::Result<ReadingSession>
         minutes: row.get(6)?,
         completed_assignment: completed != 0,
         subjective_difficulty: row.get(8)?,
+    })
+}
+
+pub fn ai_request_from_row(row: &rusqlite::Row) -> rusqlite::Result<AiRequest> {
+    let wrote: i64 = row.get(8)?;
+    Ok(AiRequest {
+        id: row.get(0)?,
+        book_id: row.get(1)?,
+        book_title: row.get(2)?,
+        mode: row.get(3)?,
+        locator: row.get(4)?,
+        context_char_count: row.get(5)?,
+        provider: row.get(6)?,
+        created_at: row.get(7)?,
+        wrote_to_memory: wrote != 0,
     })
 }
 
@@ -183,6 +198,21 @@ pub fn fetch_book(conn: &Connection, book_id: &str) -> rusqlite::Result<Option<B
     if let Some(row) = rows.next()? {
         Ok(Some(book_from_row(row)?))
     } else { Ok(None) }
+}
+
+/// All AI audit rows, newest first, with the book title LEFT-JOINed for display
+/// (None if the book was removed). Backs the AI request history viewer.
+pub fn list_ai_requests(conn: &Connection) -> rusqlite::Result<Vec<AiRequest>> {
+    let mut stmt = conn.prepare(
+        "SELECT a.id, a.book_id, b.title, a.mode, a.locator, a.context_char_count, a.provider, a.created_at, a.wrote_to_memory
+         FROM ai_requests a
+         LEFT JOIN books b ON b.id = a.book_id
+         ORDER BY a.created_at DESC",
+    )?;
+    let rows = stmt.query_map([], ai_request_from_row)?;
+    let mut out = Vec::new();
+    for r in rows { out.push(r?); }
+    Ok(out)
 }
 
 /// Find an already-imported book by its source file's SHA-256. Returns the

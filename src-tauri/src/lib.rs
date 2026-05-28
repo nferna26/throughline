@@ -16,6 +16,7 @@
 //! command modules; this file holds only the wiring.
 
 pub mod ai_client;
+pub mod ai_retention;
 pub mod ai_stub;
 pub mod bin_guardrail;
 pub mod circuit_breaker;
@@ -59,6 +60,16 @@ pub fn run() {
     // startup errors, and IPC events all get captured.
     log::init();
     let conn = db::open_and_migrate().expect("failed to open/migrate db");
+    // adr-001: bound the AI audit trail on every launch. Rows older than the
+    // retention window that never became a note are swept; approved rows stay.
+    {
+        let days = settings::get_ai_retention_days(&conn);
+        match ai_retention::sweep(&conn, days) {
+            Ok(n) if n > 0 => eprintln!("[rg] ai_retention: swept {} ai_requests row(s) older than {} days", n, days),
+            Ok(_) => {}
+            Err(e) => eprintln!("[rg] ai_retention: sweep failed: {}", e),
+        }
+    }
     let state = DbState(Mutex::new(conn));
 
     tauri::Builder::default()
@@ -92,6 +103,8 @@ pub fn run() {
             commands::ai::cmd_list_ai_models,
             commands::ai::cmd_test_ai_connection,
             commands::ai::cmd_save_ai_response_as_note,
+            commands::ai::cmd_list_ai_requests,
+            commands::ai::cmd_forget_ai_history,
             // ── settings + system info ──
             commands::settings_cmds::cmd_api_version,
             commands::settings_cmds::cmd_paths_info,

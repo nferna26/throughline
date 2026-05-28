@@ -71,6 +71,24 @@ pub struct Note {
     pub exported_markdown_path: Option<String>,
 }
 
+/// One row of the AI audit trail (`ai_requests`), shaped for the history viewer.
+/// `provider` is NULL for prompt previews (never sent anywhere) and the request
+/// host for real Ask calls. `book_title` is LEFT-JOINed for display and is None
+/// if the book was removed. `wrote_to_memory` marks rows that became a Note —
+/// these are kept past the retention window (they mirror durable notes).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AiRequest {
+    pub id: String,
+    pub book_id: String,
+    pub book_title: Option<String>,
+    pub mode: String,
+    pub locator: Option<String>,
+    pub context_char_count: Option<i64>,
+    pub provider: Option<String>,
+    pub created_at: String,
+    pub wrote_to_memory: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum PaceState {

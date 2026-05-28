@@ -17,8 +17,8 @@ use uuid::Uuid;
 use crate::commands::db_helpers::*;
 use crate::db::DbState;
 use crate::error::AppError;
-use crate::models::Note;
-use crate::{ai_client, ai_stub, export, log, settings};
+use crate::models::{AiRequest, Note};
+use crate::{ai_client, ai_retention, ai_stub, export, log, settings};
 
 // ── Public response types ──────────────────────────────────────────────
 
@@ -154,6 +154,26 @@ pub fn cmd_save_ai_preview_as_note(
         }
     }
     Ok(note)
+}
+
+/// AI request history viewer (adr-001). Returns every audit row, newest first,
+/// with the book title joined for display. `provider == null` means the request
+/// was a prompt preview that never left the machine; a non-null provider is the
+/// host a real Ask call was sent to.
+#[tauri::command]
+pub fn cmd_list_ai_requests(state: State<DbState>) -> Result<Vec<AiRequest>, AppError> {
+    let conn = state.0.lock()?;
+    Ok(list_ai_requests(&conn)?)
+}
+
+/// Apply the AI retention window immediately (the "Forget now" control): delete
+/// audit rows older than the configured number of days that never became a note.
+/// Rows with `wrote_to_memory = 1` are kept. Returns the number of rows removed.
+#[tauri::command]
+pub fn cmd_forget_ai_history(state: State<DbState>) -> Result<usize, AppError> {
+    let conn = state.0.lock()?;
+    let days = settings::get_ai_retention_days(&conn);
+    Ok(ai_retention::sweep(&conn, days)?)
 }
 
 #[tauri::command]
@@ -310,6 +330,45 @@ pub async fn cmd_test_ai_connection(state: State<'_, DbState>) -> Result<ConnTes
             message: format!("Could not reach {}/models. Is your local server running?", base_url),
         }),
         Err(e) => Err(AppError::ai(format!("{}", e))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn list_ai_requests_newest_first_with_book_title_join() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE books (id TEXT PRIMARY KEY, title TEXT, author TEXT, source_type TEXT, source_path TEXT, source_sha256 TEXT, created_at TEXT, last_opened_at TEXT);
+             CREATE TABLE ai_requests (id TEXT PRIMARY KEY, book_id TEXT NOT NULL, mode TEXT NOT NULL, locator TEXT, context_char_count INTEGER, provider TEXT, created_at TEXT NOT NULL, wrote_to_memory INTEGER DEFAULT 0);",
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, source_type, source_path, source_sha256, created_at) VALUES ('bk','Cold Start','epub','','','2026-01-01')",
+            [],
+        ).unwrap();
+        // A preview (provider NULL), an Ask call (provider set + saved as note),
+        // and an orphan whose book is gone — to exercise the LEFT JOIN.
+        conn.execute("INSERT INTO ai_requests VALUES ('a1','bk','explain','char:0',10,NULL,'2026-05-01T00:00:00+00:00',0)", []).unwrap();
+        conn.execute("INSERT INTO ai_requests VALUES ('a2','bk','socratic','char:1',20,'localhost','2026-05-03T00:00:00+00:00',1)", []).unwrap();
+        conn.execute("INSERT INTO ai_requests VALUES ('a3','gone','vocabulary',NULL,5,NULL,'2026-05-02T00:00:00+00:00',0)", []).unwrap();
+
+        let rows = list_ai_requests(&conn).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["a2", "a3", "a1"], "rows ordered newest created_at first");
+
+        let a2 = rows.iter().find(|r| r.id == "a2").unwrap();
+        assert_eq!(a2.book_title.as_deref(), Some("Cold Start"));
+        assert_eq!(a2.provider.as_deref(), Some("localhost"), "Ask calls record the host");
+        assert!(a2.wrote_to_memory, "a2 became a note");
+
+        let a1 = rows.iter().find(|r| r.id == "a1").unwrap();
+        assert_eq!(a1.provider, None, "previews never recorded a provider");
+
+        let a3 = rows.iter().find(|r| r.id == "a3").unwrap();
+        assert_eq!(a3.book_title, None, "orphaned request has no joined title");
     }
 }
 
