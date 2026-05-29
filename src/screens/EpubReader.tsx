@@ -101,15 +101,22 @@ export default function EpubReader({ today, onExit }: Props) {
         renditionRef.current = rendition;
         applyTheme(rendition, theme, fontSize, lineWidth);
 
-        // Where to display first: resume CFI if any, else the assigned-section href.
-        let target: string | undefined;
+        // Display the assigned section. epub.js keys its spine by the OPF-relative
+        // href, but our DB stores the full package path — so display(href) fails
+        // with "No Section Found" when the OPF is nested (e.g. OEBPS/). Resolve to
+        // a spine index instead (see displayHref), which is href-format-agnostic.
+        // A resume CFI still takes priority — epub.js resolves CFIs directly.
+        await epubBook.ready;
+        const target = list[startIdx].href || undefined; // assigned href; also used for session start_locator below
+        let shown = false;
         if (today.resume_locator) {
           const parsed = parseLocator(today.resume_locator);
-          if (parsed.kind === "cfi") target = parsed.value;
+          if (parsed.kind === "cfi" && parsed.value) {
+            try { await rendition.display(parsed.value); shown = true; } catch { /* fall through to href/index */ }
+          }
         }
-        if (!target) target = list[startIdx].href || undefined;
-        if (!target) throw new Error("assigned section has no href");
-        await rendition.display(target);
+        if (!shown) shown = await displayHref(rendition, epubBook, target);
+        if (!shown) throw new Error("could not display the assigned section");
 
         await epubBook.locations.generate(1024).catch(() => undefined);
 
@@ -214,8 +221,8 @@ export default function EpubReader({ today, onExit }: Props) {
     setCurrentIdx(next);
     visitedRef.current.add(target.id);
     if (renditionRef.current && target.href) {
-      renditionRef.current.display(target.href).catch((err: any) => {
-        console.error("rendition.display failed", err);
+      displayHref(renditionRef.current, bookRef.current, target.href).catch((err: any) => {
+        console.error("display failed", err);
       });
     }
   }
@@ -226,8 +233,8 @@ export default function EpubReader({ today, onExit }: Props) {
     setCurrentIdx(prev);
     visitedRef.current.add(target.id);
     if (renditionRef.current && target.href) {
-      renditionRef.current.display(target.href).catch((err: any) => {
-        console.error("rendition.display failed", err);
+      displayHref(renditionRef.current, bookRef.current, target.href).catch((err: any) => {
+        console.error("display failed", err);
       });
     }
   }
@@ -396,6 +403,45 @@ function matchSectionByHref(sections: BookSection[], href: string): BookSection 
   if (m) return m;
   m = sections.find((s) => s.href && (s.href.endsWith(href) || href.endsWith(s.href)));
   return m;
+}
+
+/**
+ * Resolve a stored section href to the epub.js spine item's integer index.
+ * epub.js keys its spine by the OPF-relative href (e.g. `Text/praise.xhtml`),
+ * while our import stores the full package path (`OEBPS/Text/praise.xhtml`), so
+ * `display(href)` rejects with "No Section Found" whenever the OPF is nested.
+ * Matching by exact href/canonical/idref then by basename is format-agnostic;
+ * `display(index)` then always resolves.
+ */
+function spineIndexForHref(epubBook: any, href: string | null | undefined): number | undefined {
+  if (!href) return undefined;
+  const items: any[] = epubBook?.spine?.spineItems ?? epubBook?.spine?.items ?? [];
+  if (!items.length) return undefined;
+  const base = (s: string | undefined) => ((s || "").split("#")[0].split("/").pop() || "").toLowerCase();
+  const hb = base(href);
+  const it =
+    items.find((i) => i.href === href || i.canonical === href || i.url === href || i.idref === href) ||
+    items.find((i) => base(i.href) === hb || base(i.canonical) === hb || base(i.url) === hb);
+  return it && typeof it.index === "number" ? it.index : undefined;
+}
+
+/**
+ * Display a section by its stored href, robust to href-format mismatches: try
+ * the resolved spine index first, then the raw href (back-compat for books that
+ * already resolved), then spine[0] as a last resort. Never throws; resolves to
+ * whether anything rendered.
+ */
+async function displayHref(rendition: any, epubBook: any, href: string | null | undefined): Promise<boolean> {
+  const attempts: Array<number | string> = [];
+  const idx = spineIndexForHref(epubBook, href);
+  if (idx != null) attempts.push(idx);
+  if (href) attempts.push(href);
+  attempts.push(0);
+  for (const t of attempts) {
+    try { await rendition.display(t); return true; } catch { /* try next */ }
+  }
+  console.warn("EpubReader: could not display section href", href);
+  return false;
 }
 
 function applyTheme(rendition: any, theme: "light" | "dark", fontSize: number, lineWidth: number) {
