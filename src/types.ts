@@ -96,6 +96,12 @@ export interface Note {
   created_at: string;
   updated_at: string;
   exported_markdown_path: string | null;
+  /** Marginalia anchor range (tagged locators) + exact highlighted text.
+   *  All null for legacy/point-anchored notes. `locator` stays the primary
+   *  anchor point. Added with the v006 migration / API v2. */
+  anchor_start: string | null;
+  anchor_end: string | null;
+  anchored_text: string | null;
 }
 
 export interface AiRequest {

@@ -99,6 +99,15 @@ pub struct Note {
     pub created_at: String,
     pub updated_at: String,
     pub exported_markdown_path: Option<String>,
+    /// Marginalia anchor range (tagged locators) + the exact highlighted text.
+    /// All None for legacy/point-anchored notes. `locator` remains the primary
+    /// anchor point (== anchor_start when a range exists). Added in v006.
+    #[serde(default)]
+    pub anchor_start: Option<String>,
+    #[serde(default)]
+    pub anchor_end: Option<String>,
+    #[serde(default)]
+    pub anchored_text: Option<String>,
 }
 
 /// One row of the AI audit trail (`ai_requests`), shaped for the history viewer.

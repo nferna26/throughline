@@ -255,6 +255,9 @@ fn demo_ephemeral_then_approve(
         created_at: now.clone(),
         updated_at: now,
         exported_markdown_path: None,
+        anchor_start: None,
+        anchor_end: None,
+        anchored_text: None,
     };
     let book = models::Book {
         id: book_id.clone(),

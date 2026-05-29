@@ -66,6 +66,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "reading_plans.status + activated_at + original_finish_date",
         up: v005_reading_plans_status,
     },
+    Migration {
+        version: "v006_notes_anchor",
+        description: "notes.anchor_start + anchor_end + anchored_text (marginalia anchoring)",
+        up: v006_notes_anchor,
+    },
 ];
 
 /// Apply every migration that is not already recorded in `schema_migrations`.
@@ -242,6 +247,16 @@ fn v005_reading_plans_status(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "reading_plans", "status", "TEXT NOT NULL DEFAULT 'active'")?;
     add_column_if_missing(conn, "reading_plans", "activated_at", "TEXT")?;
     add_column_if_missing(conn, "reading_plans", "original_finish_date", "TEXT")?;
+    Ok(())
+}
+
+/// Marginalia anchoring: a note can carry a selection RANGE (anchor_start..
+/// anchor_end, both tagged locators) plus the exact highlighted text. All
+/// nullable — legacy notes and point-anchored notes leave them NULL.
+fn v006_notes_anchor(conn: &Connection) -> Result<()> {
+    add_column_if_missing(conn, "notes", "anchor_start", "TEXT")?;
+    add_column_if_missing(conn, "notes", "anchor_end", "TEXT")?;
+    add_column_if_missing(conn, "notes", "anchored_text", "TEXT")?;
     Ok(())
 }
 

@@ -96,6 +96,11 @@ pub fn note_from_row(row: &rusqlite::Row) -> rusqlite::Result<Note> {
         created_at: row.get(8)?,
         updated_at: row.get(9)?,
         exported_markdown_path: row.get(10)?,
+        // Cols 11-13 added in v006; SELECTs that don't include them must not call
+        // this hydrator. All note SELECTs were updated in lockstep.
+        anchor_start: row.get(11)?,
+        anchor_end: row.get(12)?,
+        anchored_text: row.get(13)?,
     })
 }
 

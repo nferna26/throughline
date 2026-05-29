@@ -31,6 +31,9 @@ function note(over: Partial<Note>): Note {
     created_at: "2026-05-26T00:00:00Z",
     updated_at: "2026-05-26T00:00:00Z",
     exported_markdown_path: null,
+    anchor_start: null,
+    anchor_end: null,
+    anchored_text: null,
     ...over,
   };
 }

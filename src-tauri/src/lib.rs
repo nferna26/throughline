@@ -99,6 +99,8 @@ pub fn run() {
             commands::sessions::cmd_restart_current_section,
             // ── notes ──
             commands::notes::cmd_save_note,
+            commands::notes::cmd_update_note,
+            commands::notes::cmd_delete_note,
             commands::notes::cmd_list_notes,
             commands::notes::cmd_quote_warns,
             // ── AI ──

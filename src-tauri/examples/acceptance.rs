@@ -146,6 +146,9 @@ fn main() -> anyhow::Result<()> {
             created_at: now.clone(),
             updated_at: now.clone(),
             exported_markdown_path: None,
+            anchor_start: None,
+            anchor_end: None,
+            anchored_text: None,
         };
         conn.execute(
             "INSERT INTO notes (id, book_id, session_id, note_type, locator, chapter_label, body, short_quote, created_at, updated_at, exported_markdown_path)

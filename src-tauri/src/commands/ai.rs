@@ -139,7 +139,7 @@ pub fn cmd_save_ai_preview_as_note(
     )?;
 
     let mut note_stmt = conn.prepare(
-        "SELECT id, book_id, session_id, note_type, locator, chapter_label, body, short_quote, created_at, updated_at, exported_markdown_path FROM notes WHERE id = ?1",
+        "SELECT id, book_id, session_id, note_type, locator, chapter_label, body, short_quote, created_at, updated_at, exported_markdown_path, anchor_start, anchor_end, anchored_text FROM notes WHERE id = ?1",
     )?;
     let mut note = note_stmt.query_row(params![id], note_from_row)?;
 
@@ -407,7 +407,7 @@ pub fn cmd_save_ai_response_as_note(
     )?;
 
     let mut note_stmt = conn.prepare(
-        "SELECT id, book_id, session_id, note_type, locator, chapter_label, body, short_quote, created_at, updated_at, exported_markdown_path FROM notes WHERE id = ?1",
+        "SELECT id, book_id, session_id, note_type, locator, chapter_label, body, short_quote, created_at, updated_at, exported_markdown_path, anchor_start, anchor_end, anchored_text FROM notes WHERE id = ?1",
     )?;
     let mut note = note_stmt.query_row(params![id], note_from_row)?;
 
