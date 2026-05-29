@@ -415,13 +415,15 @@ function applyTheme(rendition: any, theme: "light" | "dark", fontSize: number, l
       "margin": "0 auto !important",
       "padding": "24px !important",
     },
-    // Force page-container backgrounds to inherit so author CSS like
-    // `div.page { background: #d8dae0 }` doesn't paint a slab behind the text.
-    // We deliberately do NOT include `pre`, `code`, `table`, `th`, `td`, or
-    // `blockquote` — those often use a subtle background by design and stripping
-    // them would hurt legibility.
-    "div, main, article, section, header, footer, nav, aside": {
-      "background": "transparent !important",
+    // Strip author background "slabs" from every element so the book reads on
+    // the theme's paper, not on grey/blue bands. Some EPUBs (e.g. Smashing's
+    // Design Systems) paint `background-color` on the text elements themselves
+    // — links, headings, list items — not just containers, so a div-only rule
+    // misses them. `html, body` keep the themed background: their element
+    // selectors beat the universal rule even with `!important`. Trade-off: code
+    // / table tints go transparent too, which suits a uniform calm reading
+    // surface.
+    "*": {
       "background-color": "transparent !important",
     },
     "p, li, blockquote": { "color": `${ink} !important` },
