@@ -532,6 +532,27 @@
 .rg-card-input:focus { outline: none; }
 .rg-card-saving { display: block; margin-top: 4px; font-size: 11px; color: var(--rg-muted); }
 
+/* EPUB margin: the viewer flows on the left; a sticky notes panel sits right.
+   The viewer stays a width:100% block in its own column so epub.js's renderTo
+   sizing is untouched. Cards are in document order (CFI→pixel alignment over an
+   iframe is deliberately avoided); clicking a card jumps to its highlight. */
+.rg-reader-body.epub { display: flex; align-items: flex-start; gap: var(--rg-5); max-width: none; padding: 0; }
+.epub-host-col { flex: 1 1 0; min-width: 0; }
+.rg-margin.flow {
+  position: sticky; top: 0; align-self: flex-start; flex: 0 0 300px; width: 300px;
+  max-height: 100vh; overflow-y: auto; padding: var(--rg-6) var(--rg-5) var(--rg-6) 0;
+}
+.rg-margin.flow .rg-card { position: static; right: auto; margin-bottom: var(--rg-3); }
+@media (max-width: 880px) {
+  /* Too narrow for a side panel — stack notes under the reader. */
+  .rg-reader-body.epub { flex-direction: column; }
+  .rg-margin.flow { position: static; width: auto; flex: none; max-height: none; padding: 0 var(--rg-7) var(--rg-7); }
+}
+/* Selection action card at the top of the EPUB margin. */
+.rg-selcard { background: var(--rg-panel); border: 1px solid var(--rg-accent); border-radius: var(--rg-r-sm); padding: 10px 12px; margin-bottom: var(--rg-3); }
+.rg-selcard-actions { display: flex; flex-wrap: wrap; gap: var(--rg-2); margin-top: 8px; }
+.rg-selcard-actions .rg-chip { height: 30px; }
+
 /* Floating selection toolbar — sits just above the selected text. */
 .rg-seltoolbar {
   position: absolute; transform: translate(-50%, calc(-100% - 8px)); z-index: 30;

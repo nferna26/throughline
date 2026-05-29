@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ePub from "epubjs";
 import AiPanel from "./AiPanel";
 import RGIcon from "../components/RGIcon";
+import MarginNoteCard from "../components/MarginNoteCard";
 import { useDialog } from "../hooks/useDialog";
 import type { BookSection, Note, ReadingSession, TodayCard, ReaderMode } from "../types";
 import { NOTE_TYPES, makeCfiLocator, parseLocator } from "../types";
@@ -42,6 +43,19 @@ export default function EpubReader({ today, mode = "full", onExit }: Props) {
   const [cfi, setCfi] = useState<string>("");
   const [percent, setPercent] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
+  // ── Companion Margin: anchored notes/highlights beside the EPUB ──
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
+  // The current selection's CFI range + text (the CFI is emitted free by the
+  // "selected" event and was previously discarded).
+  const [epubSel, setEpubSel] = useState<{ cfi: string; text: string } | null>(null);
+  const appliedHl = useRef<Set<string>>(new Set());
+
+  const refreshNotes = useCallback(async () => {
+    try { setNotes(await invoke<Note[]>("cmd_list_notes", { bookId: book.id })); }
+    catch { /* notes are non-critical to reading */ }
+  }, [book.id]);
+  useEffect(() => { refreshNotes(); }, [refreshNotes]);
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (localStorage.getItem("rg.theme") as "light" | "dark") || "light"
   );
@@ -133,8 +147,14 @@ export default function EpubReader({ today, mode = "full", onExit }: Props) {
             if (text && text.trim().length >= 4) setSelection(text);
           } catch { /* ignore */ }
         };
-        rendition.on("selected", (_cfiRange: string, contents: any) => {
+        rendition.on("selected", (cfiRange: string, contents: any) => {
           captureFromContents(contents);
+          // The CFI range is the precise, reflow-stable anchor for a marginalia
+          // note/highlight — capture it (it used to be discarded).
+          try {
+            const text: string = contents?.window?.getSelection?.()?.toString?.() ?? "";
+            if (cfiRange && text.trim().length >= 1) setEpubSel({ cfi: cfiRange, text });
+          } catch { /* ignore */ }
         });
         rendition.on("rendered", (_section: any, contents: any) => {
           const doc = contents?.document;
@@ -282,6 +302,69 @@ export default function EpubReader({ today, mode = "full", onExit }: Props) {
     ? assignableSections.find((s) => s.id === assignedSection.id)
     : undefined;
 
+  // Notes for the current section. EPUB sections have no char range, so we key
+  // on the chapter label (stored at save time) — the practical section key.
+  const sectionNotes = useMemo(
+    () => notes.filter((n) => n.chapter_label != null && n.chapter_label === currentSection?.label),
+    [notes, currentSection?.label],
+  );
+
+  // Paint each anchored note as a native epub.js highlight (an SVG overlay that
+  // survives reflow). Clear + reapply when the section's notes change.
+  useEffect(() => {
+    const r = renditionRef.current;
+    if (!r?.annotations) return;
+    for (const c of appliedHl.current) { try { r.annotations.remove(c, "highlight"); } catch { /* ignore */ } }
+    appliedHl.current.clear();
+    for (const n of sectionNotes) {
+      const p = parseLocator(n.anchor_start || n.locator);
+      if (p.kind !== "cfi" || !p.value) continue;
+      try {
+        r.annotations.highlight(p.value, {}, undefined, "rg-epub-hl", { fill: "#f4c64a", "fill-opacity": "0.32" });
+        appliedHl.current.add(p.value);
+      } catch { /* a CFI for another doc won't apply until displayed; fine */ }
+    }
+  }, [sectionNotes, currentIdx]);
+
+  async function createAnchoredNote(noteType: string): Promise<Note | null> {
+    if (!epubSel) return null;
+    try {
+      const note = await invoke<Note>("cmd_save_note", {
+        bookId: book.id,
+        sessionId: session?.id ?? null,
+        noteType,
+        locator: makeCfiLocator(epubSel.cfi),
+        chapterLabel: currentSection?.label ?? null,
+        body: "",
+        shortQuote: null,
+        anchorStart: makeCfiLocator(epubSel.cfi),
+        anchorEnd: null,
+        anchoredText: epubSel.text,
+      });
+      setEpubSel(null);
+      try { renditionRef.current?.getContents?.().forEach((c: any) => c?.window?.getSelection?.()?.removeAllRanges?.()); } catch { /* ignore */ }
+      await refreshNotes();
+      return note;
+    } catch { setEpubSel(null); return null; }
+  }
+  async function onHighlight() { await createAnchoredNote("Highlight"); }
+  async function onMarginNote() { const n = await createAnchoredNote("MarginNote"); if (n) setActiveNoteId(n.id); }
+  function onExplainSelection() {
+    if (epubSel?.text && epubSel.text.trim().length >= 4) setSelection(epubSel.text);
+    setEpubSel(null);
+    setShowAi(true);
+  }
+  async function deleteNote(id: string) {
+    try { await invoke("cmd_delete_note", { noteId: id }); } catch { /* ignore */ }
+    if (activeNoteId === id) setActiveNoteId(null);
+    await refreshNotes();
+  }
+  function jumpToNote(n: Note) {
+    const p = parseLocator(n.anchor_start || n.locator);
+    if (p.kind === "cfi" && p.value) { try { renditionRef.current?.display(p.value); } catch { /* ignore */ } }
+    setActiveNoteId(n.id);
+  }
+
   return (
     <section className="rg-reader">
       <div className="rg-readtoolbar">
@@ -368,7 +451,38 @@ export default function EpubReader({ today, mode = "full", onExit }: Props) {
         </div>
       ) : (
         <div className="rg-readscroll epub-host" data-theme={theme}>
-          <div ref={viewerRef} className="epub-viewer" />
+          <div className="rg-reader-body epub">
+            <div className="epub-host-col">
+              <div ref={viewerRef} className="epub-viewer" />
+            </div>
+            <aside className="rg-margin flow" aria-label="Notes and highlights">
+              {epubSel && (
+                <div className="rg-selcard" role="toolbar" aria-label="Selection actions">
+                  <blockquote className="rg-card-quote">
+                    {epubSel.text.length > 140 ? epubSel.text.slice(0, 140) + "…" : epubSel.text}
+                  </blockquote>
+                  <div className="rg-selcard-actions">
+                    <button className="rg-chip" onClick={onHighlight}><RGIcon name="pencil" size={14} /> Highlight</button>
+                    <button className="rg-chip" onClick={onMarginNote}><RGIcon name="pencil" size={14} /> Note</button>
+                    <button className="rg-chip" onClick={onExplainSelection}><RGIcon name="sparkle" size={14} /> Explain</button>
+                  </div>
+                </div>
+              )}
+              {sectionNotes.length === 0 && !epubSel && (
+                <p className="rg-card-hint" style={{ padding: "0 4px" }}>Select text to highlight, note, or ask.</p>
+              )}
+              {sectionNotes.map((n) => (
+                <MarginNoteCard
+                  key={n.id}
+                  note={n}
+                  active={activeNoteId === n.id}
+                  onActivate={() => jumpToNote(n)}
+                  onSaved={refreshNotes}
+                  onDelete={() => deleteNote(n.id)}
+                />
+              ))}
+            </aside>
+          </div>
         </div>
       )}
 

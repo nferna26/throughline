@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { invoke } from "@tauri-apps/api/core";
 import AiPanel from "./AiPanel";
 import RGIcon from "../components/RGIcon";
+import MarginNoteCard from "../components/MarginNoteCard";
 import { useDialog } from "../hooks/useDialog";
 import type { BookSection, Note, ReadingSession, TodayCard, ReaderMode } from "../types";
 import { NOTE_TYPES, makeCharLocator, parseLocator } from "../types";
@@ -427,10 +428,10 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
           </div>
           <aside className="rg-margin" aria-label="Notes and highlights">
             {sectionNotes.map((n) => (
-              <NoteCard
+              <MarginNoteCard
                 key={n.id}
                 note={n}
-                top={cardTops[n.id] ?? 0}
+                style={{ top: cardTops[n.id] ?? 0 }}
                 active={activeNoteId === n.id}
                 onActivate={() => setActiveNoteId(n.id)}
                 onSaved={refreshNotes}
@@ -565,70 +566,6 @@ function renderParagraph(
 
 /** One anchored card in the Companion Margin. User notes are editable with
  *  debounced autosave; saved-AI cards are visually distinct and read-only. */
-function NoteCard(props: {
-  note: Note;
-  top: number;
-  active: boolean;
-  onActivate: () => void;
-  onSaved: () => void;
-  onDelete: () => void;
-}) {
-  const { note } = props;
-  const isAi = note.note_type === "SavedAICard" || note.note_type === "AI";
-  const isHighlight = note.note_type === "Highlight";
-  const [body, setBody] = useState(note.body);
-  const [saving, setSaving] = useState(false);
-  const timer = useRef<number | null>(null);
-
-  // Reset the editor when this card is reused for a different note.
-  useEffect(() => { setBody(note.body); /* eslint-disable-next-line */ }, [note.id]);
-
-  function onChange(v: string) {
-    setBody(v);
-    if (timer.current) window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(async () => {
-      setSaving(true);
-      try {
-        await invoke("cmd_update_note", { noteId: note.id, body: v });
-        props.onSaved();
-      } catch { /* keep local text; will retry on next keystroke */ }
-      finally { setSaving(false); }
-    }, 700);
-  }
-
-  const showEditor = !isAi && (props.active || !isHighlight || body.length > 0);
-
-  return (
-    <div
-      className={`rg-card${isAi ? " ai" : ""}${props.active ? " active" : ""}`}
-      style={{ top: props.top }}
-      onClick={props.onActivate}
-    >
-      <div className="rg-card-head">
-        <span className="rg-card-type">{isHighlight ? "Highlight" : isAi ? "AI card" : note.note_type}</span>
-        <button className="rg-iconbtn" aria-label="Delete note" onClick={(e) => { e.stopPropagation(); props.onDelete(); }}>
-          <RGIcon name="x" size={14} />
-        </button>
-      </div>
-      {note.anchored_text && <blockquote className="rg-card-quote">{note.anchored_text}</blockquote>}
-      {isAi ? (
-        <p className="rg-card-body">{note.body}</p>
-      ) : showEditor ? (
-        <textarea
-          className="rg-card-input"
-          value={body}
-          placeholder="Add a thought…"
-          onChange={(e) => onChange(e.target.value)}
-          onClick={(e) => e.stopPropagation()}
-        />
-      ) : (
-        <p className="rg-card-hint">Click to add a note</p>
-      )}
-      {saving && <span className="rg-card-saving">Saving…</span>}
-    </div>
-  );
-}
-
 let saveProgressTimer: number | null = null;
 let lastSaveAt = 0;
 function throttledSaveProgress(bookId: string, sectionId: string, locator: string, percent: number) {
