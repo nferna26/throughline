@@ -10,8 +10,12 @@ pub const KEY_AI_BASE_URL: &str = "ai_base_url";
 pub const KEY_AI_MODEL: &str = "ai_model";
 pub const KEY_LOCAL_ONLY: &str = "ai_local_only";
 pub const KEY_AI_RETENTION_DAYS: &str = "ai_requests_retention_days";
+pub const KEY_READING_RHYTHM_MINUTES: &str = "reading_rhythm_minutes";
 pub const DEFAULT_AI_BASE_URL: &str = "http://localhost:1234/v1";
 pub const DEFAULT_AI_MODEL: &str = "";
+/// Default length of a planned reading sitting, in minutes (the "Reading rhythm"
+/// the Book Setup Sheet defaults to). Surfaced as "Start N-minute session".
+pub const DEFAULT_RHYTHM_MINUTES: i64 = 25;
 pub const QUOTE_WARN_TEXT: &str =
     "Fair use has no fixed safe word count. The default posture in ReadingGym is short quotes \
      for private study only. Quotes longer than ~300 characters are warned, not blocked.";
@@ -158,6 +162,17 @@ pub fn get_ai_retention_days(conn: &Connection) -> i64 {
         .unwrap_or(crate::ai_retention::DEFAULT_RETENTION_DAYS)
 }
 
+/// Planned length of a normal reading sitting, in minutes. Surfaced on the Today
+/// action card ("Start N-minute session") and written by the Book Setup Sheet.
+/// Defaults to `DEFAULT_RHYTHM_MINUTES` (25); clamped to a humane 5..=120 so a
+/// stray value can never produce an absurd button.
+pub fn get_reading_rhythm_minutes(conn: &Connection) -> i64 {
+    get_string(conn, KEY_READING_RHYTHM_MINUTES)
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .map(|n| n.clamp(5, 120))
+        .unwrap_or(DEFAULT_RHYTHM_MINUTES)
+}
+
 pub fn build_dto(conn: &Connection) -> Result<SettingsDto> {
     let export = get_export_path(conn)?;
     let local_only = get_local_only(conn);
@@ -211,5 +226,30 @@ mod tests {
     fn accepts_absolute_path() {
         let r = validate_export_path("/tmp/readinggym_test_settings_path").unwrap();
         assert!(r.is_absolute());
+    }
+
+    fn mem() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)", []).unwrap();
+        conn
+    }
+
+    #[test]
+    fn reading_rhythm_defaults_to_25_then_round_trips() {
+        let conn = mem();
+        assert_eq!(get_reading_rhythm_minutes(&conn), DEFAULT_RHYTHM_MINUTES);
+        set_string(&conn, KEY_READING_RHYTHM_MINUTES, "40").unwrap();
+        assert_eq!(get_reading_rhythm_minutes(&conn), 40);
+    }
+
+    #[test]
+    fn reading_rhythm_clamps_absurd_values() {
+        let conn = mem();
+        set_string(&conn, KEY_READING_RHYTHM_MINUTES, "1").unwrap();
+        assert_eq!(get_reading_rhythm_minutes(&conn), 5, "floor at 5 min");
+        set_string(&conn, KEY_READING_RHYTHM_MINUTES, "9000").unwrap();
+        assert_eq!(get_reading_rhythm_minutes(&conn), 120, "cap at 120 min");
+        set_string(&conn, KEY_READING_RHYTHM_MINUTES, "not-a-number").unwrap();
+        assert_eq!(get_reading_rhythm_minutes(&conn), DEFAULT_RHYTHM_MINUTES, "fall back on garbage");
     }
 }

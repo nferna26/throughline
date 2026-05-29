@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import Today from "./Today";
 import type { TodayCard } from "../types";
 
@@ -41,6 +41,7 @@ function card(): TodayCard {
     },
     section_completed: false,
     estimated_minutes: 18,
+    session_minutes: 25,
     monthly_pct: 12,
     pace: { kind: "on_pace" },
     day_index: 3,
@@ -58,17 +59,40 @@ const noop = () => {};
 
 describe("Today", () => {
   it("renders the welcome card with an import action when there is no book", () => {
-    render(<Today today={null} onImport={noop} onStart={noop} onRefresh={noop} />);
+    render(<Today today={null} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
     expect(screen.getByText(/Welcome to ReadingGym/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Import a book/i })).toBeInTheDocument();
   });
 
   it("renders today's section, pace, and Start Reading for an active book", () => {
-    render(<Today today={card()} onImport={noop} onStart={noop} onRefresh={noop} />);
+    render(<Today today={card()} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
     expect(screen.getByRole("heading", { name: /The Cold Start Problem/ })).toBeInTheDocument();
     expect(screen.getByText("Chapter 1")).toBeInTheDocument();
     expect(screen.getByText(/On pace/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /start reading/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Start 25-minute session/i })).toBeInTheDocument();
+  });
+
+  it("offers a timed session and an always-present 10-minute rescue", () => {
+    const onStart = vi.fn();
+    const onStartRescue = vi.fn();
+    render(<Today today={card()} onImport={noop} onStart={onStart} onStartRescue={onStartRescue} onRefresh={noop} />);
+    // Primary action names the reading-rhythm length, not the section estimate.
+    const primary = screen.getByRole("button", { name: /Start 25-minute session/i });
+    fireEvent.click(primary);
+    expect(onStart).toHaveBeenCalledTimes(1);
+    // The rescue is always offered and routes to the calm 10-minute mode.
+    const rescue = screen.getByRole("button", { name: /I only have 10 minutes/i });
+    fireEvent.click(rescue);
+    expect(onStartRescue).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a calm forecast line when slightly off pace", () => {
+    const c = card();
+    c.forecast = { state: "slightly_off_pace", projected_finish_date: "2026-06-03", days_late: 2 };
+    render(<Today today={c} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.getByText(/Slightly off your original pace/i)).toBeInTheDocument();
+    // Still calm — no recovery panel, no accusatory chip.
+    expect(screen.queryByText(/A little behind/)).toBeNull();
   });
 
   // PRIORITY 0: a freshly imported book (plan_ready) must NEVER read as behind.
@@ -80,7 +104,7 @@ describe("Today", () => {
     c.pace = { kind: "not_started" };
     c.forecast = null;
     c.recovery = null;
-    render(<Today today={c} onImport={noop} onStart={noop} onRefresh={noop} />);
+    render(<Today today={c} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
     expect(screen.getByText(/Plan ready\. You are not behind/i)).toBeInTheDocument();
     // The accusatory pace chip ("Behind · N days") and the recovery panel must
     // not appear for a not-yet-started plan.

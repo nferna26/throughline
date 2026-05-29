@@ -141,7 +141,12 @@ pub struct TodayCard {
     pub plan: ReadingPlan,
     pub section: Option<BookSection>,
     pub section_completed: bool,
+    /// Estimated reading time of *today's assigned section*, in minutes.
     pub estimated_minutes: i64,
+    /// Planned length of a normal reading sitting, in minutes (the user's
+    /// "Reading rhythm"; default 25). Drives the primary "Start N-minute
+    /// session" action — distinct from `estimated_minutes` (today's section).
+    pub session_minutes: i64,
     pub monthly_pct: i64,
     pub pace: PaceState,
     pub day_index: i64,

@@ -1,13 +1,31 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import RGIcon, { type IconName } from "../components/RGIcon";
-import type { TodayCard, PaceState, RecoveryOption, RecomputedPlan } from "../types";
+import type { TodayCard, PaceState, RecoveryOption, RecomputedPlan, FinishForecast } from "../types";
 
 interface Props {
   today: TodayCard | null;
   onImport: () => void;
   onStart: (t: TodayCard) => void;
+  /** The calm "I only have 10 minutes" path — opens the reader in rescue mode. */
+  onStartRescue: (t: TodayCard) => void;
   onRefresh: () => Promise<void> | void;
+}
+
+// Honest, low-drama forecast caption for an active plan. `on_track` needs no
+// line (the pace chip already says "On pace"); the heavier needs_rebalance /
+// plan_unrealistic states are owned by the recovery panel, so we don't double up.
+// `slightly_off_pace` is the one state the pace chip hides (it maps to OnPace),
+// so surfacing it here is the whole point.
+function forecastNote(f: FinishForecast | null | undefined, planReady: boolean): string | null {
+  if (planReady || !f) return null;
+  if (f.state === "slightly_off_pace") {
+    return "Slightly off your original pace — a session today keeps the finish date within reach.";
+  }
+  if (f.state === "on_track" && f.projected_finish_date) {
+    return `On track to finish around ${f.projected_finish_date}.`;
+  }
+  return null;
 }
 
 // Pace as glyph + word (never color-only) — maps our PaceState to the design's
@@ -56,7 +74,7 @@ function describeOption(o: RecoveryOption): { primary: string; detail?: string }
   }
 }
 
-export default function Today({ today, onImport, onStart, onRefresh }: Props) {
+export default function Today({ today, onImport, onStart, onStartRescue, onRefresh }: Props) {
   if (!today) {
     return (
       <div className="rg-welcome">
@@ -73,11 +91,19 @@ export default function Today({ today, onImport, onStart, onRefresh }: Props) {
     );
   }
 
-  const { book, section, section_completed, estimated_minutes, monthly_pct, pace, day_index, total_days, streak, recovery, plan_status } = today;
+  const { book, section, section_completed, estimated_minutes, session_minutes, monthly_pct, pace, day_index, total_days, streak, recovery, plan_status, forecast } = today;
   const pm = paceMeta(pace);
   // A freshly imported book's plan hasn't started its pace clock yet. It is, by
   // design, NEVER behind — the copy here must say so plainly and calmly.
   const planReady = plan_status === "plan_ready";
+  const fcNote = forecastNote(forecast, planReady);
+  const primaryLabel = !section
+    ? "Start reading"
+    : planReady
+      ? `Start your first ${session_minutes}-minute session`
+      : section_completed
+        ? `Read on — ${session_minutes} more minutes`
+        : `Start ${session_minutes}-minute session`;
 
   return (
     <div className="rg-col rg-today">
@@ -112,6 +138,7 @@ export default function Today({ today, onImport, onStart, onRefresh }: Props) {
               Plan ready. You are not behind. Start today or begin tomorrow.
             </p>
           )}
+          {fcNote && <p className="rg-forecast-note">{fcNote}</p>}
         </>
       ) : (
         <div className="rg-section-label" style={{ fontStyle: "normal", color: "var(--rg-muted)" }}>
@@ -120,7 +147,12 @@ export default function Today({ today, onImport, onStart, onRefresh }: Props) {
       )}
 
       <button className="rg-btn rg-btn-primary block" disabled={!section} onClick={() => onStart(today)}>
-        <RGIcon name="book" size={18} /> {section_completed ? "Re-open today's section" : "Start reading"}
+        <RGIcon name="book" size={18} /> {primaryLabel}
+      </button>
+      {/* Always offered, never the loud option: a 10-minute "just stay
+          connected" sitting. Same reader, calm framing, no pace pressure. */}
+      <button className="rg-btn rg-btn-ghost rg-rescue-btn" disabled={!section} onClick={() => onStartRescue(today)}>
+        <RGIcon name="clock" size={16} /> I only have 10 minutes
       </button>
 
       <div className="rg-streak">

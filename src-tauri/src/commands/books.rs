@@ -128,6 +128,7 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
     };
 
     let streak = compute_streak(&conn, &book.id)?;
+    let session_minutes = crate::settings::get_reading_rhythm_minutes(&conn);
 
     // Recovery options ONLY when the plan is active and the forecast says a real
     // rebalance is warranted — never for a plan-ready/just-started book. The
@@ -153,6 +154,7 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
         section,
         section_completed,
         estimated_minutes: est_minutes,
+        session_minutes,
         monthly_pct: computed.monthly_pct,
         pace: computed.pace,
         day_index: computed.day_index,

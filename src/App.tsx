@@ -9,13 +9,13 @@ import NotesBrowser from "./screens/NotesBrowser";
 import RGIcon from "./components/RGIcon";
 import "./App.css";
 import "./rg-theme.css";
-import type { TodayCard } from "./types";
+import type { TodayCard, ReaderMode } from "./types";
 
 type BookTab = "today" | "notes";
 
 type View =
   | { kind: "today" }
-  | { kind: "reader"; today: TodayCard }
+  | { kind: "reader"; today: TodayCard; mode: ReaderMode }
   | { kind: "settings" };
 
 export default function App() {
@@ -74,7 +74,13 @@ export default function App() {
   }
 
   function startReading(t: TodayCard) {
-    setView({ kind: "reader", today: t });
+    setView({ kind: "reader", today: t, mode: "full" });
+  }
+
+  // The "I only have 10 minutes" path — same reader, calm framing, no pace
+  // pressure. Opens at the saved resume position (the next paragraph).
+  function startRescue(t: TodayCard) {
+    setView({ kind: "reader", today: t, mode: "rescue" });
   }
 
   function exitReader() {
@@ -121,7 +127,7 @@ export default function App() {
         {view.kind === "today" && (
           today === null ? (
             // No books yet — the welcome card owns the import action; no book chrome.
-            <Today today={null} onImport={importBook} onStart={startReading} onRefresh={refreshToday} />
+            <Today today={null} onImport={importBook} onStart={startReading} onStartRescue={startRescue} onRefresh={refreshToday} />
           ) : (
             <>
               <div className="rg-bookhead">
@@ -152,7 +158,7 @@ export default function App() {
                 aria-labelledby={tab === "today" ? "tab-today" : "tab-notes"}
               >
                 {tab === "today" ? (
-                  <Today today={today} onImport={importBook} onStart={startReading} onRefresh={refreshToday} />
+                  <Today today={today} onImport={importBook} onStart={startReading} onStartRescue={startRescue} onRefresh={refreshToday} />
                 ) : (
                   <NotesBrowser book={today.book} />
                 )}
@@ -161,7 +167,7 @@ export default function App() {
           )
         )}
         {view.kind === "reader" && (
-          <Reader today={view.today} onExit={exitReader} />
+          <Reader today={view.today} mode={view.mode} onExit={exitReader} />
         )}
         {view.kind === "settings" && <Settings />}
       </main>

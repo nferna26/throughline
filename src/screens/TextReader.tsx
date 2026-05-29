@@ -3,11 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 import AiPanel from "./AiPanel";
 import RGIcon from "../components/RGIcon";
 import { useDialog } from "../hooks/useDialog";
-import type { BookSection, Note, ReadingSession, TodayCard } from "../types";
+import type { BookSection, Note, ReadingSession, TodayCard, ReaderMode } from "../types";
 import { NOTE_TYPES, makeCharLocator, parseLocator } from "../types";
 
 interface Props {
   today: TodayCard;
+  mode?: ReaderMode;
   onExit: () => void;
 }
 
@@ -16,8 +17,9 @@ interface Props {
  * Section completion is derived from "did the reader advance past this section
  * during this sitting?" — no manual mark-complete gate.
  */
-export default function TextReader({ today, onExit }: Props) {
+export default function TextReader({ today, mode = "full", onExit }: Props) {
   const { book, section: assignedSection } = today;
+  const rescue = mode === "rescue";
   // CANONICAL READING SEQUENCE: only sections marked assignable. Front/back
   // matter is filtered out by the backend (`cmd_assignable_sections`) and is
   // NEVER reachable through reader navigation. Initial position, Next/Prev,
@@ -259,10 +261,16 @@ export default function TextReader({ today, onExit }: Props) {
         <div className="rg-tb-div" />
         <button className="rg-iconbtn" disabled={currentIdx <= 0} aria-label="Previous section" onClick={goPrev}><RGIcon name="chevronLeft" size={18} /></button>
         <button className="rg-iconbtn" disabled={currentIdx >= assignableSections.length - 1} aria-label="Next section" onClick={goNext}><RGIcon name="chevronRight" size={18} /></button>
-        <button className="rg-btn rg-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setEndingPrompt(true)}>Finish</button>
+        <button className="rg-btn rg-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setEndingPrompt(true)}>{rescue ? "Done" : "Finish"}</button>
       </div>
 
       <div className="rg-readscroll" ref={containerRef} onScroll={handleScroll}>
+        {rescue && (
+          <div className="rg-rescue-banner" style={{ maxWidth: `${lineWidth}px` }} role="note">
+            <RGIcon name="clock" size={15} />
+            <span>Ten minutes. The goal is just to stay connected to the book — not to finish anything.</span>
+          </div>
+        )}
         <div className="rg-readcol" style={{ maxWidth: `${lineWidth}px`, fontSize: `${fontSize}px` }}>
           {paragraphs.map((p) => (
             <p
@@ -301,6 +309,7 @@ export default function TextReader({ today, onExit }: Props) {
 
       {endingPrompt && (
         <EndingPanel
+          rescue={rescue}
           summary={summary}
           setSummary={setSummary}
           onCancel={() => setEndingPrompt(false)}
@@ -441,6 +450,7 @@ function NotePanel(props: {
 }
 
 function EndingPanel(props: {
+  rescue?: boolean;
   summary: string;
   setSummary: (s: string) => void;
   onCancel: () => void;
@@ -448,24 +458,32 @@ function EndingPanel(props: {
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   useDialog(panelRef, props.onCancel);
+  const { rescue } = props;
   return (
     <div className="rg-modal-backdrop">
       <div ref={panelRef} className="rg-modal" role="dialog" aria-modal="true" aria-labelledby="text-ending-panel-title">
         <div className="rg-modal-head">
-          <span className="t" id="text-ending-panel-title"><RGIcon name="flag" size={16} /> Finish session</span>
+          <span className="t" id="text-ending-panel-title">
+            <RGIcon name="flag" size={16} /> {rescue ? "That counts" : "Finish session"}
+          </span>
           <button className="rg-iconbtn" onClick={props.onCancel} aria-label="Close finish-session panel"><RGIcon name="x" size={16} /></button>
         </div>
-        <p className="prompt">What is one sentence you want to remember from today?</p>
+        <p className="prompt">
+          {rescue
+            ? "You stayed connected to the book today. Want to jot one line before you go? (Totally optional.)"
+            : "What is one sentence you want to remember from today?"}
+        </p>
         <textarea
           className="rg-textarea"
           style={{ minHeight: 90 }}
           value={props.summary}
           onChange={(e) => props.setSummary(e.target.value)}
           autoFocus
+          placeholder={rescue ? "Optional — leave blank and just end." : undefined}
         />
         <div className="panel-actions">
           <button className="rg-btn rg-btn-ghost" onClick={props.onCancel}>Keep reading</button>
-          <button className="rg-btn rg-btn-primary" onClick={props.onSave}>End session</button>
+          <button className="rg-btn rg-btn-primary" onClick={props.onSave}>{rescue ? "That counts — done" : "End session"}</button>
         </div>
       </div>
     </div>

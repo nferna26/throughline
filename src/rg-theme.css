@@ -214,6 +214,30 @@
   margin-top: var(--rg-3); margin-bottom: 0;
   font-size: 14px; line-height: 1.5; color: var(--rg-muted);
 }
+/* Honest forecast caption (e.g. "slightly off pace") — informational, not a
+   scolding. Same muted weight as the plan-ready note. */
+.rg-forecast-note {
+  margin-top: var(--rg-2); margin-bottom: 0;
+  font-size: 14px; line-height: 1.5; color: var(--rg-muted);
+}
+
+/* The "I only have 10 minutes" action — full width, quieter than the primary,
+   sits directly under it. Never competes for attention. */
+.rg-rescue-btn {
+  width: 100%; margin-top: var(--rg-2);
+  font-weight: 550; color: var(--rg-muted);
+}
+.rg-rescue-btn:hover:not(:disabled) { color: var(--rg-ink); }
+
+/* In-reader rescue banner: a single calm line at the top of the column telling
+   the reader the only goal is to stay connected. Soft, no alarm color. */
+.rg-rescue-banner {
+  margin: var(--rg-4) auto 0; padding: 10px 14px;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; line-height: 1.45; color: var(--rg-muted);
+  background: var(--rg-ink-04); border: 1px solid var(--rg-line);
+  border-radius: var(--rg-r-sm);
+}
 
 .rg-btn {
   appearance: none; cursor: pointer;

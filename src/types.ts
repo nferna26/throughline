@@ -105,6 +105,11 @@ export interface AiRequest {
   wrote_to_memory: boolean;
 }
 
+/** How the reader was entered. "full" = a normal planned session; "rescue" =
+ *  the calm 10-minute "just stay connected to the book" mode. The mode only
+ *  changes framing/copy and the recap — never the pacing or completion math. */
+export type ReaderMode = "full" | "rescue";
+
 export type PaceState =
   | { kind: "on_pace" }
   | { kind: "behind"; days_behind: number }
@@ -142,7 +147,11 @@ export interface TodayCard {
   plan: ReadingPlan;
   section: BookSection | null;
   section_completed: boolean;
+  /** Estimated reading time of today's assigned section, in minutes. */
   estimated_minutes: number;
+  /** Planned length of a normal sitting (the "Reading rhythm"; default 25).
+   *  Drives the primary "Start N-minute session" action. */
+  session_minutes: number;
   monthly_pct: number;
   pace: PaceState;
   day_index: number;
