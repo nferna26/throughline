@@ -61,6 +61,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "book_sections.assignable INTEGER NOT NULL DEFAULT 1",
         up: v004_book_sections_assignable,
     },
+    Migration {
+        version: "v005_reading_plans_status",
+        description: "reading_plans.status + activated_at + original_finish_date",
+        up: v005_reading_plans_status,
+    },
 ];
 
 /// Apply every migration that is not already recorded in `schema_migrations`.
@@ -226,6 +231,18 @@ fn v004_book_sections_assignable(conn: &Connection) -> Result<()> {
         "assignable",
         "INTEGER NOT NULL DEFAULT 1",
     )
+}
+
+/// Plan lifecycle columns. `status` defaults to 'active' so pre-existing plans
+/// (created before plan states existed) keep their current behavior; freshly
+/// built plans set 'plan_ready' explicitly (see plan::build_default_plan).
+/// `activated_at` is stamped on the first reading session; `original_finish_date`
+/// preserves the pre-rebalance target so the forecast has a stable baseline.
+fn v005_reading_plans_status(conn: &Connection) -> Result<()> {
+    add_column_if_missing(conn, "reading_plans", "status", "TEXT NOT NULL DEFAULT 'active'")?;
+    add_column_if_missing(conn, "reading_plans", "activated_at", "TEXT")?;
+    add_column_if_missing(conn, "reading_plans", "original_finish_date", "TEXT")?;
+    Ok(())
 }
 
 /// Idempotent ALTER ADD COLUMN. Used inside migration bodies so a DB that

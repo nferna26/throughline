@@ -41,6 +41,36 @@ pub struct ReadingPlan {
     pub daily_target_units: Option<i64>,
     pub days_per_week: i64,
     pub catchup_mode: String,
+    /// Plan lifecycle: "plan_ready" (imported, not started yet) | "active" |
+    /// "rebalanced" | "completed" | "paused". Defaults to "active" for plans
+    /// created before this field existed (migration v005 column default).
+    #[serde(default = "default_active")]
+    pub status: String,
+    /// Stamped when the first reading session starts. None = not yet activated;
+    /// the pace clock and forecast only run once this is set.
+    #[serde(default)]
+    pub activated_at: Option<String>,
+    /// The pre-rebalance target, captured the first time the finish date moves,
+    /// so the forecast has a stable baseline. None until a rebalance occurs.
+    #[serde(default)]
+    pub original_finish_date: Option<String>,
+}
+
+fn default_active() -> String {
+    "active".to_string()
+}
+
+/// Forward-looking pace signal driven by the OBSERVED reading rate vs the
+/// target — not a punitive "should-have-done-by-now" curve. Only meaningful
+/// once a plan is `active` and at least one reading window has passed.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FinishForecast {
+    /// "on_track" | "slightly_off_pace" | "needs_rebalance" | "plan_unrealistic"
+    pub state: String,
+    /// Projected finish date at the current observed rate (YYYY-MM-DD), if estimable.
+    pub projected_finish_date: Option<String>,
+    /// Projected days past the target (negative = ahead). 0 when on track or not estimable.
+    pub days_late: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -120,4 +150,10 @@ pub struct TodayCard {
     pub recovery: Option<crate::recovery::RecoveryBundle>,
     pub resume_locator: Option<String>,
     pub resume_percent: Option<f64>,
+    /// Plan lifecycle status (mirror of ReadingPlan.status) so the UI can show
+    /// "Plan ready. You are not behind." before activation instead of a pace.
+    pub plan_status: String,
+    /// Finish forecast — present only once the plan is active and a window has
+    /// passed. None before then (a fresh import is never "behind").
+    pub forecast: Option<FinishForecast>,
 }

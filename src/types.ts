@@ -20,6 +20,18 @@ export interface BookSection {
   sort_order: number;
 }
 
+/** Plan lifecycle. A freshly imported book is `plan_ready` (the plan exists but
+ *  the pace clock has NOT started) — this is what guarantees an imported book is
+ *  never shown as "behind". The first reading session flips it to `active` and
+ *  stamps `activated_at`; `rebalanced` after an extend; `completed` when every
+ *  assignable section is done. Legacy plans default to `active`. */
+export type PlanStatus =
+  | "plan_ready"
+  | "active"
+  | "rebalanced"
+  | "completed"
+  | "paused";
+
 export interface ReadingPlan {
   id: string;
   book_id: string;
@@ -28,6 +40,29 @@ export interface ReadingPlan {
   daily_target_units: number | null;
   days_per_week: number;
   catchup_mode: string;
+  /** Lifecycle state — see PlanStatus. Defaults to "active" for legacy rows. */
+  status: string;
+  /** When the plan was activated (first reading session). null while plan_ready. */
+  activated_at: string | null;
+  /** The original target_finish_date, captured the first time a rebalance moved
+   *  the goalpost. null if never rebalanced. */
+  original_finish_date: string | null;
+}
+
+/** Forward-looking finish projection. Replaces the punitive "N days behind"
+ *  linear deficit with an honest forecast: where the *current* reading rate
+ *  lands you relative to the target finish date. Only present once a plan is
+ *  active (null while plan_ready / done). */
+export type FinishForecastState =
+  | "on_track"
+  | "slightly_off_pace"
+  | "needs_rebalance"
+  | "plan_unrealistic";
+
+export interface FinishForecast {
+  state: string;
+  projected_finish_date: string | null;
+  days_late: number;
 }
 
 export interface ReadingSession {
@@ -116,6 +151,11 @@ export interface TodayCard {
   recovery: RecoveryBundle | null;
   resume_locator: string | null;
   resume_percent: number | null;
+  /** Plan lifecycle state (mirrors plan.status) — drives the Today copy so a
+   *  plan_ready book reads "Plan ready. You are not behind." */
+  plan_status: string;
+  /** Honest finish projection; null while plan_ready or done. */
+  forecast: FinishForecast | null;
 }
 
 export const NOTE_TYPES = [

@@ -73,12 +73,18 @@ export default function Today({ today, onImport, onStart, onRefresh }: Props) {
     );
   }
 
-  const { book, section, section_completed, estimated_minutes, monthly_pct, pace, day_index, total_days, streak, recovery } = today;
+  const { book, section, section_completed, estimated_minutes, monthly_pct, pace, day_index, total_days, streak, recovery, plan_status } = today;
   const pm = paceMeta(pace);
+  // A freshly imported book's plan hasn't started its pace clock yet. It is, by
+  // design, NEVER behind — the copy here must say so plainly and calmly.
+  const planReady = plan_status === "plan_ready";
 
   return (
     <div className="rg-col rg-today">
-      <div className="rg-kicker"><span className="dot" />Today — day {day_index} of {total_days}</div>
+      <div className="rg-kicker">
+        <span className="dot" />
+        {planReady ? "Today — plan ready" : `Today — day ${day_index} of ${total_days}`}
+      </div>
 
       <h1 className="rg-today-title">{book.title}</h1>
       {book.author && <div className="rg-today-author">{book.author}</div>}
@@ -91,10 +97,21 @@ export default function Today({ today, onImport, onStart, onRefresh }: Props) {
             <span className="sep" />
             <span className="item">{monthly_pct}% complete</span>
             <span className="sep" />
-            <span className={`rg-pace ${pm.cls}`} aria-label={`Pace: ${pm.word}`}>
-              <RGIcon name={pm.icon} size={15} /> {pm.word}
-            </span>
+            {planReady ? (
+              <span className="rg-pace on" aria-label="Plan ready — you are not behind">
+                <RGIcon name="flag" size={15} /> Plan ready
+              </span>
+            ) : (
+              <span className={`rg-pace ${pm.cls}`} aria-label={`Pace: ${pm.word}`}>
+                <RGIcon name={pm.icon} size={15} /> {pm.word}
+              </span>
+            )}
           </div>
+          {planReady && (
+            <p className="rg-planready-note">
+              Plan ready. You are not behind. Start today or begin tomorrow.
+            </p>
+          )}
         </>
       ) : (
         <div className="rg-section-label" style={{ fontStyle: "normal", color: "var(--rg-muted)" }}>

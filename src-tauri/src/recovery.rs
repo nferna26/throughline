@@ -193,6 +193,9 @@ mod tests {
             daily_target_units: Some(1),
             days_per_week: 6,
             catchup_mode: "gentle".to_string(),
+            status: "active".to_string(),
+            activated_at: None,
+            original_finish_date: None,
         };
         // 30 sections, 5 done, 5 days remaining (today=2026-05-26 → finish=2026-05-30)
         // Extend by 7 days → new finish = 2026-06-06 → days remaining 12
@@ -214,6 +217,9 @@ mod tests {
             daily_target_units: Some(1),
             days_per_week: 6,
             catchup_mode: "gentle".to_string(),
+            status: "active".to_string(),
+            activated_at: None,
+            original_finish_date: None,
         };
         let r = extend_finish_date(&plan, 30, 30, d(2026, 5, 26), 7).unwrap();
         assert_eq!(r.remaining_sections, 0);
@@ -230,6 +236,9 @@ mod tests {
             daily_target_units: Some(1),
             days_per_week: 6,
             catchup_mode: "gentle".to_string(),
+            status: "active".to_string(),
+            activated_at: None,
+            original_finish_date: None,
         };
         let r = extend_finish_date(&plan, 30, 0, d(2026, 5, 26), 0).unwrap();
         assert_eq!(r.new_target_finish_date, "2026-05-30");

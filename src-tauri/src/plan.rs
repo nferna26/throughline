@@ -2,9 +2,14 @@ use anyhow::Result;
 use chrono::{Duration, NaiveDate, Utc};
 use uuid::Uuid;
 
-use crate::models::{BookSection, PaceState, ReadingPlan};
+use crate::models::{BookSection, FinishForecast, PaceState, ReadingPlan};
 
 pub const DEFAULT_DAYS: i64 = 30;
+/// Days after activation before a slip can surface (the first reading window is
+/// grace — a freshly started book is never "off pace" on day one).
+pub const GRACE_DAYS: i64 = 1;
+/// A heavy-but-feasible daily section ceiling. Past this the plan is "unrealistic".
+pub const MAX_SECTIONS_PER_DAY: f64 = 6.0;
 
 pub fn build_default_plan(book_id: &str, sections: &[BookSection]) -> ReadingPlan {
     let start = Utc::now().naive_utc().date();
@@ -23,6 +28,11 @@ pub fn build_default_plan(book_id: &str, sections: &[BookSection]) -> ReadingPla
         daily_target_units: daily_target,
         days_per_week: 6,
         catchup_mode: "gentle".to_string(),
+        // A fresh import is PLAN-READY, not active: the pace clock does not run
+        // and the book is never "behind" until the first session activates it.
+        status: "plan_ready".to_string(),
+        activated_at: None,
+        original_finish_date: None,
     }
 }
 
@@ -81,6 +91,65 @@ pub fn pace_state(sections_count: usize, completed: usize, total_days: i64, day_
     }
 }
 
+/// Forward-looking finish forecast from the OBSERVED reading rate — gentle, not
+/// punitive. The caller guarantees the plan is active. Within the grace window
+/// (or before any reading) it trusts the plan's own rate, so a just-started book
+/// reads "on track" rather than fabricating a slip from a single missed day.
+pub fn forecast(
+    plan: &ReadingPlan,
+    n_assignable: usize,
+    completed: usize,
+    act_ref: NaiveDate,
+    target: NaiveDate,
+    today: NaiveDate,
+) -> FinishForecast {
+    let remaining = (n_assignable as i64 - completed as i64).max(0);
+    if remaining == 0 {
+        return FinishForecast {
+            state: "on_track".to_string(),
+            projected_finish_date: Some(today.to_string()),
+            days_late: 0,
+        };
+    }
+    let days_since = (today.signed_duration_since(act_ref).num_days() + 1).max(1);
+    let days_to_target = target.signed_duration_since(today).num_days();
+    let planned_rate = plan.daily_target_units.unwrap_or(1).max(1) as f64;
+    let observed_rate = completed as f64 / days_since as f64;
+
+    // Rate used to project the finish: trust the plan within grace or with no
+    // data; otherwise believe the observed rate; if activated past grace with
+    // nothing read, project a token 1 section/day (honest slip, not "abandoned").
+    let rate = if days_since <= GRACE_DAYS {
+        planned_rate
+    } else if observed_rate > 0.0 {
+        observed_rate
+    } else {
+        1.0
+    };
+    let proj_days = (remaining as f64 / rate).ceil() as i64;
+    let proj_finish = today + Duration::days(proj_days.max(0));
+    let days_late = proj_finish.signed_duration_since(target).num_days();
+
+    // Feasible = remaining work fits before the target at a heavy-but-sane pace.
+    let remaining_target_days = days_to_target.max(0) + 1;
+    let feasible = remaining as f64 <= remaining_target_days as f64 * MAX_SECTIONS_PER_DAY;
+
+    let state = if !feasible {
+        "plan_unrealistic"
+    } else if days_late <= 0 {
+        "on_track"
+    } else if days_late <= 3 {
+        "slightly_off_pace"
+    } else {
+        "needs_rebalance"
+    };
+    FinishForecast {
+        state: state.to_string(),
+        projected_finish_date: Some(proj_finish.to_string()),
+        days_late: days_late.max(0),
+    }
+}
+
 #[derive(Debug)]
 pub struct PlanComputed {
     pub day_index: i64,
@@ -90,6 +159,11 @@ pub struct PlanComputed {
     pub completed_count: usize,
     pub monthly_pct: i64,
     pub pace: PaceState,
+    /// Present only when the plan is active and not finished; None for a
+    /// plan-ready / paused / not-started / completed book.
+    pub forecast: Option<FinishForecast>,
+    /// Mirror of plan.status, surfaced so the UI can show plan-ready copy.
+    pub plan_status: String,
 }
 
 pub fn compute(plan: &ReadingPlan, sections: &[BookSection], completed_section_ids: &[String]) -> Result<PlanComputed> {
@@ -132,7 +206,40 @@ pub fn compute(plan: &ReadingPlan, sections: &[BookSection], completed_section_i
             None
         });
 
-    let pace = pace_state(n_assignable, completed_assignable, total, day_idx);
+    // Plan-state-aware pace + forecast. A book is only ever "behind"/"recovery"
+    // once it is ACTIVE, past the grace window, and the forecast actually slips.
+    // A plan-ready (freshly imported) or paused book is never behind.
+    let active = matches!(plan.status.as_str(), "active" | "rebalanced");
+    let act_ref = plan
+        .activated_at
+        .as_deref()
+        .and_then(|s| NaiveDate::parse_from_str(s.get(..10).unwrap_or(s), "%Y-%m-%d").ok())
+        .unwrap_or_else(|| NaiveDate::parse_from_str(&plan.start_date, "%Y-%m-%d").unwrap_or(today));
+    let target = NaiveDate::parse_from_str(&plan.target_finish_date, "%Y-%m-%d").unwrap_or(today);
+
+    let (pace, forecast_out): (PaceState, Option<FinishForecast>) = if n_assignable == 0 {
+        (PaceState::NotStarted, None)
+    } else if completed_assignable >= n_assignable {
+        (PaceState::Done, None)
+    } else if !active {
+        (PaceState::NotStarted, None)
+    } else {
+        let fc = forecast(plan, n_assignable, completed_assignable, act_ref, target, today);
+        let pace = match fc.state.as_str() {
+            "on_track" | "slightly_off_pace" => PaceState::OnPace,
+            "plan_unrealistic" => PaceState::Recovery,
+            _ => {
+                let db = fc.days_late.max(1);
+                if db >= 3 {
+                    PaceState::Recovery
+                } else {
+                    PaceState::Behind { days_behind: db }
+                }
+            }
+        };
+        (pace, Some(fc))
+    };
+
     Ok(PlanComputed {
         day_index: day_idx,
         total_days: total,
@@ -140,5 +247,100 @@ pub fn compute(plan: &ReadingPlan, sections: &[BookSection], completed_section_i
         completed_count: completed_assignable,
         monthly_pct,
         pace,
+        forecast: forecast_out,
+        plan_status: plan.status.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn plan_with(status: &str, start: &str, finish: &str, daily: Option<i64>, activated: Option<&str>) -> ReadingPlan {
+        ReadingPlan {
+            id: "p".into(),
+            book_id: "b".into(),
+            start_date: start.into(),
+            target_finish_date: finish.into(),
+            daily_target_units: daily,
+            days_per_week: 6,
+            catchup_mode: "gentle".into(),
+            status: status.into(),
+            activated_at: activated.map(|s| s.to_string()),
+            original_finish_date: None,
+        }
+    }
+
+    fn secs(n: usize) -> Vec<BookSection> {
+        (0..n)
+            .map(|i| BookSection {
+                id: format!("s{}", i),
+                book_id: "b".into(),
+                label: format!("S{}", i),
+                href: None,
+                start_locator: None,
+                end_locator: None,
+                estimated_units: None,
+                sort_order: i as i64,
+                assignable: true,
+            })
+            .collect()
+    }
+
+    /// PRIORITY 0: a freshly imported (plan_ready) book with zero reading must
+    /// never be "behind"/"recovery", regardless of how long ago it was imported.
+    #[test]
+    fn fresh_import_is_never_behind() {
+        let plan = plan_with("plan_ready", "2020-01-01", "2020-01-30", Some(2), None);
+        let c = compute(&plan, &secs(43), &[]).unwrap();
+        assert!(matches!(c.pace, PaceState::NotStarted), "fresh import must not be behind, got {:?}", c.pace);
+        assert!(c.forecast.is_none(), "no forecast before activation");
+        assert_eq!(c.plan_status, "plan_ready");
+    }
+
+    /// A just-activated plan (start == activation, full window) reads on track.
+    #[test]
+    fn forecast_on_track_when_just_activated() {
+        let plan = plan_with("active", "2026-01-10", "2026-02-08", Some(2), Some("2026-01-10"));
+        let f = forecast(&plan, 43, 0, d(2026, 1, 10), d(2026, 2, 8), d(2026, 1, 10));
+        assert_eq!(f.state, "on_track");
+        assert_eq!(f.days_late, 0);
+    }
+
+    /// A steady observed rate that comfortably finishes by target → on track.
+    #[test]
+    fn forecast_on_track_with_good_rate() {
+        let plan = plan_with("active", "2026-01-01", "2026-01-30", Some(2), Some("2026-01-01"));
+        // 20 done over 10 days = 2/day; 23 remaining → ~12 more days; finish ~1/22 ≤ 1/30.
+        let f = forecast(&plan, 43, 20, d(2026, 1, 1), d(2026, 1, 30), d(2026, 1, 10));
+        assert_eq!(f.state, "on_track");
+    }
+
+    /// A real, infeasible slip surfaces (and only then).
+    #[test]
+    fn forecast_flags_real_slip_when_stalled() {
+        let plan = plan_with("active", "2026-01-01", "2026-01-12", Some(4), Some("2026-01-01"));
+        // 40 remaining, target in 2 days, nothing read → cannot fit → unrealistic/rebalance.
+        let f = forecast(&plan, 40, 0, d(2026, 1, 1), d(2026, 1, 12), d(2026, 1, 10));
+        assert!(
+            matches!(f.state.as_str(), "plan_unrealistic" | "needs_rebalance"),
+            "stalled+tight plan should flag a slip, got {}",
+            f.state
+        );
+    }
+
+    #[test]
+    fn completed_plan_is_done() {
+        let plan = plan_with("active", "2026-01-01", "2026-01-30", Some(2), Some("2026-01-01"));
+        let s = secs(5);
+        let done: Vec<String> = s.iter().map(|x| x.id.clone()).collect();
+        let c = compute(&plan, &s, &done).unwrap();
+        assert!(matches!(c.pace, PaceState::Done));
+        assert!(c.forecast.is_none());
+    }
 }

@@ -25,6 +25,9 @@ function card(): TodayCard {
       daily_target_units: 1,
       days_per_week: 6,
       catchup_mode: "gentle",
+      status: "active",
+      activated_at: "2026-05-01T08:00:00Z",
+      original_finish_date: null,
     },
     section: {
       id: "s1",
@@ -46,6 +49,8 @@ function card(): TodayCard {
     recovery: null,
     resume_locator: null,
     resume_percent: null,
+    plan_status: "active",
+    forecast: { state: "on_track", projected_finish_date: "2026-05-28", days_late: 0 },
   };
 }
 
@@ -64,5 +69,23 @@ describe("Today", () => {
     expect(screen.getByText("Chapter 1")).toBeInTheDocument();
     expect(screen.getByText(/On pace/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start reading/i })).toBeInTheDocument();
+  });
+
+  // PRIORITY 0: a freshly imported book (plan_ready) must NEVER read as behind.
+  it("reassures and never shows 'behind' for a freshly imported plan_ready book", () => {
+    const c = card();
+    c.plan_status = "plan_ready";
+    c.plan.status = "plan_ready";
+    c.plan.activated_at = null;
+    c.pace = { kind: "not_started" };
+    c.forecast = null;
+    c.recovery = null;
+    render(<Today today={c} onImport={noop} onStart={noop} onRefresh={noop} />);
+    expect(screen.getByText(/Plan ready\. You are not behind/i)).toBeInTheDocument();
+    // The accusatory pace chip ("Behind · N days") and the recovery panel must
+    // not appear for a not-yet-started plan.
+    expect(screen.queryByText(/Behind ·/)).toBeNull();
+    expect(screen.queryByText(/A little behind/)).toBeNull();
+    expect(screen.queryByText(/Recovery/)).toBeNull();
   });
 });

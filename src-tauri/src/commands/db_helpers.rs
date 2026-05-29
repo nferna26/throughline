@@ -46,6 +46,10 @@ pub fn plan_from_row(row: &rusqlite::Row) -> rusqlite::Result<ReadingPlan> {
         daily_target_units: row.get(4)?,
         days_per_week: row.get(5)?,
         catchup_mode: row.get(6)?,
+        // Columns 7-9 added in migration v005; read defensively for legacy rows.
+        status: row.get::<_, Option<String>>(7)?.unwrap_or_else(|| "active".to_string()),
+        activated_at: row.get(8)?,
+        original_finish_date: row.get(9)?,
     })
 }
 
@@ -117,9 +121,9 @@ pub fn insert_section(conn: &Connection, s: &BookSection) -> rusqlite::Result<()
 
 pub fn insert_plan(conn: &Connection, p: &ReadingPlan) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO reading_plans (id, book_id, start_date, target_finish_date, daily_target_units, days_per_week, catchup_mode)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![p.id, p.book_id, p.start_date, p.target_finish_date, p.daily_target_units, p.days_per_week, p.catchup_mode],
+        "INSERT INTO reading_plans (id, book_id, start_date, target_finish_date, daily_target_units, days_per_week, catchup_mode, status, activated_at, original_finish_date)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![p.id, p.book_id, p.start_date, p.target_finish_date, p.daily_target_units, p.days_per_week, p.catchup_mode, p.status, p.activated_at, p.original_finish_date],
     )?;
     Ok(())
 }
@@ -179,7 +183,7 @@ pub fn bump_last_opened_at(conn: &Connection, book_id: &str) -> rusqlite::Result
 
 pub fn fetch_plan_for_book(conn: &Connection, book_id: &str) -> rusqlite::Result<Option<ReadingPlan>> {
     let mut stmt = conn.prepare(
-        "SELECT id, book_id, start_date, target_finish_date, daily_target_units, days_per_week, catchup_mode
+        "SELECT id, book_id, start_date, target_finish_date, daily_target_units, days_per_week, catchup_mode, status, activated_at, original_finish_date
          FROM reading_plans WHERE book_id = ?1 ORDER BY start_date DESC LIMIT 1",
     )?;
     let mut rows = stmt.query(params![book_id])?;

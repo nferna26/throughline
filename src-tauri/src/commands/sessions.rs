@@ -58,8 +58,12 @@ pub fn cmd_extend_finish_date(
         add_days,
     )?;
     conn.execute(
-        "UPDATE reading_plans SET target_finish_date = ?1, daily_target_units = ?2 WHERE id = ?3",
-        params![recomputed.new_target_finish_date, recomputed.new_daily_target_units, plan.id],
+        "UPDATE reading_plans
+           SET target_finish_date = ?1, daily_target_units = ?2,
+               status = 'rebalanced',
+               original_finish_date = COALESCE(original_finish_date, ?3)
+         WHERE id = ?4",
+        params![recomputed.new_target_finish_date, recomputed.new_daily_target_units, plan.target_finish_date, plan.id],
     )?;
     Ok(recomputed)
 }
@@ -93,6 +97,14 @@ pub fn cmd_start_session(book_id: String, section_id: Option<String>, start_loca
     )?;
     // Bump last_opened_at so this book becomes "active" on the Today screen.
     bump_last_opened_at(&conn, &book_id)?;
+    // Activate the plan on the first reading session: plan_ready → active and
+    // stamp activated_at, so the pace clock starts HERE, not at import. Legacy
+    // 'active' plans (no plan_ready state) are left untouched.
+    conn.execute(
+        "UPDATE reading_plans SET status = 'active', activated_at = COALESCE(activated_at, ?1)
+         WHERE book_id = ?2 AND status = 'plan_ready'",
+        params![now, book_id],
+    )?;
     let mut stmt = conn.prepare(
         "SELECT id, book_id, started_at, ended_at, start_locator, end_locator, minutes, completed_assignment, subjective_difficulty
          FROM reading_sessions WHERE id = ?1",
@@ -140,6 +152,26 @@ pub fn cmd_end_session(
          FROM reading_sessions WHERE id = ?1",
     )?;
     let session = stmt.query_row(params![session_id], session_from_row)?;
+
+    // If every assignable section is now complete, mark the plan completed.
+    let (assignable_total, assignable_done): (i64, i64) = conn
+        .query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM book_sections WHERE book_id = ?1 AND assignable = 1),
+               (SELECT COUNT(*) FROM book_sections bs
+                  JOIN section_progress sp ON sp.book_id = bs.book_id AND sp.section_id = bs.id
+                  WHERE bs.book_id = ?1 AND bs.assignable = 1 AND sp.completed_at IS NOT NULL)",
+            params![session.book_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((0, 0));
+    if assignable_total > 0 && assignable_done >= assignable_total {
+        conn.execute(
+            "UPDATE reading_plans SET status = 'completed' WHERE book_id = ?1 AND status != 'completed'",
+            params![session.book_id],
+        )
+        .ok();
+    }
 
     if let Ok(Some(book)) = (|| -> rusqlite::Result<Option<Book>> {
         let mut s = conn.prepare(

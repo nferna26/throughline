@@ -129,20 +129,20 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
 
     let streak = compute_streak(&conn, &book.id)?;
 
-    // Recovery options (only when behind / recovery)
-    let days_behind = match &computed.pace {
-        models::PaceState::Behind { days_behind } => *days_behind,
-        models::PaceState::Recovery => {
-            let expected = plan::expected_completed(sections.len(), computed.total_days, computed.day_index) as i64;
-            (expected - completed.len() as i64).max(3)
-        }
-        _ => 0,
-    };
-    let recovery = if days_behind >= 1 {
+    // Recovery options ONLY when the plan is active and the forecast says a real
+    // rebalance is warranted — never for a plan-ready/just-started book. The
+    // forecast (observed rate vs target) is the single source of "are we slipping",
+    // replacing the old should-have-done linear deficit.
+    let needs_recovery = computed
+        .forecast
+        .as_ref()
+        .map_or(false, |f| matches!(f.state.as_str(), "needs_rebalance" | "plan_unrealistic"));
+    let days_behind = computed.forecast.as_ref().map_or(0, |f| f.days_late).max(0);
+    let recovery = if needs_recovery {
         let today = chrono::Utc::now().naive_utc().date();
         let finish = chrono::NaiveDate::parse_from_str(&plan.target_finish_date, "%Y-%m-%d")
             .unwrap_or(today);
-        Some(recovery::build_bundle(days_behind, today, section.is_some(), finish))
+        Some(recovery::build_bundle(days_behind.max(1), today, section.is_some(), finish))
     } else {
         None
     };
@@ -161,6 +161,8 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
         recovery,
         resume_locator,
         resume_percent,
+        plan_status: computed.plan_status.clone(),
+        forecast: computed.forecast.clone(),
     }))
 }
 
