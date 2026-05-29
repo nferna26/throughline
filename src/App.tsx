@@ -6,7 +6,9 @@ import Reader from "./screens/Reader";
 import Settings from "./screens/Settings";
 import BookSwitcher from "./screens/BookSwitcher";
 import NotesBrowser from "./screens/NotesBrowser";
+import RGIcon from "./components/RGIcon";
 import "./App.css";
+import "./rg-theme.css";
 import type { TodayCard } from "./types";
 
 type BookTab = "today" | "notes";
@@ -82,32 +84,36 @@ export default function App() {
 
   if (today === undefined) {
     return (
-      <main className="app" id="main-content">
-        <p className="muted">Loading…</p>
+      <main className="app rg-root" id="main-content">
+        <p className="rg-note-meta" style={{ padding: "var(--rg-7)" }}>Loading…</p>
       </main>
     );
   }
 
   return (
-    <div className="app" data-theme={theme}>
+    <div className="app rg-root" data-theme={theme}>
       <a href="#main-content" className="skip-link">Skip to main content</a>
-      <header className="topbar">
-        <span className="brand">ReadingGym</span>
-        <div className="spacer" />
+      <header className="rg-titlebar" data-tauri-drag-region>
+        <button className="rg-brand" onClick={() => setView({ kind: "today" })} aria-label="ReadingGym — home">
+          Reading<b>Gym</b>
+        </button>
+        <div className="rg-titlebar-spacer" data-tauri-drag-region />
         <button
-          className="ghost"
-          onClick={() => setView({ kind: "settings" })}
+          className={view.kind === "settings" ? "rg-iconbtn active" : "rg-iconbtn"}
+          onClick={() => setView(view.kind === "settings" ? { kind: "today" } : { kind: "settings" })}
           title="Settings"
           aria-label="Settings"
+          aria-pressed={view.kind === "settings"}
         >
-          ⚙
+          <RGIcon name="settings" size={18} />
         </button>
         <button
-          className="ghost"
+          className="rg-iconbtn"
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
           aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          title={theme === "dark" ? "Light theme" : "Dark theme"}
         >
-          {theme === "dark" ? "☼" : "☾"}
+          <RGIcon name={theme === "dark" ? "sun" : "moon"} size={18} />
         </button>
       </header>
 
@@ -118,33 +124,29 @@ export default function App() {
             <Today today={null} onImport={importBook} onStart={startReading} onRefresh={refreshToday} />
           ) : (
             <>
-              <div className="book-header">
-                <BookSwitcher activeBook={today.book} onSwitch={switchBook} onImport={importBook} />
-                <div className="book-tabs" role="tablist" aria-label="Book views">
-                  <button
-                    role="tab"
-                    id="tab-today"
-                    aria-selected={tab === "today"}
-                    aria-controls="book-panel"
-                    className={tab === "today" ? "book-tab is-active" : "book-tab"}
-                    onClick={() => setTab("today")}
-                  >
-                    Today
-                  </button>
-                  <button
-                    role="tab"
-                    id="tab-notes"
-                    aria-selected={tab === "notes"}
-                    aria-controls="book-panel"
-                    className={tab === "notes" ? "book-tab is-active" : "book-tab"}
-                    onClick={() => setTab("notes")}
-                  >
-                    Notes
-                  </button>
+              <div className="rg-bookhead">
+                <div className="rg-bookhead-inner">
+                  <BookSwitcher activeBook={today.book} onSwitch={switchBook} onImport={importBook} />
+                  <div className="rg-seg" role="tablist" aria-label="View">
+                    <button
+                      role="tab" id="tab-today"
+                      aria-selected={tab === "today"} aria-controls="book-panel"
+                      onClick={() => setTab("today")}
+                    >
+                      Today
+                    </button>
+                    <button
+                      role="tab" id="tab-notes"
+                      aria-selected={tab === "notes"} aria-controls="book-panel"
+                      onClick={() => setTab("notes")}
+                    >
+                      Notes
+                    </button>
+                  </div>
                 </div>
               </div>
               <div
-                className="tabpanel"
+                className="rg-body"
                 id="book-panel"
                 role="tabpanel"
                 aria-labelledby={tab === "today" ? "tab-today" : "tab-notes"}
@@ -161,9 +163,7 @@ export default function App() {
         {view.kind === "reader" && (
           <Reader today={view.today} onExit={exitReader} />
         )}
-        {view.kind === "settings" && (
-          <Settings onClose={() => setView({ kind: "today" })} />
-        )}
+        {view.kind === "settings" && <Settings />}
       </main>
     </div>
   );

@@ -34,9 +34,11 @@ beforeEach(() => {
 describe("AiHistory", () => {
   it("distinguishes a preview that never left the machine from a sent Ask call", async () => {
     render(<AiHistory retentionDays={90} onSettingsChanged={() => {}} />);
-    // The sent row (provider=localhost) and the preview row (provider=null).
+    // The sent row (provider=localhost) and the preview row (provider=null,
+    // tagged "Local") — the audit distinction.
     expect(await screen.findByText(/Sent → localhost/)).toBeInTheDocument();
-    expect(screen.getByText(/never left this Mac/)).toBeInTheDocument();
+    expect(screen.getByText("Local")).toBeInTheDocument();
+    expect(screen.getByText(/never leave this Mac/i)).toBeInTheDocument();
     // Mode labels are humanized and the saved-as-note row is marked.
     expect(screen.getByText("Socratic questions")).toBeInTheDocument();
     expect(screen.getByText(/saved as note/)).toBeInTheDocument();

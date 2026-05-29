@@ -14,7 +14,9 @@
       {
         "title": "ReadingGym",
         "width": 960,
-        "height": 720
+        "height": 720,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {

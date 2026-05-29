@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ePub from "epubjs";
 import AiPanel from "./AiPanel";
+import RGIcon from "../components/RGIcon";
 import { useDialog } from "../hooks/useDialog";
 import type { BookSection, Note, ReadingSession, TodayCard } from "../types";
 import { NOTE_TYPES, makeCfiLocator, parseLocator } from "../types";
@@ -273,25 +274,46 @@ export default function EpubReader({ today, onExit }: Props) {
     : undefined;
 
   return (
-    <section className="reader">
-      <div className="reader-toolbar">
-        <button className="ghost" onClick={onExit}>← Today</button>
-        <div className="reader-title muted">
-          {book.title} — {currentSection?.label ?? "…"}
-          {assignedInCanonical && currentSection && assignedInCanonical.id !== currentSection.id && (
-            <span className="muted small"> (today's target: {assignedInCanonical.label})</span>
-          )}
-        </div>
+    <section className="rg-reader">
+      <div className="rg-readtoolbar">
+        <button className="rg-back" onClick={onExit}><RGIcon name="chevronLeft" size={18} /> Today</button>
+        <span className="rg-tb-title">
+          {currentSection?.label ?? "…"}
+          {assignedInCanonical && currentSection && assignedInCanonical.id !== currentSection.id && ` · today: ${assignedInCanonical.label}`}
+        </span>
         <div className="spacer" />
-        <span className="muted small">{percent}%</span>
-        <button className="ghost" onClick={() => setFontSize((f) => Math.max(12, f - 1))}>A−</button>
-        <button className="ghost" onClick={() => setFontSize((f) => Math.min(28, f + 1))}>A+</button>
-        <button className="ghost" onClick={() => setLineWidth((w) => Math.max(420, w - 40))}>↤</button>
-        <button className="ghost" onClick={() => setLineWidth((w) => Math.min(900, w + 40))}>↦</button>
-        <button className="ghost" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? "☼" : "☾"}</button>
-        <button className="ghost" onClick={() => setShowNote(true)}>+ Note</button>
+        <span className="rg-tb-label">{percent}%</span>
+        <div className="grp bordered" role="group" aria-label="Font size">
+          <button className="rg-iconbtn" aria-label="Smaller text" onClick={() => setFontSize((f) => Math.max(12, f - 1))}><RGIcon name="minus" size={16} /></button>
+          <span className="rg-tb-label"><RGIcon name="type" size={16} /></span>
+          <button className="rg-iconbtn" aria-label="Larger text" onClick={() => setFontSize((f) => Math.min(28, f + 1))}><RGIcon name="plus" size={16} /></button>
+        </div>
+        <div className="grp bordered" role="group" aria-label="Line width">
+          {[520, 640, 760].map((w, i) => (
+            <button
+              key={w}
+              className={lineWidth === w ? "rg-iconbtn active" : "rg-iconbtn"}
+              aria-pressed={lineWidth === w}
+              aria-label={`Line width ${["narrow", "medium", "wide"][i]}`}
+              style={{ width: 26 }}
+              onClick={() => setLineWidth(w)}
+            >
+              <span style={{ display: "block", height: 2, borderRadius: 2, background: "currentColor", width: [9, 13, 17][i] }} />
+            </button>
+          ))}
+        </div>
         <button
-          className="ghost ai-button"
+          className="rg-iconbtn"
+          aria-label={theme === "dark" ? "Light reading theme" : "Dark reading theme"}
+          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+        >
+          <RGIcon name={theme === "dark" ? "sun" : "moon"} size={18} />
+        </button>
+        <div className="rg-tb-div" />
+        <button className={showNote ? "rg-iconbtn active" : "rg-iconbtn"} aria-label="Add note" title="Add note" onClick={() => setShowNote(true)}><RGIcon name="pencil" size={18} /></button>
+        <button
+          className={showAi ? "rg-iconbtn active" : "rg-iconbtn"}
+          aria-label="Explain passage"
           title="Tutor (selection-only context)"
           onClick={() => {
             // Live read: walk every Contents object the rendition currently has
@@ -311,24 +333,25 @@ export default function EpubReader({ today, onExit }: Props) {
             setShowAi(true);
           }}
         >
-          ✻ Tutor
+          <RGIcon name="sparkle" size={18} />
         </button>
-        <button className="ghost" disabled={currentIdx <= 0} onClick={goPrev}>‹ Prev</button>
-        <button className="ghost" disabled={currentIdx >= assignableSections.length - 1} onClick={goNext}>Next ›</button>
-        <button className="primary" onClick={() => setEndingPrompt(true)}>Finish session</button>
+        <div className="rg-tb-div" />
+        <button className="rg-iconbtn" disabled={currentIdx <= 0} aria-label="Previous section" onClick={goPrev}><RGIcon name="chevronLeft" size={18} /></button>
+        <button className="rg-iconbtn" disabled={currentIdx >= assignableSections.length - 1} aria-label="Next section" onClick={goNext}><RGIcon name="chevronRight" size={18} /></button>
+        <button className="rg-btn rg-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setEndingPrompt(true)}>Finish</button>
       </div>
 
       {error ? (
-        <div className="reader-body">
-          <div className="card" style={{ margin: "40px auto" }}>
-            <h2>EPUB rendering unavailable</h2>
-            <p className="muted">{error}</p>
+        <div className="rg-readscroll">
+          <div className="rg-readcol">
+            <h3>EPUB rendering unavailable</h3>
+            <p className="rg-tb-title" style={{ maxWidth: "none", whiteSpace: "normal" }}>{error}</p>
             <p className="hint">The source file is preserved at <code>{book.source_path}</code>.</p>
-            <button onClick={onExit}>Back</button>
+            <button className="rg-btn rg-btn-ghost" onClick={onExit}>Back</button>
           </div>
         </div>
       ) : (
-        <div className="reader-body epub-host" data-theme={theme}>
+        <div className="rg-readscroll epub-host" data-theme={theme}>
           <div ref={viewerRef} className="epub-viewer" />
         </div>
       )}
@@ -470,35 +493,26 @@ function NotePanel(props: {
   }
 
   return (
-    <div className="panel-backdrop">
-      <div
-        ref={panelRef}
-        className="panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="epub-note-panel-title"
-      >
-        <div className="panel-header">
-          <h2 id="epub-note-panel-title">New note</h2>
-          <button className="ghost" onClick={props.onClose} aria-label="Close note panel">✕</button>
+    <div className="rg-modal-backdrop">
+      <div ref={panelRef} className="rg-modal" role="dialog" aria-modal="true" aria-labelledby="epub-note-panel-title">
+        <div className="rg-modal-head">
+          <span className="t" id="epub-note-panel-title"><RGIcon name="pencil" size={16} /> New note</span>
+          <button className="rg-iconbtn" onClick={props.onClose} aria-label="Close note panel"><RGIcon name="x" size={16} /></button>
         </div>
 
         <label>Type
-          <select value={noteType} onChange={(e) => setNoteType(e.target.value)}>
+          <select className="rg-select" value={noteType} onChange={(e) => setNoteType(e.target.value)}>
             {NOTE_TYPES.map((t) => <option key={t}>{t}</option>)}
           </select>
         </label>
 
-        <div className="row">
-          <div className="muted small">Chapter: {props.chapter}</div>
-          <div className="muted small">Locator: {props.locator}</div>
-        </div>
+        <div className="row"><span>Chapter: {props.chapter}</span><span>Locator: {props.locator}</span></div>
 
         <label>Note
           <textarea
+            className="rg-textarea"
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            rows={6}
             placeholder="Paraphrase, reflection, or question…"
             autoFocus
           />
@@ -506,22 +520,23 @@ function NotePanel(props: {
 
         <label>Short quote (optional)
           <textarea
+            className="rg-input"
+            style={{ minHeight: 64, fontFamily: "var(--rg-serif)", resize: "vertical" }}
             value={shortQuote}
             onChange={(e) => setShortQuote(e.target.value)}
-            rows={3}
             placeholder="Keep it under ~300 characters"
           />
         </label>
         {warn && (
-          <p className="warn">
+          <p className="rg-warn-text">
             Quote exceeds ~300 characters. Fair use has no fixed safe word count — the default
             posture in ReadingGym is short quotes for private study only. (Saving is still allowed.)
           </p>
         )}
 
         <div className="panel-actions">
-          <button className="ghost" onClick={props.onClose}>Cancel</button>
-          <button className="primary" disabled={saving || !body.trim()} onClick={save}>
+          <button className="rg-btn rg-btn-ghost" onClick={props.onClose}>Cancel</button>
+          <button className="rg-btn rg-btn-primary" disabled={saving || !body.trim()} onClick={save}>
             {saving ? "Saving…" : "Save note"}
           </button>
         </div>
@@ -539,28 +554,23 @@ function EndingPanel(props: {
   const panelRef = useRef<HTMLDivElement>(null);
   useDialog(panelRef, props.onCancel);
   return (
-    <div className="panel-backdrop">
-      <div
-        ref={panelRef}
-        className="panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="epub-ending-panel-title"
-      >
-        <div className="panel-header">
-          <h2 id="epub-ending-panel-title">Finish session</h2>
-          <button className="ghost" onClick={props.onCancel} aria-label="Close finish-session panel">✕</button>
+    <div className="rg-modal-backdrop">
+      <div ref={panelRef} className="rg-modal" role="dialog" aria-modal="true" aria-labelledby="epub-ending-panel-title">
+        <div className="rg-modal-head">
+          <span className="t" id="epub-ending-panel-title"><RGIcon name="flag" size={16} /> Finish session</span>
+          <button className="rg-iconbtn" onClick={props.onCancel} aria-label="Close finish-session panel"><RGIcon name="x" size={16} /></button>
         </div>
-        <p>What is one sentence you want to remember from today?</p>
+        <p className="prompt">What is one sentence you want to remember from today?</p>
         <textarea
+          className="rg-textarea"
+          style={{ minHeight: 90 }}
           value={props.summary}
           onChange={(e) => props.setSummary(e.target.value)}
-          rows={3}
           autoFocus
         />
         <div className="panel-actions">
-          <button className="ghost" onClick={props.onCancel}>Keep reading</button>
-          <button className="primary" onClick={props.onSave}>End session</button>
+          <button className="rg-btn rg-btn-ghost" onClick={props.onCancel}>Keep reading</button>
+          <button className="rg-btn rg-btn-primary" onClick={props.onSave}>End session</button>
         </div>
       </div>
     </div>

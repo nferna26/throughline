@@ -63,6 +63,6 @@ describe("Today", () => {
     expect(screen.getByRole("heading", { name: /The Cold Start Problem/ })).toBeInTheDocument();
     expect(screen.getByText("Chapter 1")).toBeInTheDocument();
     expect(screen.getByText(/On pace/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Start Reading/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /start reading/i })).toBeInTheDocument();
   });
 });

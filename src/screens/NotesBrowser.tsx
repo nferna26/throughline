@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import RGIcon, { type IconName } from "../components/RGIcon";
 import type { Book, Note } from "../types";
 import { parseLocator } from "../types";
 
@@ -7,8 +8,13 @@ interface Props {
   book: Book;
 }
 
-/** Human-readable position hint for a note. Prefer the chapter label; fall back
- *  to a percentage; never show a raw char offset (meaningless to a reader). */
+// Map our five note types onto the design's three badge variants.
+function badgeFor(noteType: string): { variant: "note" | "quote" | "question"; icon: IconName } {
+  if (noteType === "Short Quote") return { variant: "quote", icon: "quote" };
+  if (noteType === "Question") return { variant: "question", icon: "help" };
+  return { variant: "note", icon: "note" };
+}
+
 function locatorHint(note: Note): string | null {
   if (note.chapter_label) return note.chapter_label;
   const loc = parseLocator(note.locator);
@@ -23,11 +29,8 @@ function fmtDate(iso: string): string {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
-/**
- * Read-only browser for the active book's notes (the "Notes" tab on the book
- * page). Notes are authored in the reader and already exported to Markdown;
- * this is a calm review surface, not an editor — no scope beyond listing.
- */
+/** Read-only browser for the active book's notes. Notes are authored in the
+ *  reader and already exported to Markdown; this is a calm review surface. */
 export default function NotesBrowser({ book }: Props) {
   const [notes, setNotes] = useState<Note[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -43,46 +46,36 @@ export default function NotesBrowser({ book }: Props) {
   }, [book.id]);
 
   return (
-    <section className="screen">
-      <div className="card notes-card">
-        <div className="kicker">Notes — {book.title}</div>
-
-        {err && <p className="settings-err">{err}</p>}
-        {notes === null && !err && <p className="muted">Loading…</p>}
-
-        {notes && notes.length === 0 && (
-          <p className="muted notes-empty">
-            No notes yet for this book. Capture one while reading — it exports to
-            Markdown automatically.
-          </p>
-        )}
-
-        {notes && notes.length > 0 && (
-          <>
-            <p className="muted small">
-              {notes.length} note{notes.length === 1 ? "" : "s"}, newest first.
-            </p>
-            <ul className="notes-list">
-              {notes.map((n) => {
-                const hint = locatorHint(n);
-                return (
-                  <li key={n.id} className="note-row">
-                    <div className="note-meta">
-                      <span className="note-type">{n.note_type}</span>
-                      {hint && <span className="note-locator muted small">{hint}</span>}
-                      <span className="note-date muted small">{fmtDate(n.created_at)}</span>
-                    </div>
-                    <p className="note-body">{n.body}</p>
-                    {n.short_quote && (
-                      <blockquote className="note-quote">{n.short_quote}</blockquote>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </>
-        )}
+    <div className="rg-col rg-notes">
+      <div className="rg-notes-head">
+        <h2>Notes</h2>
+        {notes && notes.length > 0 && <span className="count">{notes.length} from this book</span>}
       </div>
-    </section>
+
+      {err && <p className="rg-note-meta" style={{ color: "var(--rg-alert)" }}>{err}</p>}
+      {notes === null && !err && <p className="rg-note-meta">Loading…</p>}
+      {notes && notes.length === 0 && (
+        <p className="rg-note-meta">No notes yet for this book. Capture one while reading — it exports to Markdown automatically.</p>
+      )}
+
+      {notes?.map((n) => {
+        const b = badgeFor(n.note_type);
+        const hint = locatorHint(n);
+        return (
+          <article className="rg-note" key={n.id}>
+            <div className="rg-note-top">
+              <span className={`rg-badge ${b.variant}`}>
+                <RGIcon name={b.icon} size={12} /> {n.note_type}
+              </span>
+              <span className="rg-note-meta">
+                {hint && <>{hint}<span className="sep">·</span></>}{fmtDate(n.created_at)}
+              </span>
+            </div>
+            <div className="rg-note-body">{n.body}</div>
+            {n.short_quote && <blockquote>“{n.short_quote}”</blockquote>}
+          </article>
+        );
+      })}
+    </div>
   );
 }

@@ -52,9 +52,9 @@ describe("NotesBrowser", () => {
     ]);
     render(<NotesBrowser book={book} />);
     expect(await screen.findByText("keep this")).toBeInTheDocument();
-    expect(screen.getByText("a quote worth keeping")).toBeInTheDocument();
+    expect(screen.getByText(/a quote worth keeping/)).toBeInTheDocument();
     expect(screen.getByText("Short Quote")).toBeInTheDocument();
     expect(screen.getByText("why does this rot?")).toBeInTheDocument();
-    expect(screen.getByText(/2 notes, newest first/i)).toBeInTheDocument();
+    expect(screen.getByText(/2 from this book/i)).toBeInTheDocument();
   });
 });
