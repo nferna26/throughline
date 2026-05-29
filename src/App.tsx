@@ -6,16 +6,18 @@ import Reader from "./screens/Reader";
 import Settings from "./screens/Settings";
 import BookSwitcher from "./screens/BookSwitcher";
 import NotesBrowser from "./screens/NotesBrowser";
+import BookSetupSheet from "./screens/BookSetupSheet";
 import RGIcon from "./components/RGIcon";
 import "./App.css";
 import "./rg-theme.css";
-import type { TodayCard, ReaderMode } from "./types";
+import type { TodayCard, ReaderMode, Book, ImportOutcome } from "./types";
 
 type BookTab = "today" | "notes";
 
 type View =
   | { kind: "today" }
   | { kind: "reader"; today: TodayCard; mode: ReaderMode }
+  | { kind: "setup"; book: Book }
   | { kind: "settings" };
 
 export default function App() {
@@ -51,8 +53,9 @@ export default function App() {
     });
     if (!file) return;
     const path = typeof file === "string" ? file : (file as any).path;
+    let outcome: ImportOutcome;
     try {
-      await invoke("cmd_import_book", { path });
+      outcome = await invoke<ImportOutcome>("cmd_import_book", { path });
     } catch (e: any) {
       // Backend returns AppError: { kind, message }. Fall back to String(e) for
       // anything else (network errors thrown by tauri-api itself, etc.).
@@ -61,6 +64,17 @@ export default function App() {
       return;
     }
     await refreshToday();
+    // A genuinely new book opens the Book Setup Sheet so the reader can set a
+    // rhythm before the first session. A dedup (switch to existing) just lands
+    // on Today.
+    if (outcome.created) {
+      setView({ kind: "setup", book: outcome.book });
+    }
+  }
+
+  function finishSetup() {
+    setView({ kind: "today" });
+    refreshToday();
   }
 
   async function switchBook(bookId: string) {
@@ -168,6 +182,9 @@ export default function App() {
         )}
         {view.kind === "reader" && (
           <Reader today={view.today} mode={view.mode} onExit={exitReader} />
+        )}
+        {view.kind === "setup" && (
+          <BookSetupSheet book={view.book} onDone={finishSetup} />
         )}
         {view.kind === "settings" && <Settings />}
       </main>

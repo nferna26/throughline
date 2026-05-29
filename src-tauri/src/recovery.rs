@@ -115,11 +115,9 @@ pub fn extend_finish_date(
     let new_finish = current_finish + Duration::days(add_days.max(0));
     let remaining_sections = (total_sections - completed_sections).max(0);
     let remaining_days = (new_finish.signed_duration_since(today).num_days() + 1).max(1);
-    let daily_target = if remaining_sections == 0 {
-        None
-    } else {
-        Some(((remaining_sections + remaining_days - 1) / remaining_days).max(1))
-    };
+    // Shared ceil-division with plan configuration so configure and rebalance
+    // always produce the same daily target for the same window.
+    let daily_target = crate::plan::daily_target_for(remaining_sections, today, new_finish);
     Ok(RecomputedPlan {
         new_target_finish_date: new_finish.to_string(),
         new_daily_target_units: daily_target,

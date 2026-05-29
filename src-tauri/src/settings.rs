@@ -11,11 +11,15 @@ pub const KEY_AI_MODEL: &str = "ai_model";
 pub const KEY_LOCAL_ONLY: &str = "ai_local_only";
 pub const KEY_AI_RETENTION_DAYS: &str = "ai_requests_retention_days";
 pub const KEY_READING_RHYTHM_MINUTES: &str = "reading_rhythm_minutes";
+pub const KEY_MARGIN_HELP: &str = "margin_help";
 pub const DEFAULT_AI_BASE_URL: &str = "http://localhost:1234/v1";
 pub const DEFAULT_AI_MODEL: &str = "";
 /// Default length of a planned reading sitting, in minutes (the "Reading rhythm"
 /// the Book Setup Sheet defaults to). Surfaced as "Start N-minute session".
 pub const DEFAULT_RHYTHM_MINUTES: i64 = 25;
+/// How present the Companion Margin's AI help is by default. "guided" surfaces
+/// gentle affordances; "quiet" keeps the margin out of the way until summoned.
+pub const DEFAULT_MARGIN_HELP: &str = "guided";
 pub const QUOTE_WARN_TEXT: &str =
     "Fair use has no fixed safe word count. The default posture in ReadingGym is short quotes \
      for private study only. Quotes longer than ~300 characters are warned, not blocked.";
@@ -173,6 +177,16 @@ pub fn get_reading_rhythm_minutes(conn: &Connection) -> i64 {
         .unwrap_or(DEFAULT_RHYTHM_MINUTES)
 }
 
+/// Margin-help preference ("guided" | "quiet"). Defaults to `DEFAULT_MARGIN_HELP`.
+/// Any unrecognised stored value falls back to the default rather than erroring.
+pub fn get_margin_help(conn: &Connection) -> String {
+    match get_string(conn, KEY_MARGIN_HELP).as_deref() {
+        Some("quiet") => "quiet".to_string(),
+        Some("guided") => "guided".to_string(),
+        _ => DEFAULT_MARGIN_HELP.to_string(),
+    }
+}
+
 pub fn build_dto(conn: &Connection) -> Result<SettingsDto> {
     let export = get_export_path(conn)?;
     let local_only = get_local_only(conn);
@@ -240,6 +254,17 @@ mod tests {
         assert_eq!(get_reading_rhythm_minutes(&conn), DEFAULT_RHYTHM_MINUTES);
         set_string(&conn, KEY_READING_RHYTHM_MINUTES, "40").unwrap();
         assert_eq!(get_reading_rhythm_minutes(&conn), 40);
+    }
+
+    #[test]
+    fn margin_help_defaults_and_validates() {
+        let conn = mem();
+        assert_eq!(get_margin_help(&conn), "guided");
+        set_string(&conn, KEY_MARGIN_HELP, "quiet").unwrap();
+        assert_eq!(get_margin_help(&conn), "quiet");
+        // Unknown value falls back to the default rather than echoing garbage.
+        set_string(&conn, KEY_MARGIN_HELP, "loud").unwrap();
+        assert_eq!(get_margin_help(&conn), "guided");
     }
 
     #[test]

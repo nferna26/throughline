@@ -2,7 +2,9 @@
 
 The Rust backend exposes commands to the React frontend via Tauri's `invoke` bridge. This document is the binding contract: argument names, types, return shapes, error shapes, and the semver commitment for changes.
 
-The current API version is **1**. Read it at runtime from the frontend via `invoke("cmd_api_version")`.
+The current API version is **2**. Read it at runtime from the frontend via `invoke("cmd_api_version")`.
+
+> **1 → 2:** `cmd_import_book` now returns `ImportOutcome { book, created }` instead of a bare `Book`. Return-shape change → major bump.
 
 ---
 
@@ -41,7 +43,7 @@ type AppError =
 
 #### `cmd_api_version`
 - args: none
-- returns: `number` — the value of `COMMAND_API_VERSION` (currently `1`)
+- returns: `number` — the value of `COMMAND_API_VERSION` (currently `2`)
 - errors: never
 
 Use this from the frontend on startup to detect a backend that has moved to a major version your build doesn't understand.
@@ -59,13 +61,23 @@ Read-only display of local data locations. Useful for rollback instructions and 
 
 #### `cmd_import_book`
 - args: `{ path: string }` — absolute path to `.txt` or `.epub` on the user's disk
-- returns: `Book` (see types.ts)
+- returns: `ImportOutcome { book: Book; created: boolean }` (see types.ts). `created` is `false` when the import deduped onto an existing book.
 - errors:
   - `Io { message }` — file unreadable or import pipeline failed
   - `Validation { message }` — unsupported extension or DRM-detected EPUB
   - `Db { message }` — sqlite error
 
-**Dedup (skip & switch):** if the file's SHA-256 already matches an imported book, no duplicate is created — the existing book is made active (`last_opened_at` bumped) and returned. Re-import is idempotent. Added in 0.1.x; additive, `COMMAND_API_VERSION` stays `1`.
+**Dedup (skip & switch):** if the file's SHA-256 already matches an imported book, no duplicate is created — the existing book is made active (`last_opened_at` bumped) and returned with `created: false`. Re-import is idempotent. The frontend opens the Book Setup Sheet only when `created: true`.
+
+#### `cmd_configure_plan`
+- args: `{ bookId: string; targetFinishDate: string; daysPerWeek: number; sessionMinutes: number; marginHelp?: "guided" | "quiet" }` — `targetFinishDate` is `YYYY-MM-DD`
+- returns: `ReadingPlan` (the updated plan)
+- errors:
+  - `NotFound` — no plan for the book
+  - `Validation` — finish date unparseable or in the past
+  - `Db` — sqlite error
+
+Configures a freshly imported book's plan from the Book Setup Sheet: sets the target finish date and days-per-week, recomputes the daily section target, and persists the reading rhythm (`reading_rhythm_minutes`) and `margin_help` settings. **Does NOT activate the plan** — status stays `plan_ready`, so the book remains "not behind" until the first reading session (Priority 0). Added in `COMMAND_API_VERSION` 2 (new command; additive on its own).
 
 #### `cmd_read_book_bytes`
 - args: `{ bookId: string }`

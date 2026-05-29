@@ -52,7 +52,11 @@ use crate::db::DbState;
 ///
 /// The constant is exposed to JS via `cmd_api_version` so the frontend can
 /// refuse to talk to an incompatible backend.
-pub const COMMAND_API_VERSION: u32 = 1;
+///
+/// 1 → 2: `cmd_import_book` now returns `ImportOutcome { book, created }`
+/// instead of a bare `Book` (so the Book Setup Sheet shows only for genuinely
+/// new imports). This is a return-shape change → major bump per docs/IPC.md.
+pub const COMMAND_API_VERSION: u32 = 2;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -86,6 +90,7 @@ pub fn run() {
             commands::books::cmd_assignable_sections,
             commands::books::cmd_list_books,
             commands::books::cmd_set_active_book,
+            commands::books::cmd_configure_plan,
             // ── sessions / plan / progress ──
             commands::sessions::cmd_start_session,
             commands::sessions::cmd_end_session,

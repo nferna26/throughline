@@ -65,6 +65,13 @@ export interface FinishForecast {
   days_late: number;
 }
 
+/** Result of cmd_import_book. `created` is false when the import deduped onto a
+ *  book already present (same SHA) — the Setup Sheet shows only when true. */
+export interface ImportOutcome {
+  book: Book;
+  created: boolean;
+}
+
 export interface ReadingSession {
   id: string;
   book_id: string;

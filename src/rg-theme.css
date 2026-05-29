@@ -353,6 +353,45 @@
 .rg-welcome p { font-size: 15px; line-height: 1.6; color: var(--rg-muted); margin: 0 auto var(--rg-7); max-width: 320px; }
 .rg-welcome .hint { margin-top: var(--rg-4); font-size: 12.5px; color: var(--rg-muted); }
 
+/* ── Book Setup Sheet ─────────────────────────────────────────────────── */
+.rg-setup { flex: 1; display: flex; justify-content: center; padding: var(--rg-7) var(--rg-7) var(--rg-8); overflow-y: auto; }
+.rg-setup-card { width: 100%; max-width: 560px; }
+.rg-setup-title {
+  font-family: var(--rg-serif); font-weight: 500; font-size: clamp(24px, 4vw, 30px);
+  line-height: 1.15; letter-spacing: -0.01em; text-wrap: balance;
+  color: var(--rg-ink); margin: calc(var(--rg-3) * var(--rg-density)) 0 var(--rg-2);
+}
+.rg-setup-group {
+  margin-top: calc(var(--rg-6) * var(--rg-density)); padding: 0; border: 0;
+  border-top: 1px solid var(--rg-line); padding-top: var(--rg-5);
+}
+.rg-setup-group legend {
+  font-family: var(--rg-sans); font-size: 12px; font-weight: 650; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--rg-muted); padding: 0; margin-bottom: var(--rg-3);
+}
+.rg-chips { display: flex; flex-wrap: wrap; gap: var(--rg-2); }
+/* Selected state for a chip acting as a radio option. */
+.rg-chip.on {
+  background: var(--rg-accent); color: var(--rg-accent-ink); border-color: var(--rg-accent);
+}
+.rg-chip.on:hover { border-color: var(--rg-accent); }
+.rg-setup-row { display: flex; align-items: center; gap: var(--rg-3); margin-bottom: var(--rg-3); flex-wrap: wrap; }
+.rg-setup-label { min-width: 110px; font-size: 13.5px; color: var(--rg-muted); font-weight: 550; }
+.rg-setup-hint { margin: var(--rg-2) 0 0; font-size: 13px; color: var(--rg-muted); line-height: 1.5; }
+.rg-setup-estimate {
+  margin-top: calc(var(--rg-6) * var(--rg-density)); padding: 12px 14px;
+  display: flex; align-items: flex-start; gap: 9px;
+  font-size: 14px; line-height: 1.5; color: var(--rg-ink);
+  background: var(--rg-ink-04); border: 1px solid var(--rg-line); border-radius: var(--rg-r-sm);
+}
+.rg-setup-estimate svg { color: var(--rg-ok); margin-top: 2px; flex-shrink: 0; }
+.rg-setup-estimate.tight { background: var(--rg-warn-soft, var(--rg-ink-04)); }
+.rg-setup-estimate.tight svg { color: var(--rg-warn); }
+.rg-setup-actions {
+  margin-top: calc(var(--rg-7) * var(--rg-density));
+  display: flex; gap: var(--rg-2); justify-content: flex-end;
+}
+
 /* ════════ form controls (shared) ════════ */
 .rg-field-label { font-size: 12px; font-weight: 600; color: var(--rg-muted); margin-bottom: 6px; display: block; }
 .rg-input, .rg-select, .rg-textarea {

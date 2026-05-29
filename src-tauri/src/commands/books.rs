@@ -15,11 +15,11 @@ use tauri::State;
 use crate::commands::db_helpers::*;
 use crate::db::DbState;
 use crate::error::AppError;
-use crate::models::{Book, BookSection, TodayCard};
-use crate::{epub_classify, export, import, log, models, paths, plan, recovery};
+use crate::models::{Book, BookSection, ImportOutcome, ReadingPlan, TodayCard};
+use crate::{epub_classify, export, import, log, models, paths, plan, recovery, settings};
 
 #[tauri::command]
-pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<Book, AppError> {
+pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<ImportOutcome, AppError> {
     eprintln!("[rg] cmd_import_book called with path={}", path);
     let src = PathBuf::from(&path);
 
@@ -36,7 +36,7 @@ pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<Book, AppE
                 existing.id
             );
             bump_last_opened_at(&conn, &existing.id)?;
-            return Ok(existing);
+            return Ok(ImportOutcome { book: existing, created: false });
         }
     }
 
@@ -71,7 +71,59 @@ pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<Book, AppE
         &result.book.source_sha256,
     );
     eprintln!("[rg] cmd_import_book: OK book_id={}", result.book.id);
-    Ok(result.book)
+    Ok(ImportOutcome { book: result.book, created: true })
+}
+
+/// Configure a freshly imported book's plan from the Book Setup Sheet: set the
+/// target finish date, days-per-week, and recompute the daily section target;
+/// persist the reading rhythm (session minutes) and margin-help preference.
+///
+/// IMPORTANT: this does NOT activate the plan — status stays `plan_ready`, so
+/// the book remains "not behind" until the first reading session. The pace
+/// clock starts at activation, not here (Priority 0 invariant).
+#[tauri::command]
+pub fn cmd_configure_plan(
+    book_id: String,
+    target_finish_date: String,
+    days_per_week: i64,
+    session_minutes: i64,
+    margin_help: Option<String>,
+    state: State<DbState>,
+) -> Result<ReadingPlan, AppError> {
+    let conn = state.0.lock()?;
+    let plan = fetch_plan_for_book(&conn, &book_id)?
+        .ok_or_else(|| AppError::not_found("plan", Some(book_id.clone())))?;
+
+    let finish = chrono::NaiveDate::parse_from_str(target_finish_date.trim(), "%Y-%m-%d")
+        .map_err(|_| AppError::validation(format!("invalid finish date: {target_finish_date:?} (expected YYYY-MM-DD)")))?;
+    let today = chrono::Utc::now().naive_utc().date();
+    if finish < today {
+        return Err(AppError::validation("finish date cannot be in the past".to_string()));
+    }
+    let dpw = days_per_week.clamp(1, 7);
+    let mins = session_minutes.clamp(5, 120);
+
+    // Recompute the daily section target against the chosen window. Completed
+    // sections (normally 0 for a fresh import) are preserved.
+    let sections = list_sections(&conn, &book_id)?;
+    let assignable = sections.iter().filter(|s| s.assignable).count() as i64;
+    let completed = list_completed_section_ids(&conn, &book_id)?.len() as i64;
+    let remaining = (assignable - completed).max(0);
+    let daily_target = plan::daily_target_for(remaining, today, finish);
+
+    conn.execute(
+        "UPDATE reading_plans SET target_finish_date = ?1, days_per_week = ?2, daily_target_units = ?3 WHERE id = ?4",
+        params![finish.to_string(), dpw, daily_target, plan.id],
+    )?;
+    settings::set_string(&conn, settings::KEY_READING_RHYTHM_MINUTES, &mins.to_string())
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if let Some(help) = margin_help.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        settings::set_string(&conn, settings::KEY_MARGIN_HELP, help)
+            .map_err(|e| AppError::internal(e.to_string()))?;
+    }
+
+    fetch_plan_for_book(&conn, &book_id)?
+        .ok_or_else(|| AppError::not_found("plan", Some(book_id)))
 }
 
 /// For EPUBs: return the raw bytes so the frontend can hand them to epub.js.

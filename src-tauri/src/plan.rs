@@ -36,6 +36,18 @@ pub fn build_default_plan(book_id: &str, sections: &[BookSection]) -> ReadingPla
     }
 }
 
+/// Daily section target to cover `remaining_sections` between `today` and
+/// `finish` (inclusive of both ends). `None` when nothing remains. This is the
+/// single source of the ceil-division used by both plan configuration (Setup
+/// Sheet) and rebalance (extend finish), so the two always agree.
+pub fn daily_target_for(remaining_sections: i64, today: NaiveDate, finish: NaiveDate) -> Option<i64> {
+    if remaining_sections <= 0 {
+        return None;
+    }
+    let days = (finish.signed_duration_since(today).num_days() + 1).max(1);
+    Some(((remaining_sections + days - 1) / days).max(1))
+}
+
 /// Day index (1-based) of `today` within the plan window.
 /// Returns 1 even for dates before start (we count "first day" as 1).
 pub fn day_index(plan: &ReadingPlan, today: NaiveDate) -> i64 {
@@ -332,6 +344,18 @@ mod tests {
             "stalled+tight plan should flag a slip, got {}",
             f.state
         );
+    }
+
+    #[test]
+    fn daily_target_for_ceil_divides_and_clamps() {
+        // 30 sections across 10 inclusive days → 3/day.
+        assert_eq!(daily_target_for(30, d(2026, 1, 1), d(2026, 1, 10)), Some(3));
+        // 31 across 10 → ceil = 4/day (never rounds down past the target).
+        assert_eq!(daily_target_for(31, d(2026, 1, 1), d(2026, 1, 10)), Some(4));
+        // Nothing remaining → no target.
+        assert_eq!(daily_target_for(0, d(2026, 1, 1), d(2026, 1, 10)), None);
+        // A single day still yields at least 1/day.
+        assert_eq!(daily_target_for(5, d(2026, 1, 1), d(2026, 1, 1)), Some(5));
     }
 
     #[test]

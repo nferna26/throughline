@@ -135,6 +135,15 @@ pub struct StreakSummary {
     pub minutes_last_7: i64,
 }
 
+/// Result of an import. `created` is false when the import deduped onto a book
+/// that was already present (same SHA-256) — the frontend uses it to decide
+/// whether to show the Book Setup Sheet (only for genuinely new books).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ImportOutcome {
+    pub book: Book,
+    pub created: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TodayCard {
     pub book: Book,
