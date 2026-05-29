@@ -491,6 +491,60 @@
 .rg-readscroll.epub-host { padding: 0; }
 .rg-readscroll .epub-viewer { width: 100%; min-height: calc(100vh - 130px); background: inherit; }
 
+/* ════════ Companion Margin (anchored notes / highlights) ════════ */
+/* Body is the positioned frame: the reading column flows in the left region;
+   the margin rail is pinned right. Paragraph offsetTop is measured from here,
+   and cards are placed at the same top inside the rail, so they line up. */
+.rg-reader-body { position: relative; max-width: 1080px; margin: 0 auto; padding-right: 312px; }
+.rg-reader-body .rg-readcol { margin: 0 auto; }
+.rg-margin { position: absolute; top: 0; right: 0; bottom: 0; width: 296px; padding: var(--rg-10) var(--rg-5) 0 0; }
+@media (max-width: 880px) {
+  /* Too narrow for a rail: drop the reserved gutter; cards stack after text. */
+  .rg-reader-body { padding-right: 0; }
+  .rg-margin { position: static; width: auto; padding: 0 var(--rg-7) var(--rg-7); }
+  .rg-card { position: static !important; margin-bottom: var(--rg-3); }
+}
+
+/* Inline highlight on the page. Soft, summon-able, never alarming. */
+.rg-hl { background: color-mix(in oklab, var(--rg-accent) 20%, transparent); border-radius: 2px; cursor: pointer; padding: 0 1px; }
+.rg-hl.active { background: color-mix(in oklab, var(--rg-accent) 38%, transparent); }
+
+.rg-card {
+  position: absolute; left: 0; right: var(--rg-5); width: auto;
+  background: var(--rg-panel); border: 1px solid var(--rg-line); border-radius: var(--rg-r-sm);
+  padding: 10px 12px; font-family: var(--rg-sans); cursor: pointer;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.rg-card:hover { border-color: var(--rg-ink-10); }
+.rg-card.active { border-color: var(--rg-accent); box-shadow: 0 0 0 1px var(--rg-accent); }
+/* AI cards read distinctly from the reader's own notes (left accent + tint). */
+.rg-card.ai { border-left: 3px solid var(--rg-accent); background: color-mix(in oklab, var(--rg-accent) 5%, var(--rg-panel)); }
+.rg-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--rg-2); margin-bottom: 6px; }
+.rg-card-type { font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--rg-muted); }
+.rg-card-quote { margin: 0 0 6px; padding-left: 8px; border-left: 2px solid var(--rg-line); font-family: var(--rg-serif); font-style: italic; font-size: 13px; line-height: 1.45; color: var(--rg-muted); }
+.rg-card-body { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--rg-ink); white-space: pre-wrap; }
+.rg-card-hint { margin: 0; font-size: 13px; color: var(--rg-muted); }
+.rg-card-input {
+  width: 100%; box-sizing: border-box; min-height: 54px; resize: vertical;
+  border: none; background: transparent; color: var(--rg-ink);
+  font-family: var(--rg-sans); font-size: 13.5px; line-height: 1.5; padding: 0;
+}
+.rg-card-input:focus { outline: none; }
+.rg-card-saving { display: block; margin-top: 4px; font-size: 11px; color: var(--rg-muted); }
+
+/* Floating selection toolbar — sits just above the selected text. */
+.rg-seltoolbar {
+  position: absolute; transform: translate(-50%, calc(-100% - 8px)); z-index: 30;
+  display: flex; gap: 2px; padding: 4px;
+  background: var(--rg-ink); border-radius: var(--rg-r-sm); box-shadow: var(--rg-shadow, 0 6px 20px rgba(0,0,0,0.22));
+}
+.rg-seltoolbar-btn {
+  display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px;
+  background: transparent; border: none; border-radius: 5px; cursor: pointer;
+  color: var(--rg-paper); font-family: var(--rg-sans); font-size: 12.5px; font-weight: 600;
+}
+.rg-seltoolbar-btn:hover { background: rgba(255,255,255,0.14); }
+
 /* ════════ Modal (note / ending / AI tutor) ════════ */
 .rg-modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.35);

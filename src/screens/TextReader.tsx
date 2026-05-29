@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import AiPanel from "./AiPanel";
 import RGIcon from "../components/RGIcon";
@@ -43,6 +43,21 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const startedAt = useRef<number>(Date.now());
   const [endingPrompt, setEndingPrompt] = useState(false);
   const [summary, setSummary] = useState("");
+  // ── Companion Margin: anchored notes/highlights beside the text ──
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [sel, setSel] = useState<{ x: number; y: number; start: number; end: number; text: string } | null>(null);
+  const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
+  const [cardTops, setCardTops] = useState<Record<string, number>>({});
+  const readerRef = useRef<HTMLElement | null>(null);
+  const colRef = useRef<HTMLDivElement | null>(null);
+
+  const refreshNotes = useCallback(async () => {
+    try {
+      const all = await invoke<Note[]>("cmd_list_notes", { bookId: book.id });
+      setNotes(all);
+    } catch { /* notes are non-critical to reading */ }
+  }, [book.id]);
+  useEffect(() => { refreshNotes(); }, [refreshNotes]);
 
   useEffect(() => { localStorage.setItem("rg.fontSize", String(fontSize)); }, [fontSize]);
   useEffect(() => { localStorage.setItem("rg.lineWidth", String(lineWidth)); }, [lineWidth]);
@@ -207,6 +222,130 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const targetSection = assignedSection;
   const currentSection = assignableSections[currentIdx];
 
+  // Section char range, used to scope notes and to map absolute book locators
+  // back to within-section offsets for highlight rendering.
+  const secBase = parseInt(currentSection?.start_locator || "0", 10);
+  const secEnd = parseInt(currentSection?.end_locator || String(secBase + text.length), 10);
+
+  // Notes anchored inside the current section. Prefer the char anchor (precise);
+  // fall back to chapter label for notes saved without one.
+  const sectionNotes = useMemo(() => {
+    return notes
+      .filter((n) => {
+        const p = parseLocator(n.anchor_start || n.locator);
+        if (p.kind === "char") {
+          const v = parseInt(p.value, 10);
+          return v >= secBase && v < secEnd;
+        }
+        return n.chapter_label != null && n.chapter_label === currentSection?.label;
+      })
+      .sort((a, b) => anchorChar(a) - anchorChar(b));
+  }, [notes, secBase, secEnd, currentSection?.label]);
+
+  // Highlights to paint inline, grouped by within-section char span.
+  const highlights = useMemo(() => {
+    return sectionNotes
+      .map((n) => {
+        const p = parseLocator(n.anchor_start || n.locator);
+        if (p.kind !== "char" || !n.anchored_text) return null;
+        const start = parseInt(p.value, 10) - secBase;
+        return { id: n.id, start, end: start + n.anchored_text.length };
+      })
+      .filter((h): h is { id: string; start: number; end: number } => h != null && h.start >= 0);
+  }, [sectionNotes, secBase]);
+
+  // Position each margin card at the top of its anchored paragraph, then nudge
+  // apart any that would overlap. Recomputes on reflow (font/width/notes/text).
+  useEffect(() => {
+    const col = colRef.current;
+    if (!col) return;
+    const order = sectionNotes.map((n) => {
+      const within = anchorChar(n) - secBase;
+      let best: HTMLElement | null = null;
+      let bestOff = -1;
+      for (const [off, el] of paragraphRefs.current.entries()) {
+        if (off <= within && off > bestOff) { bestOff = off; best = el; }
+      }
+      return { id: n.id, top: best ? best.offsetTop : 0 };
+    });
+    order.sort((a, b) => a.top - b.top);
+    const MIN_GAP = 92;
+    let last = -Infinity;
+    const tops: Record<string, number> = {};
+    for (const o of order) {
+      const t = Math.max(o.top, last + MIN_GAP);
+      tops[o.id] = t;
+      last = t;
+    }
+    setCardTops(tops);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectionNotes, paragraphs, fontSize, lineWidth, text, secBase]);
+
+  // Capture a selection inside the reading column → show the action toolbar.
+  function onTextMouseUp() {
+    const s = window.getSelection?.();
+    if (!s || s.isCollapsed || s.rangeCount === 0) { setSel(null); return; }
+    const range = s.getRangeAt(0);
+    const col = colRef.current;
+    const reader = readerRef.current;
+    if (!col || !reader || !col.contains(range.commonAncestorContainer)) { setSel(null); return; }
+    const text = s.toString();
+    if (text.trim().length < 1) { setSel(null); return; }
+    const start = charOffsetWithinSection(range.startContainer, range.startOffset, col);
+    const end = charOffsetWithinSection(range.endContainer, range.endOffset, col);
+    if (start == null || end == null) { setSel(null); return; }
+    const rect = range.getBoundingClientRect();
+    const rRect = reader.getBoundingClientRect();
+    setSel({
+      x: rect.left - rRect.left + rect.width / 2,
+      y: rect.top - rRect.top,
+      start: secBase + Math.min(start, end),
+      end: secBase + Math.max(start, end),
+      text,
+    });
+  }
+
+  async function createAnchoredNote(noteType: string): Promise<Note | null> {
+    if (!sel) return null;
+    try {
+      const note = await invoke<Note>("cmd_save_note", {
+        bookId: book.id,
+        sessionId: session?.id ?? null,
+        noteType,
+        locator: makeCharLocator(sel.start),
+        chapterLabel: currentSection?.label ?? null,
+        body: "",
+        shortQuote: null,
+        anchorStart: makeCharLocator(sel.start),
+        anchorEnd: makeCharLocator(sel.end),
+        anchoredText: sel.text,
+      });
+      window.getSelection?.()?.removeAllRanges();
+      setSel(null);
+      await refreshNotes();
+      return note;
+    } catch {
+      setSel(null);
+      return null;
+    }
+  }
+
+  async function onHighlight() { await createAnchoredNote("Highlight"); }
+  async function onMarginNote() {
+    const n = await createAnchoredNote("MarginNote");
+    if (n) setActiveNoteId(n.id);
+  }
+  function onExplainSelection() {
+    if (sel && sel.text.trim().length >= 4) setSelection(sel.text);
+    setSel(null);
+    setShowAi(true);
+  }
+  async function deleteNote(id: string) {
+    try { await invoke("cmd_delete_note", { noteId: id }); } catch { /* ignore */ }
+    if (activeNoteId === id) setActiveNoteId(null);
+    await refreshNotes();
+  }
+
   if (!currentSection) {
     return (
       <div className="rg-reader">
@@ -217,7 +356,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   }
 
   return (
-    <section className="rg-reader">
+    <section className="rg-reader" ref={readerRef}>
       <div className="rg-readtoolbar">
         <button className="rg-back" onClick={onExit}><RGIcon name="chevronLeft" size={18} /> Today</button>
         <span className="rg-tb-title">
@@ -264,28 +403,51 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         <button className="rg-btn rg-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setEndingPrompt(true)}>{rescue ? "Done" : "Finish"}</button>
       </div>
 
-      <div className="rg-readscroll" ref={containerRef} onScroll={handleScroll}>
+      <div className="rg-readscroll" ref={containerRef} onScroll={handleScroll} onMouseUp={onTextMouseUp}>
         {rescue && (
           <div className="rg-rescue-banner" style={{ maxWidth: `${lineWidth}px` }} role="note">
             <RGIcon name="clock" size={15} />
             <span>Ten minutes. The goal is just to stay connected to the book — not to finish anything.</span>
           </div>
         )}
-        <div className="rg-readcol" style={{ maxWidth: `${lineWidth}px`, fontSize: `${fontSize}px` }}>
-          {paragraphs.map((p) => (
-            <p
-              key={p.offset}
-              data-offset={p.offset}
-              ref={(el) => {
-                if (el) paragraphRefs.current.set(p.offset, el);
-                else paragraphRefs.current.delete(p.offset);
-              }}
-            >
-              {p.text}
-            </p>
-          ))}
+        <div className="rg-reader-body">
+          <div className="rg-readcol" ref={colRef} style={{ maxWidth: `${lineWidth}px`, fontSize: `${fontSize}px` }}>
+            {paragraphs.map((p) => (
+              <p
+                key={p.offset}
+                data-offset={p.offset}
+                ref={(el) => {
+                  if (el) paragraphRefs.current.set(p.offset, el);
+                  else paragraphRefs.current.delete(p.offset);
+                }}
+              >
+                {renderParagraph(p.text, p.offset, highlights, activeNoteId, setActiveNoteId)}
+              </p>
+            ))}
+          </div>
+          <aside className="rg-margin" aria-label="Notes and highlights">
+            {sectionNotes.map((n) => (
+              <NoteCard
+                key={n.id}
+                note={n}
+                top={cardTops[n.id] ?? 0}
+                active={activeNoteId === n.id}
+                onActivate={() => setActiveNoteId(n.id)}
+                onSaved={refreshNotes}
+                onDelete={() => deleteNote(n.id)}
+              />
+            ))}
+          </aside>
         </div>
       </div>
+
+      {sel && (
+        <div className="rg-seltoolbar" style={{ left: sel.x, top: sel.y }} role="toolbar" aria-label="Selection actions">
+          <button className="rg-seltoolbar-btn" onClick={onHighlight}><RGIcon name="pencil" size={15} /> Highlight</button>
+          <button className="rg-seltoolbar-btn" onClick={onMarginNote}><RGIcon name="pencil" size={15} /> Note</button>
+          <button className="rg-seltoolbar-btn" onClick={onExplainSelection}><RGIcon name="sparkle" size={15} /> Explain</button>
+        </div>
+      )}
 
       {showNote && (
         <NotePanel
@@ -337,6 +499,134 @@ function splitParagraphs(text: string): Array<{ offset: number; text: string }> 
     if (tail.trim().length > 0) out.push({ offset: last, text: tail });
   }
   return out;
+}
+
+/** Absolute char anchor of a note (for sorting / section scoping). */
+function anchorChar(n: Note): number {
+  const p = parseLocator(n.anchor_start || n.locator);
+  return p.kind === "char" ? parseInt(p.value, 10) : 0;
+}
+
+/** Within-section char offset of a DOM point inside the reading column, by
+ *  measuring a Range from the enclosing paragraph's start. Robust to the
+ *  paragraph being split into <mark> segments. */
+function charOffsetWithinSection(node: Node, offset: number, col: HTMLElement): number | null {
+  const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
+  const p = el?.closest("p[data-offset]") as HTMLElement | null;
+  if (!p || !col.contains(p)) return null;
+  const base = parseInt(p.dataset.offset || "0", 10);
+  const range = document.createRange();
+  range.setStart(p, 0);
+  try {
+    range.setEnd(node, offset);
+  } catch {
+    return null;
+  }
+  return base + range.toString().length;
+}
+
+/** Render a paragraph's text, wrapping any anchored highlight spans in <mark>.
+ *  Offsets are within-section; highlights carry section-local start/end. */
+function renderParagraph(
+  text: string,
+  pOffset: number,
+  highlights: Array<{ id: string; start: number; end: number }>,
+  activeId: string | null,
+  setActive: (id: string) => void,
+): ReactNode {
+  const pEnd = pOffset + text.length;
+  const hits = highlights
+    .filter((h) => h.end > pOffset && h.start < pEnd)
+    .map((h) => ({ id: h.id, s: Math.max(0, h.start - pOffset), e: Math.min(text.length, h.end - pOffset) }))
+    .filter((h) => h.e > h.s)
+    .sort((a, b) => a.s - b.s);
+  if (hits.length === 0) return text;
+  const out: ReactNode[] = [];
+  let cursor = 0;
+  hits.forEach((h, i) => {
+    const start = Math.max(h.s, cursor);
+    if (start > cursor) out.push(text.slice(cursor, start));
+    if (h.e > start) {
+      out.push(
+        <mark
+          key={`${h.id}-${i}`}
+          className={activeId === h.id ? "rg-hl active" : "rg-hl"}
+          onClick={(e) => { e.stopPropagation(); setActive(h.id); }}
+        >
+          {text.slice(start, h.e)}
+        </mark>,
+      );
+      cursor = h.e;
+    }
+  });
+  if (cursor < text.length) out.push(text.slice(cursor));
+  return out;
+}
+
+/** One anchored card in the Companion Margin. User notes are editable with
+ *  debounced autosave; saved-AI cards are visually distinct and read-only. */
+function NoteCard(props: {
+  note: Note;
+  top: number;
+  active: boolean;
+  onActivate: () => void;
+  onSaved: () => void;
+  onDelete: () => void;
+}) {
+  const { note } = props;
+  const isAi = note.note_type === "SavedAICard" || note.note_type === "AI";
+  const isHighlight = note.note_type === "Highlight";
+  const [body, setBody] = useState(note.body);
+  const [saving, setSaving] = useState(false);
+  const timer = useRef<number | null>(null);
+
+  // Reset the editor when this card is reused for a different note.
+  useEffect(() => { setBody(note.body); /* eslint-disable-next-line */ }, [note.id]);
+
+  function onChange(v: string) {
+    setBody(v);
+    if (timer.current) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(async () => {
+      setSaving(true);
+      try {
+        await invoke("cmd_update_note", { noteId: note.id, body: v });
+        props.onSaved();
+      } catch { /* keep local text; will retry on next keystroke */ }
+      finally { setSaving(false); }
+    }, 700);
+  }
+
+  const showEditor = !isAi && (props.active || !isHighlight || body.length > 0);
+
+  return (
+    <div
+      className={`rg-card${isAi ? " ai" : ""}${props.active ? " active" : ""}`}
+      style={{ top: props.top }}
+      onClick={props.onActivate}
+    >
+      <div className="rg-card-head">
+        <span className="rg-card-type">{isHighlight ? "Highlight" : isAi ? "AI card" : note.note_type}</span>
+        <button className="rg-iconbtn" aria-label="Delete note" onClick={(e) => { e.stopPropagation(); props.onDelete(); }}>
+          <RGIcon name="x" size={14} />
+        </button>
+      </div>
+      {note.anchored_text && <blockquote className="rg-card-quote">{note.anchored_text}</blockquote>}
+      {isAi ? (
+        <p className="rg-card-body">{note.body}</p>
+      ) : showEditor ? (
+        <textarea
+          className="rg-card-input"
+          value={body}
+          placeholder="Add a thought…"
+          onChange={(e) => onChange(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <p className="rg-card-hint">Click to add a note</p>
+      )}
+      {saving && <span className="rg-card-saving">Saving…</span>}
+    </div>
+  );
 }
 
 let saveProgressTimer: number | null = null;
