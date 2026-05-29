@@ -84,8 +84,9 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
         ));
     }
 
-    // Open with the epub crate to validate + extract metadata + spine + toc
-    let doc = epub::doc::EpubDoc::new(src_path)
+    // Open with the epub crate to validate + extract metadata + spine + toc.
+    // `mut` so we can pull each section's XHTML back out to estimate its length.
+    let mut doc = epub::doc::EpubDoc::new(src_path)
         .with_context(|| format!("failed to parse EPUB {:?}", src_path))?;
     let title = doc
         .mdata("title")
@@ -108,6 +109,7 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
 
     #[derive(Debug)]
     struct SpineEntry {
+        idref: String,
         label: String,
         href: String,
         assignable: bool,
@@ -122,7 +124,7 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
             .clone()
             .unwrap_or_else(|| pretty_idref(&item.idref).unwrap_or_else(|| format!("Section {}", i + 1)));
         let assignable = !is_front_back_matter(toc_label.as_deref(), &item.idref, item.linear);
-        sections_input.push(SpineEntry { label, href: href_no_frag, assignable });
+        sections_input.push(SpineEntry { idref: item.idref.clone(), label, href: href_no_frag, assignable });
     }
     // Dedupe consecutive duplicates by href (TOC sometimes points at the same file twice).
     sections_input.dedup_by(|a, b| a.href == b.href);
@@ -154,8 +156,21 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
     let sha = hash_file(&dest)?;
     let now = Utc::now().to_rfc3339();
 
+    // Estimate each section's length by pulling its XHTML back out and counting
+    // readable characters (tags stripped, whitespace collapsed). estimated_units
+    // is the SAME char unit the txt importer uses, so estimate_minutes_for_chars
+    // and the plan math work identically for both formats. A section we can't
+    // read stays None (falls back to the 20-min default for that one).
+    let mut total_chars: usize = 0;
     let mut sections: Vec<BookSection> = Vec::with_capacity(sections_input.len());
     for (i, entry) in sections_input.iter().enumerate() {
+        let chars = doc
+            .get_resource_str(&entry.idref)
+            .map(|(html, _mime)| html_text_len(&html))
+            .filter(|n| *n > 0);
+        if let Some(n) = chars {
+            total_chars += n;
+        }
         sections.push(BookSection {
             id: format!("sec_{}", Uuid::new_v4().simple()),
             book_id: book_id.clone(),
@@ -163,7 +178,7 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
             href: Some(entry.href.clone()),
             start_locator: None,
             end_locator: None,
-            estimated_units: None,
+            estimated_units: chars.map(|n| n as i64),
             sort_order: i as i64,
             assignable: entry.assignable,
         });
@@ -181,7 +196,7 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
             .to_string(),
         source_sha256: sha.clone(),
         imported_at: now.clone(),
-        total_chars: 0, // unknown — epub.js renders, no plain-text body
+        total_chars, // sum of per-section stripped-text lengths (0 if none read)
         section_count: sections.len(),
     };
     fs::write(
@@ -200,4 +215,65 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
         last_opened_at: None,
     };
     Ok(ImportResult { book, sections })
+}
+
+/// Approximate count of readable characters in a chapter's XHTML: drop tag
+/// contents and collapse each whitespace run to a single character. This is a
+/// reading-time heuristic, not a parser — it intentionally over/under-counts a
+/// little (entities, attributes inside skipped tags) because the downstream use
+/// is `estimate_minutes_for_chars` (~5 chars/word at WPM), where small error is
+/// invisible. Returns 0 for empty/markup-only documents.
+fn html_text_len(html: &str) -> usize {
+    let mut count = 0usize;
+    let mut in_tag = false;
+    let mut prev_ws = true; // collapse leading whitespace away
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if in_tag => {}
+            c if c.is_whitespace() => {
+                if !prev_ws {
+                    count += 1; // one char per whitespace run, like a single space
+                    prev_ws = true;
+                }
+            }
+            _ => {
+                count += 1;
+                prev_ws = false;
+            }
+        }
+    }
+    count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn html_text_len_strips_tags_and_collapses_whitespace() {
+        assert_eq!(html_text_len("<p>Hello world</p>"), "Hello world".len());
+        // Tag attributes are not counted; runs of whitespace collapse to one.
+        assert_eq!(
+            html_text_len("<p class=\"x\">Hello\n\n   world</p>"),
+            "Hello world".len()
+        );
+    }
+
+    #[test]
+    fn html_text_len_is_zero_for_markup_only() {
+        assert_eq!(html_text_len("<div><br/><img src=\"a.png\"/></div>"), 0);
+        assert_eq!(html_text_len(""), 0);
+    }
+
+    #[test]
+    fn html_text_len_tracks_real_prose_length() {
+        // A paragraph of ~60 visible chars should estimate ~1 minute, never the
+        // 20-min fallback that an unknown length would have produced.
+        let html = "<html><body><p>The quick brown fox jumps over the lazy dog.</p></body></html>";
+        let n = html_text_len(html);
+        assert_eq!(n, "The quick brown fox jumps over the lazy dog.".len());
+        assert_eq!(crate::import::estimate_minutes_for_chars(n), 1);
+    }
 }
