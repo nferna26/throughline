@@ -45,7 +45,7 @@ pub enum ProviderAuth {
     Codex,
 }
 
-/// A normalized provider call. `base_url`/`local_only` apply to Local only.
+/// A normalized provider call. `base_url` applies to Local only.
 pub struct ProviderCall {
     pub provider: AiProvider,
     pub model: String,
@@ -54,7 +54,6 @@ pub struct ProviderCall {
     pub timeout: Duration,
     pub auth: ProviderAuth,
     pub base_url: String,
-    pub local_only: bool,
 }
 
 /// Dispatch a call to the chosen provider, returning the same StreamEvent
@@ -98,14 +97,21 @@ pub async fn run_provider_call(call: ProviderCall) -> Result<mpsc::Receiver<Stre
                 ProviderAuth::AnthropicKey(k) => k,
                 _ => return Err(anyhow!("Anthropic selected but no API key is configured")),
             };
-            run_anthropic(&call.model, &key, &call.prompt, call.max_tokens, call.timeout).await
+            run_anthropic(
+                &call.model,
+                &key,
+                &call.prompt,
+                call.max_tokens,
+                call.timeout,
+            )
+            .await
         }
         AiProvider::Codex => {
             run_codex(&call.model, &call.prompt, call.max_tokens, call.timeout).await
         }
-        AiProvider::Disabled | AiProvider::Unset => {
-            Err(anyhow!("No AI provider chosen. Pick one in Settings → Assistance."))
-        }
+        AiProvider::Disabled | AiProvider::Unset => Err(anyhow!(
+            "No AI provider chosen. Pick one in Settings → Assistance."
+        )),
     }
 }
 
@@ -131,7 +137,11 @@ where
         let chunk = match chunk {
             Ok(b) => b,
             Err(e) => {
-                let _ = tx.send(StreamEvent::Error { message: format!("stream error: {e}") }).await;
+                let _ = tx
+                    .send(StreamEvent::Error {
+                        message: format!("stream error: {e}"),
+                    })
+                    .await;
                 return;
             }
         };
@@ -178,7 +188,9 @@ fn sse_data_payload(line: &str) -> Option<&str> {
 /// `text_delta` yields text; `message_stop` ends; an `error` event is fatal;
 /// everything else (message_start, ping, …) is ignored. Pure → unit-tested.
 pub fn parse_anthropic_line(line: &str) -> SseOutcome {
-    let Some(payload) = sse_data_payload(line) else { return SseOutcome::Ignore };
+    let Some(payload) = sse_data_payload(line) else {
+        return SseOutcome::Ignore;
+    };
     let v: serde_json::Value = match serde_json::from_str(payload) {
         Ok(v) => v,
         Err(_) => return SseOutcome::Ignore,
@@ -212,7 +224,10 @@ async fn run_anthropic(
     max_tokens: Option<u32>,
     timeout: Duration,
 ) -> Result<mpsc::Receiver<StreamEvent>> {
-    let client = reqwest::Client::builder().timeout(timeout).build().context("reqwest build")?;
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .context("reqwest build")?;
     let body = json!({
         "model": model,
         "max_tokens": max_tokens.unwrap_or(1024),
@@ -238,11 +253,17 @@ async fn run_anthropic(
                 let status = r.status();
                 let snippet = r.text().await.unwrap_or_default();
                 let _ = tx
-                    .send(StreamEvent::Error { message: humanize_http("Anthropic", status, &snippet) })
+                    .send(StreamEvent::Error {
+                        message: humanize_http("Anthropic", status, &snippet),
+                    })
                     .await;
             }
             Err(e) => {
-                let _ = tx.send(StreamEvent::Error { message: format!("Anthropic request failed: {e}") }).await;
+                let _ = tx
+                    .send(StreamEvent::Error {
+                        message: format!("Anthropic request failed: {e}"),
+                    })
+                    .await;
             }
         }
     });
@@ -371,14 +392,21 @@ fn load_codex() -> Option<ResolvedCodex> {
     if t.access_token.trim().is_empty() || t.refresh_token.trim().is_empty() {
         return None;
     }
-    Some(ResolvedCodex { access_token: t.access_token, refresh_token: t.refresh_token, account_id, source: CodexSource::File })
+    Some(ResolvedCodex {
+        access_token: t.access_token,
+        refresh_token: t.refresh_token,
+        account_id,
+        source: CodexSource::File,
+    })
 }
 
 /// Extract chatgpt_account_id from a Codex id_token (JWT payload → the
 /// `https://api.openai.com/auth` claim namespace). Never logs the token.
 fn jwt_chatgpt_account_id(id_token: &str) -> Option<String> {
     let payload = id_token.split('.').nth(1)?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
     let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     v.get("https://api.openai.com/auth")?
         .get("chatgpt_account_id")?
@@ -405,10 +433,17 @@ async fn codex_refresh_resolved(client: &reqwest::Client, r: &mut ResolvedCodex)
         ));
     }
     #[derive(Deserialize)]
-    struct RefreshResp { access_token: Option<String>, refresh_token: Option<String> }
+    struct RefreshResp {
+        access_token: Option<String>,
+        refresh_token: Option<String>,
+    }
     let parsed: RefreshResp = resp.json().await.context("decode codex refresh response")?;
-    if let Some(at) = parsed.access_token { r.access_token = at; }
-    if let Some(rt) = parsed.refresh_token { r.refresh_token = rt; }
+    if let Some(at) = parsed.access_token {
+        r.access_token = at;
+    }
+    if let Some(rt) = parsed.refresh_token {
+        r.refresh_token = rt;
+    }
     match r.source {
         CodexSource::App => {
             let creds = CodexAppCreds {
@@ -443,7 +478,9 @@ pub struct CodexDeviceStart {
 
 /// Begin a device-code login: request a code to enter at the verification URL.
 pub async fn codex_device_start() -> Result<CodexDeviceStart> {
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()?;
     let resp = client
         .post(CODEX_DEVICE_USERCODE_URL)
         .header("content-type", "application/json")
@@ -468,7 +505,10 @@ pub async fn codex_device_start() -> Result<CodexDeviceStart> {
         #[serde(default)]
         interval: Option<serde_json::Value>,
     }
-    let r: R = resp.json().await.context("decode device usercode response")?;
+    let r: R = resp
+        .json()
+        .await
+        .context("decode device usercode response")?;
     let interval = r
         .interval
         .as_ref()
@@ -497,7 +537,9 @@ pub struct CodexDevicePoll {
 /// Poll once for device-login completion. On success, exchanges the code and
 /// stores the app-owned creds in the Keychain.
 pub async fn codex_device_poll(device_auth_id: &str, user_code: &str) -> Result<CodexDevicePoll> {
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()?;
     let resp = client
         .post(CODEX_DEVICE_TOKEN_URL)
         .header("content-type", "application/json")
@@ -507,25 +549,44 @@ pub async fn codex_device_poll(device_auth_id: &str, user_code: &str) -> Result<
         .context("codex device token poll")?;
     let status = resp.status();
     if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::NOT_FOUND {
-        return Ok(CodexDevicePoll { status: "pending".into(), message: "Waiting for approval…".into() });
+        return Ok(CodexDevicePoll {
+            status: "pending".into(),
+            message: "Waiting for approval…".into(),
+        });
     }
     if !status.is_success() {
         let snippet = resp.text().await.unwrap_or_default();
-        return Ok(CodexDevicePoll { status: "denied".into(), message: format!("HTTP {status}: {}", snippet.chars().take(120).collect::<String>()) });
+        return Ok(CodexDevicePoll {
+            status: "denied".into(),
+            message: format!(
+                "HTTP {status}: {}",
+                snippet.chars().take(120).collect::<String>()
+            ),
+        });
     }
     #[derive(Deserialize)]
-    struct Code { authorization_code: String, code_verifier: String }
+    struct Code {
+        authorization_code: String,
+        code_verifier: String,
+    }
     let code: Code = resp.json().await.context("decode device token response")?;
     let creds = codex_exchange_code(&client, &code.authorization_code, &code.code_verifier).await?;
     crate::keystore::set_codex_creds(&serde_json::to_string(&creds).unwrap_or_default())
         .map_err(|e| anyhow!("store codex creds: {e}"))?;
-    Ok(CodexDevicePoll { status: "complete".into(), message: "Signed in with ChatGPT.".into() })
+    Ok(CodexDevicePoll {
+        status: "complete".into(),
+        message: "Signed in with ChatGPT.".into(),
+    })
 }
 
 /// Exchange the device authorization_code for tokens (form-encoded), then decode
 /// the id_token for the account id. Skips the optional api-key token-exchange —
 /// the ChatGPT Responses path uses the access_token directly.
-async fn codex_exchange_code(client: &reqwest::Client, code: &str, code_verifier: &str) -> Result<CodexAppCreds> {
+async fn codex_exchange_code(
+    client: &reqwest::Client,
+    code: &str,
+    code_verifier: &str,
+) -> Result<CodexAppCreds> {
     let resp = client
         .post(CODEX_TOKEN_URL)
         .form(&[
@@ -541,20 +602,32 @@ async fn codex_exchange_code(client: &reqwest::Client, code: &str, code_verifier
     if !resp.status().is_success() {
         let status = resp.status();
         let snippet = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("Codex code exchange failed (HTTP {status}). {}", snippet.chars().take(160).collect::<String>()));
+        return Err(anyhow!(
+            "Codex code exchange failed (HTTP {status}). {}",
+            snippet.chars().take(160).collect::<String>()
+        ));
     }
     #[derive(Deserialize)]
-    struct T { id_token: String, access_token: String, refresh_token: String }
+    struct T {
+        id_token: String,
+        access_token: String,
+        refresh_token: String,
+    }
     let t: T = resp.json().await.context("decode codex token response")?;
     let account_id = jwt_chatgpt_account_id(&t.id_token)
         .ok_or_else(|| anyhow!("Codex token is missing a ChatGPT account id"))?;
-    Ok(CodexAppCreds { access_token: t.access_token, refresh_token: t.refresh_token, account_id })
+    Ok(CodexAppCreds {
+        access_token: t.access_token,
+        refresh_token: t.refresh_token,
+        account_id,
+    })
 }
 
 /// The ChatGPT Codex Responses backend REQUIRES a non-empty `instructions`
 /// (system) field. We keep the reader prompt as the user `input` and supply a
 /// short instruction so the request validates.
-const CODEX_INSTRUCTIONS: &str = "You are a concise, helpful reading tutor. Answer the reader's request directly.";
+const CODEX_INSTRUCTIONS: &str =
+    "You are a concise, helpful reading tutor. Answer the reader's request directly.";
 
 fn codex_responses_body(model: &str, prompt: &str) -> serde_json::Value {
     json!({
@@ -570,18 +643,18 @@ fn codex_responses_body(model: &str, prompt: &str) -> serde_json::Value {
 
 /// Map one Codex Responses-API SSE line to an outcome. Pure → unit-tested.
 pub fn parse_codex_line(line: &str) -> SseOutcome {
-    let Some(payload) = sse_data_payload(line) else { return SseOutcome::Ignore };
+    let Some(payload) = sse_data_payload(line) else {
+        return SseOutcome::Ignore;
+    };
     let v: serde_json::Value = match serde_json::from_str(payload) {
         Ok(v) => v,
         Err(_) => return SseOutcome::Ignore,
     };
     match v.get("type").and_then(|x| x.as_str()) {
-        Some("response.output_text.delta") => {
-            match v.get("delta").and_then(|x| x.as_str()) {
-                Some(t) => SseOutcome::Delta(t.to_string()),
-                None => SseOutcome::Ignore,
-            }
-        }
+        Some("response.output_text.delta") => match v.get("delta").and_then(|x| x.as_str()) {
+            Some(t) => SseOutcome::Delta(t.to_string()),
+            None => SseOutcome::Ignore,
+        },
         Some("response.completed") => SseOutcome::Done,
         Some("response.failed") | Some("error") | Some("response.error") => {
             let msg = v
@@ -623,7 +696,10 @@ async fn run_codex(
     let mut creds = load_codex().ok_or_else(|| {
         anyhow!("No Codex login found. Sign in with ChatGPT in Settings → Assistance, or run `codex login`.")
     })?;
-    let client = reqwest::Client::builder().timeout(timeout).build().context("reqwest build")?;
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .context("reqwest build")?;
     let body = codex_responses_body(model, prompt);
 
     let mut resp = codex_post(&client, &creds.access_token, &creds.account_id, &body).await;
@@ -643,10 +719,18 @@ async fn run_codex(
             Ok(r) => {
                 let status = r.status();
                 let snippet = r.text().await.unwrap_or_default();
-                let _ = tx.send(StreamEvent::Error { message: humanize_http("Codex", status, &snippet) }).await;
+                let _ = tx
+                    .send(StreamEvent::Error {
+                        message: humanize_http("Codex", status, &snippet),
+                    })
+                    .await;
             }
             Err(e) => {
-                let _ = tx.send(StreamEvent::Error { message: format!("Codex request failed: {e}") }).await;
+                let _ = tx
+                    .send(StreamEvent::Error {
+                        message: format!("Codex request failed: {e}"),
+                    })
+                    .await;
             }
         }
     });
@@ -667,7 +751,11 @@ pub fn best_gpt5_model(ids: &[String]) -> Option<String> {
     let mut candidates: Vec<&String> = ids
         .iter()
         .filter(|i| i.starts_with("gpt-5"))
-        .filter(|i| !["mini", "nano", "chat", "audio", "realtime", "codex"].iter().any(|x| i.contains(x)))
+        .filter(|i| {
+            !["mini", "nano", "chat", "audio", "realtime", "codex"]
+                .iter()
+                .any(|x| i.contains(x))
+        })
         .collect();
     // Newest-looking last (lexical works for gpt-5, gpt-5.1, gpt-5.5, dated snapshots).
     candidates.sort();
@@ -687,9 +775,19 @@ pub async fn test_provider(
         AiProvider::Local => match crate::ai_client::test_connection(base_url, true).await {
             Ok((true, m)) => {
                 let label = m.clone().unwrap_or_else(|| "(none listed)".to_string());
-                (true, m, format!("Reachable on this Mac. First model: {label}"))
+                (
+                    true,
+                    m,
+                    format!("Reachable on this Mac. First model: {label}"),
+                )
             }
-            Ok((false, _)) => (false, None, format!("Could not reach {base_url}/models. Is your local server (LM Studio) running?")),
+            Ok((false, _)) => (
+                false,
+                None,
+                format!(
+                    "Could not reach {base_url}/models. Is your local server (LM Studio) running?"
+                ),
+            ),
             Err(e) => (false, None, format!("{e}")),
         },
         AiProvider::OpenAi => match key {
@@ -701,7 +799,9 @@ pub async fn test_provider(
             None => (false, None, "Add your Anthropic API key first.".to_string()),
         },
         AiProvider::Codex => test_codex(model, timeout).await,
-        AiProvider::Disabled | AiProvider::Unset => (false, None, "Choose a provider first.".to_string()),
+        AiProvider::Disabled | AiProvider::Unset => {
+            (false, None, "Choose a provider first.".to_string())
+        }
     }
 }
 
@@ -710,21 +810,43 @@ async fn test_openai(key: &str, timeout: Duration) -> ConnTest {
         Ok(c) => c,
         Err(e) => return (false, None, format!("client build: {e}")),
     };
-    match client.get(format!("{OPENAI_BASE_URL}/models")).bearer_auth(key).send().await {
+    match client
+        .get(format!("{OPENAI_BASE_URL}/models"))
+        .bearer_auth(key)
+        .send()
+        .await
+    {
         Ok(r) if r.status().is_success() => {
             #[derive(Deserialize)]
-            struct M { id: String }
+            struct M {
+                id: String,
+            }
             #[derive(Deserialize)]
-            struct R { data: Option<Vec<M>> }
+            struct R {
+                data: Option<Vec<M>>,
+            }
             let parsed: R = r.json().await.unwrap_or(R { data: None });
-            let ids: Vec<String> = parsed.data.unwrap_or_default().into_iter().map(|m| m.id).collect();
+            let ids: Vec<String> = parsed
+                .data
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| m.id)
+                .collect();
             let best = best_gpt5_model(&ids);
             let label = best.clone().unwrap_or_else(|| "gpt-5.5".to_string());
-            (true, best, format!("Connected to OpenAI. Best available model: {label}"))
+            (
+                true,
+                best,
+                format!("Connected to OpenAI. Best available model: {label}"),
+            )
         }
         Ok(r) => {
             let status = r.status();
-            (false, None, humanize_http("OpenAI", status, &r.text().await.unwrap_or_default()))
+            (
+                false,
+                None,
+                humanize_http("OpenAI", status, &r.text().await.unwrap_or_default()),
+            )
         }
         Err(e) => (false, None, format!("OpenAI request failed: {e}")),
     }
@@ -744,14 +866,26 @@ async fn test_anthropic(key: &str, model: &str, timeout: Duration) -> ConnTest {
         .send()
         .await
     {
-        Ok(r) if r.status().is_success() => (true, Some(model.to_string()), format!("Connected to Anthropic ({model}).")),
+        Ok(r) if r.status().is_success() => (
+            true,
+            Some(model.to_string()),
+            format!("Connected to Anthropic ({model})."),
+        ),
         Ok(r) if r.status().as_u16() == 400 => {
             // Auth passed (a 400 means the key worked but the body/model needs a tweak).
-            (true, Some(model.to_string()), "Anthropic key works. Double-check the model id.".to_string())
+            (
+                true,
+                Some(model.to_string()),
+                "Anthropic key works. Double-check the model id.".to_string(),
+            )
         }
         Ok(r) => {
             let status = r.status();
-            (false, None, humanize_http("Anthropic", status, &r.text().await.unwrap_or_default()))
+            (
+                false,
+                None,
+                humanize_http("Anthropic", status, &r.text().await.unwrap_or_default()),
+            )
         }
         Err(e) => (false, None, format!("Anthropic request failed: {e}")),
     }
@@ -760,7 +894,14 @@ async fn test_anthropic(key: &str, model: &str, timeout: Duration) -> ConnTest {
 async fn test_codex(model: &str, timeout: Duration) -> ConnTest {
     let mut creds = match load_codex() {
         Some(c) => c,
-        None => return (false, None, "No Codex login found. Sign in with ChatGPT below, or run `codex login`.".to_string()),
+        None => {
+            return (
+                false,
+                None,
+                "No Codex login found. Sign in with ChatGPT below, or run `codex login`."
+                    .to_string(),
+            )
+        }
     };
     let client = match reqwest::Client::builder().timeout(timeout).build() {
         Ok(c) => c,
@@ -771,16 +912,26 @@ async fn test_codex(model: &str, timeout: Duration) -> ConnTest {
     if let Ok(r) = &resp {
         if r.status() == reqwest::StatusCode::UNAUTHORIZED {
             match codex_refresh_resolved(&client, &mut creds).await {
-                Ok(fresh) => { resp = codex_post(&client, &fresh, &creds.account_id, &body).await; }
+                Ok(fresh) => {
+                    resp = codex_post(&client, &fresh, &creds.account_id, &body).await;
+                }
                 Err(e) => return (false, None, format!("{e}")),
             }
         }
     }
     match resp {
-        Ok(r) if r.status().is_success() => (true, Some(model.to_string()), "Connected via your Codex login.".to_string()),
+        Ok(r) if r.status().is_success() => (
+            true,
+            Some(model.to_string()),
+            "Connected via your Codex login.".to_string(),
+        ),
         Ok(r) => {
             let status = r.status();
-            (false, None, humanize_http("Codex", status, &r.text().await.unwrap_or_default()))
+            (
+                false,
+                None,
+                humanize_http("Codex", status, &r.text().await.unwrap_or_default()),
+            )
         }
         Err(e) => (false, None, format!("Codex request failed: {e}")),
     }
@@ -806,23 +957,38 @@ mod tests {
 
     #[test]
     fn anthropic_stream_maps_text_delta_stop_and_error() {
-        assert!(matches!(parse_anthropic_line("event: message_start"), SseOutcome::Ignore));
+        assert!(matches!(
+            parse_anthropic_line("event: message_start"),
+            SseOutcome::Ignore
+        ));
         assert!(matches!(
             parse_anthropic_line(r#"data: {"type":"message_start","message":{}}"#),
             SseOutcome::Ignore
         ));
         assert!(is_delta(
-            parse_anthropic_line(r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#),
+            parse_anthropic_line(
+                r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#
+            ),
             "Hello",
         ));
         // input_json_delta (tool calls) is not text → ignored
         assert!(matches!(
-            parse_anthropic_line(r#"data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}"#),
+            parse_anthropic_line(
+                r#"data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}"#
+            ),
             SseOutcome::Ignore
         ));
-        assert!(matches!(parse_anthropic_line(r#"data: {"type":"ping"}"#), SseOutcome::Ignore));
-        assert!(matches!(parse_anthropic_line(r#"data: {"type":"message_stop"}"#), SseOutcome::Done));
-        match parse_anthropic_line(r#"data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#) {
+        assert!(matches!(
+            parse_anthropic_line(r#"data: {"type":"ping"}"#),
+            SseOutcome::Ignore
+        ));
+        assert!(matches!(
+            parse_anthropic_line(r#"data: {"type":"message_stop"}"#),
+            SseOutcome::Done
+        ));
+        match parse_anthropic_line(
+            r#"data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        ) {
             SseOutcome::Error(m) => assert_eq!(m, "Overloaded"),
             _ => panic!("expected Error"),
         }
@@ -834,9 +1000,17 @@ mod tests {
             parse_codex_line(r#"data: {"type":"response.output_text.delta","delta":"Hi"}"#),
             "Hi",
         ));
-        assert!(matches!(parse_codex_line(r#"data: {"type":"response.created"}"#), SseOutcome::Ignore));
-        assert!(matches!(parse_codex_line(r#"data: {"type":"response.completed"}"#), SseOutcome::Done));
-        match parse_codex_line(r#"data: {"type":"response.failed","response":{"error":{"message":"boom"}}}"#) {
+        assert!(matches!(
+            parse_codex_line(r#"data: {"type":"response.created"}"#),
+            SseOutcome::Ignore
+        ));
+        assert!(matches!(
+            parse_codex_line(r#"data: {"type":"response.completed"}"#),
+            SseOutcome::Done
+        ));
+        match parse_codex_line(
+            r#"data: {"type":"response.failed","response":{"error":{"message":"boom"}}}"#,
+        ) {
             SseOutcome::Error(m) => assert_eq!(m, "boom"),
             _ => panic!("expected Error"),
         }
@@ -867,18 +1041,27 @@ mod tests {
         // Unknown fields are preserved for round-trip write-back.
         let reser = serde_json::to_string(&auth).unwrap();
         assert!(reser.contains("some_future_field"));
-        assert!(reser.contains("\"OPENAI_API_KEY\"") == false || reser.contains("null") == false);
+        assert!(!reser.contains("\"OPENAI_API_KEY\"") || !reser.contains("null"));
     }
 
     #[test]
     fn best_gpt5_model_prefers_flagship_then_newest_nonspecialized() {
         let ids = vec![
-            "gpt-4o".into(), "gpt-5".into(), "gpt-5-mini".into(),
-            "gpt-5.5".into(), "gpt-5.5-2026-04-23".into(), "gpt-5-codex".into(),
+            "gpt-4o".into(),
+            "gpt-5".into(),
+            "gpt-5-mini".into(),
+            "gpt-5.5".into(),
+            "gpt-5.5-2026-04-23".into(),
+            "gpt-5-codex".into(),
         ];
         assert_eq!(best_gpt5_model(&ids).as_deref(), Some("gpt-5.5"));
         // Without the bare alias, pick the newest non-specialized gpt-5.x.
-        let ids2 = vec!["gpt-4o".into(), "gpt-5".into(), "gpt-5.1".into(), "gpt-5-mini".into()];
+        let ids2 = vec![
+            "gpt-4o".into(),
+            "gpt-5".into(),
+            "gpt-5.1".into(),
+            "gpt-5-mini".into(),
+        ];
         assert_eq!(best_gpt5_model(&ids2).as_deref(), Some("gpt-5.1"));
         // No gpt-5 family at all → None.
         assert_eq!(best_gpt5_model(&["gpt-4o".to_string()]), None);
@@ -890,7 +1073,8 @@ mod tests {
             "https://api.openai.com/auth": { "chatgpt_account_id": "acct-xyz" },
             "exp": 9999999999u64
         });
-        let p = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let p = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&payload).unwrap());
         let token = format!("aGVhZGVy.{p}.c2ln");
         assert_eq!(jwt_chatgpt_account_id(&token).as_deref(), Some("acct-xyz"));
         // Malformed / missing claim → None (never panics).
@@ -905,7 +1089,10 @@ mod tests {
         assert_eq!(b["model"], "gpt-5.5");
         assert_eq!(b["input"][0]["content"][0]["text"], "hello");
         assert_eq!(b["stream"], true);
-        assert!(b["instructions"].as_str().map(|s| !s.is_empty()).unwrap_or(false));
+        assert!(b["instructions"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false));
     }
 
     // ── Live checks (ignore-gated; network + real creds; never run in CI) ──
@@ -916,20 +1103,35 @@ mod tests {
     #[ignore]
     async fn live_anthropic() {
         let key = std::env::var("ANTHROPIC_API_KEY").expect("set ANTHROPIC_API_KEY");
-        let (ok, model, msg) =
-            test_provider(AiProvider::Anthropic, Some(key.clone()), "", "claude-opus-4-8", Duration::from_secs(25)).await;
+        let (ok, model, msg) = test_provider(
+            AiProvider::Anthropic,
+            Some(key.clone()),
+            "",
+            "claude-opus-4-8",
+            Duration::from_secs(25),
+        )
+        .await;
         println!("[anthropic] connect ok={ok} model={model:?} :: {msg}");
         assert!(ok, "anthropic connection failed: {msg}");
         // End-to-end streaming smoke: one tiny prompt → Delta(s) then Done.
-        let mut rx = run_anthropic("claude-opus-4-8", &key, "Reply with exactly one word: pong", Some(16), Duration::from_secs(25))
-            .await
-            .expect("run_anthropic");
+        let mut rx = run_anthropic(
+            "claude-opus-4-8",
+            &key,
+            "Reply with exactly one word: pong",
+            Some(16),
+            Duration::from_secs(25),
+        )
+        .await
+        .expect("run_anthropic");
         let mut got = String::new();
         let mut done = false;
         while let Some(ev) = rx.recv().await {
             match ev {
                 StreamEvent::Delta { text } => got.push_str(&text),
-                StreamEvent::Done => { done = true; break; }
+                StreamEvent::Done => {
+                    done = true;
+                    break;
+                }
                 StreamEvent::Error { message } => panic!("anthropic stream error: {message}"),
             }
         }
@@ -945,9 +1147,15 @@ mod tests {
         match codex_device_start().await {
             Ok(s) => {
                 println!("[codex-device] device_auth_id={}", s.device_auth_id);
-                println!("[codex-device] user_code={} url={} interval={}", s.user_code, s.verification_url, s.interval);
+                println!(
+                    "[codex-device] user_code={} url={} interval={}",
+                    s.user_code, s.verification_url, s.interval
+                );
                 assert!(!s.user_code.trim().is_empty(), "expected a user code");
-                assert!(!s.device_auth_id.trim().is_empty(), "expected a device_auth_id");
+                assert!(
+                    !s.device_auth_id.trim().is_empty(),
+                    "expected a device_auth_id"
+                );
                 assert!(s.verification_url.contains("codex/device"));
             }
             Err(e) => panic!("device start failed: {e}"),
@@ -965,15 +1173,30 @@ mod tests {
         for _ in 0..18 {
             let r = codex_device_poll(&dai, &uc).await.expect("poll");
             println!("[codex-device] poll status={} :: {}", r.status, r.message);
-            if r.status == "complete" { done = true; break; }
-            if r.status == "denied" { panic!("denied: {}", r.message); }
+            if r.status == "complete" {
+                done = true;
+                break;
+            }
+            if r.status == "denied" {
+                panic!("denied: {}", r.message);
+            }
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
         assert!(done, "device login did not complete in time");
         // App-owned creds are now stored (in-memory keystore under test).
-        assert!(crate::keystore::has_codex_creds(), "app-owned creds were not stored");
+        assert!(
+            crate::keystore::has_codex_creds(),
+            "app-owned creds were not stored"
+        );
         // And a real Codex call must work using the app-owned creds.
-        let (ok, model, msg) = test_provider(AiProvider::Codex, None, "", "gpt-5.5", Duration::from_secs(30)).await;
+        let (ok, model, msg) = test_provider(
+            AiProvider::Codex,
+            None,
+            "",
+            "gpt-5.5",
+            Duration::from_secs(30),
+        )
+        .await;
         println!("[codex-device] post-login codex test ok={ok} model={model:?} :: {msg}");
         assert!(ok, "codex call with app-owned creds failed: {msg}");
     }
@@ -981,19 +1204,35 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_codex() {
-        let (ok, model, msg) =
-            test_provider(AiProvider::Codex, None, "", "gpt-5.5", Duration::from_secs(30)).await;
+        let (ok, model, msg) = test_provider(
+            AiProvider::Codex,
+            None,
+            "",
+            "gpt-5.5",
+            Duration::from_secs(30),
+        )
+        .await;
         println!("[codex] connect ok={ok} model={model:?} :: {msg}");
         // End-to-end stream: verify response.output_text.delta → text actually flows.
         if ok {
-            match run_codex("gpt-5.5", "Reply with exactly one word: pong", Some(16), Duration::from_secs(30)).await {
+            match run_codex(
+                "gpt-5.5",
+                "Reply with exactly one word: pong",
+                Some(16),
+                Duration::from_secs(30),
+            )
+            .await
+            {
                 Ok(mut rx) => {
                     let mut got = String::new();
                     while let Some(ev) = rx.recv().await {
                         match ev {
                             StreamEvent::Delta { text } => got.push_str(&text),
                             StreamEvent::Done => break,
-                            StreamEvent::Error { message } => { println!("[codex] stream error: {message}"); break; }
+                            StreamEvent::Error { message } => {
+                                println!("[codex] stream error: {message}");
+                                break;
+                            }
                         }
                     }
                     println!("[codex] stream reply = {got:?}");
@@ -1008,8 +1247,14 @@ mod tests {
     #[ignore]
     async fn live_openai() {
         let key = std::env::var("OPENAI_API_KEY").expect("set OPENAI_API_KEY");
-        let (ok, model, msg) =
-            test_provider(AiProvider::OpenAi, Some(key.clone()), "", "", Duration::from_secs(25)).await;
+        let (ok, model, msg) = test_provider(
+            AiProvider::OpenAi,
+            Some(key.clone()),
+            "",
+            "",
+            Duration::from_secs(25),
+        )
+        .await;
         println!("[openai] connect ok={ok} model={model:?} :: {msg}");
         assert!(ok, "openai connection failed: {msg}");
         // End-to-end stream via the real dispatch (max_completion_tokens path).
@@ -1021,7 +1266,6 @@ mod tests {
             timeout: Duration::from_secs(30),
             auth: ProviderAuth::OpenAiKey(key),
             base_url: String::new(),
-            local_only: false,
         };
         let mut rx = run_provider_call(call).await.expect("run_provider_call");
         let mut got = String::new();
@@ -1029,7 +1273,10 @@ mod tests {
         while let Some(ev) = rx.recv().await {
             match ev {
                 StreamEvent::Delta { text } => got.push_str(&text),
-                StreamEvent::Done => { done = true; break; }
+                StreamEvent::Done => {
+                    done = true;
+                    break;
+                }
                 StreamEvent::Error { message } => panic!("openai stream error: {message}"),
             }
         }

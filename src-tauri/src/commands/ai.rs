@@ -127,8 +127,16 @@ pub fn cmd_save_ai_preview_as_note(
 ) -> Result<Note, AppError> {
     let conn = state.0.lock()?;
     save_preview_as_note_inner(
-        &conn, &ai_request_id, &note_type, &body, &locator, chapter_label,
-        anchor_start, anchor_end, anchored_text, session_id,
+        &conn,
+        &ai_request_id,
+        &note_type,
+        &body,
+        &locator,
+        chapter_label,
+        anchor_start,
+        anchor_end,
+        anchored_text,
+        session_id,
     )
 }
 
@@ -352,7 +360,9 @@ pub async fn cmd_ai_ask(
             .ok_or_else(|| AppError::config("Add your OpenAI API key in Settings → Assistance."))?,
         settings::AiProvider::Anthropic => crate::keystore::get_key("anthropic")
             .map(crate::ai_providers::ProviderAuth::AnthropicKey)
-            .ok_or_else(|| AppError::config("Add your Anthropic API key in Settings → Assistance."))?,
+            .ok_or_else(|| {
+                AppError::config("Add your Anthropic API key in Settings → Assistance.")
+            })?,
         settings::AiProvider::Codex => crate::ai_providers::ProviderAuth::Codex,
         _ => return Err(AppError::config("No AI provider chosen.")),
     };
@@ -365,7 +375,6 @@ pub async fn cmd_ai_ask(
         timeout: std::time::Duration::from_secs(180),
         auth,
         base_url: base_url.clone(),
-        local_only: true,
     };
 
     let started = std::time::Instant::now();
@@ -440,12 +449,19 @@ pub async fn cmd_list_ai_models(
         .map(str::to_string)
         .unwrap_or(saved_base);
     match prov {
-        settings::AiProvider::Local => ai_client::list_models(&base_url, true).await.map_err(AppError::from),
+        settings::AiProvider::Local => ai_client::list_models(&base_url, true)
+            .await
+            .map_err(AppError::from),
         settings::AiProvider::OpenAi => Ok(vec![
-            "gpt-5.5".into(), "gpt-5.5-pro".into(), "gpt-5".into(), "gpt-5-mini".into(),
+            "gpt-5.5".into(),
+            "gpt-5.5-pro".into(),
+            "gpt-5".into(),
+            "gpt-5-mini".into(),
         ]),
         settings::AiProvider::Anthropic => Ok(vec![
-            "claude-opus-4-8".into(), "claude-sonnet-4-6".into(), "claude-haiku-4-5".into(),
+            "claude-opus-4-8".into(),
+            "claude-sonnet-4-6".into(),
+            "claude-haiku-4-5".into(),
         ]),
         settings::AiProvider::Codex => Ok(vec!["gpt-5.5".into()]),
         _ => Ok(Vec::new()),
@@ -471,8 +487,14 @@ pub async fn cmd_test_ai_connection(
         let model = settings::get_ai_model_for(&conn, prov);
         // Prefer an explicitly-passed key (test-before-save); else the stored one.
         let resolved_key = match prov {
-            settings::AiProvider::OpenAi => key.clone().filter(|k| !k.trim().is_empty()).or_else(|| crate::keystore::get_key("openai")),
-            settings::AiProvider::Anthropic => key.clone().filter(|k| !k.trim().is_empty()).or_else(|| crate::keystore::get_key("anthropic")),
+            settings::AiProvider::OpenAi => key
+                .clone()
+                .filter(|k| !k.trim().is_empty())
+                .or_else(|| crate::keystore::get_key("openai")),
+            settings::AiProvider::Anthropic => key
+                .clone()
+                .filter(|k| !k.trim().is_empty())
+                .or_else(|| crate::keystore::get_key("anthropic")),
             _ => None,
         };
         (prov, resolved_key, base_url, model)
@@ -486,14 +508,20 @@ pub async fn cmd_test_ai_connection(
         std::time::Duration::from_secs(15),
     )
     .await;
-    Ok(ConnTestResult { reachable, first_model_id: model_id, message })
+    Ok(ConnTestResult {
+        reachable,
+        first_model_id: model_id,
+        message,
+    })
 }
 
 /// Begin an app-owned Codex (ChatGPT) device-code login. Returns the code to
 /// enter at the verification URL; the frontend then polls `cmd_codex_device_poll`.
 #[tauri::command]
 pub async fn cmd_codex_device_start() -> Result<crate::ai_providers::CodexDeviceStart, AppError> {
-    crate::ai_providers::codex_device_start().await.map_err(|e| AppError::ai(format!("{e}")))
+    crate::ai_providers::codex_device_start()
+        .await
+        .map_err(|e| AppError::ai(format!("{e}")))
 }
 
 /// Poll once for device-login completion. On "complete" the app-owned tokens are
@@ -548,11 +576,19 @@ mod tests {
 
         let rows = list_ai_requests(&conn).unwrap();
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, vec!["a2", "a3", "a1"], "rows ordered newest created_at first");
+        assert_eq!(
+            ids,
+            vec!["a2", "a3", "a1"],
+            "rows ordered newest created_at first"
+        );
 
         let a2 = rows.iter().find(|r| r.id == "a2").unwrap();
         assert_eq!(a2.book_title.as_deref(), Some("Cold Start"));
-        assert_eq!(a2.provider.as_deref(), Some("localhost"), "Ask calls record the host");
+        assert_eq!(
+            a2.provider.as_deref(),
+            Some("localhost"),
+            "Ask calls record the host"
+        );
         assert!(a2.wrote_to_memory, "a2 became a note");
 
         let a1 = rows.iter().find(|r| r.id == "a1").unwrap();
@@ -572,13 +608,15 @@ mod tests {
         // honors THROUGHLINE_EXPORT_DIR — point it at a temp dir and serialize
         // against other env-touching tests so we never write into ~/GBrain.
         let _g = crate::paths::lock_env_for_test();
-        let export_dir = std::env::temp_dir()
-            .join(format!("tl-tutor-save-test-{}", std::process::id()));
+        let export_dir =
+            std::env::temp_dir().join(format!("tl-tutor-save-test-{}", std::process::id()));
         // Fresh dir each run so a stale mirror can't mask a regression.
         std::fs::remove_dir_all(&export_dir).ok();
         std::fs::create_dir_all(&export_dir).unwrap();
         // SAFETY: env vars are process-global; the lock above serializes access.
-        unsafe { std::env::set_var("THROUGHLINE_EXPORT_DIR", &export_dir); }
+        unsafe {
+            std::env::set_var("THROUGHLINE_EXPORT_DIR", &export_dir);
+        }
 
         let conn = Connection::open_in_memory().unwrap();
         crate::migrations::apply_pending(&conn).unwrap();
@@ -632,7 +670,10 @@ mod tests {
         assert!(md.contains("note_type: TutorNote"));
         assert!(md.contains("chapter: \"I.\""));
         // The body that IS exported is the reader's own words.
-        assert!(md.contains("my takeaway on this passage"), "user-authored body is exported");
+        assert!(
+            md.contains("my takeaway on this passage"),
+            "user-authored body is exported"
+        );
         // PRIVACY REGRESSION (AGENTS.md): the exported TutorNote Markdown must NOT
         // leak the selected passage (held only as the DB anchor) nor any AI prompt
         // text — exports carry paraphrases/locators/short quotes, never the raw
@@ -649,7 +690,11 @@ mod tests {
 
         // wrote_to_memory flipped on the audit row.
         let wrote: i64 = conn
-            .query_row("SELECT wrote_to_memory FROM ai_requests WHERE id = 'ai1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT wrote_to_memory FROM ai_requests WHERE id = 'ai1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(wrote, 1);
 
@@ -667,13 +712,24 @@ mod tests {
 
         // Empty body is still rejected (the takeaway-fallback is the caller's job).
         let err = save_preview_as_note_inner(
-            &conn, "ai1", "TutorNote", "   ", "char:10", None, None, None, None, None,
+            &conn,
+            "ai1",
+            "TutorNote",
+            "   ",
+            "char:10",
+            None,
+            None,
+            None,
+            None,
+            None,
         );
         assert!(err.is_err(), "empty body must be rejected");
 
         // Cleanup the isolated export dir + env override.
         std::fs::remove_dir_all(&export_dir).ok();
-        unsafe { std::env::remove_var("THROUGHLINE_EXPORT_DIR"); }
+        unsafe {
+            std::env::remove_var("THROUGHLINE_EXPORT_DIR");
+        }
     }
 }
 
