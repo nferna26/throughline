@@ -36,6 +36,9 @@ jobs:
       - name: Install JS dependencies
         run: npm ci
 
+      - name: Version consistency (tauri.conf / package.json / Cargo.toml)
+        run: npm run version:check
+
       - name: TypeScript typecheck
         run: npm run typecheck
 

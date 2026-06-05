@@ -27,10 +27,16 @@ The updater verifies every download against a **minisign** public key baked into
   **Keep it secret — it is NOT in the repo.** Store it as a CI secret. To rotate:
   `npx tauri signer generate -w ~/.throughline-updater.key` and replace the pubkey.
 
-## Releasing an update (the part still to set up)
+## Releasing an update
 
-The updater is inert until releases exist. Each release must publish, to the
-GitHub Releases of the repo the `endpoints` URL points at:
+The release workflow ([`.github/workflows/release.yml`](../.github/workflows/release.yml))
+now builds, signs, and publishes everything below automatically on a `v*` tag —
+including the updater signing env (`TAURI_SIGNING_PRIVATE_KEY` /
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). The full website-distribution pipeline
+(secrets, hosting, cutting a release) lives in
+[`DISTRIBUTION.md`](./DISTRIBUTION.md). The updater stays inert until a release
+is **published** (drafts don't resolve to `/releases/latest`). Each release
+publishes, to the GitHub Releases of the repo the `endpoints` URL points at:
 
 1. The signed + notarized `.app` (you already build this in CI — see
    [`SIGNING.md`](./SIGNING.md)).
@@ -53,8 +59,9 @@ GitHub Releases of the repo the `endpoints` URL points at:
    }
    ```
 
-The easiest path is **`tauri-apps/tauri-action`** in the release workflow, which
-builds, signs the update, and uploads `latest.json` for you. Set these CI env/secrets:
+This is handled by **`tauri-apps/tauri-action`** in the release workflow, which
+builds, signs the update, and uploads `latest.json` for you. The env is already
+wired; you just set the matching **repo secrets**:
 
 - `TAURI_SIGNING_PRIVATE_KEY` = contents of `~/.throughline-updater.key`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` = `` (empty, as generated)
