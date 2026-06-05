@@ -217,6 +217,22 @@ pub fn parse_anthropic_line(line: &str) -> SseOutcome {
     }
 }
 
+/// Anthropic `/v1/messages` requires `max_tokens` (it is a REQUIRED field there,
+/// not optional), so the body always carries one. The caller threads the
+/// depth-appropriate brevity cap from `max_tokens_for`; the `unwrap_or` is only a
+/// last-resort floor for a caller that forgot to set one (the real call site in
+/// `commands::ai` always passes `Some(..)`), and it is intentionally generous so
+/// it can never be MORE restrictive than the reader's chosen tier. Pure →
+/// unit-tested so the brevity contract is pinned without a live call.
+fn anthropic_body(model: &str, prompt: &str, max_tokens: Option<u32>) -> serde_json::Value {
+    json!({
+        "model": model,
+        "max_tokens": max_tokens.unwrap_or(1024),
+        "messages": [{ "role": "user", "content": prompt }],
+        "stream": true,
+    })
+}
+
 async fn run_anthropic(
     model: &str,
     key: &str,
@@ -228,12 +244,7 @@ async fn run_anthropic(
         .timeout(timeout)
         .build()
         .context("reqwest build")?;
-    let body = json!({
-        "model": model,
-        "max_tokens": max_tokens.unwrap_or(1024),
-        "messages": [{ "role": "user", "content": prompt }],
-        "stream": true,
-    });
+    let body = anthropic_body(model, prompt, max_tokens);
     let key = key.to_string();
     let model = model.to_string();
     let (tx, rx) = mpsc::channel::<StreamEvent>(64);
@@ -629,8 +640,8 @@ async fn codex_exchange_code(
 const CODEX_INSTRUCTIONS: &str =
     "You are a concise, helpful reading tutor. Answer the reader's request directly.";
 
-fn codex_responses_body(model: &str, prompt: &str) -> serde_json::Value {
-    json!({
+fn codex_responses_body(model: &str, prompt: &str, max_tokens: Option<u32>) -> serde_json::Value {
+    let mut body = json!({
         "model": model,
         "instructions": CODEX_INSTRUCTIONS,
         "input": [
@@ -638,7 +649,18 @@ fn codex_responses_body(model: &str, prompt: &str) -> serde_json::Value {
         ],
         "stream": true,
         "store": false,
-    })
+    });
+    // The Responses API honors `max_output_tokens` as the hard generated-token
+    // ceiling, so the depth-appropriate brevity cap from `max_tokens_for` is
+    // threaded here (previously the Codex path dropped its cap on the floor and
+    // relied on prompt-level brevity alone). Omitted when None so a capless
+    // caller — or a future model that rejects the field — sends the same body as
+    // before. The prompt's brevity directives remain the primary length control;
+    // this is the backstop, matching the other providers.
+    if let Some(cap) = max_tokens {
+        body["max_output_tokens"] = json!(cap);
+    }
+    body
 }
 
 /// Map one Codex Responses-API SSE line to an outcome. Pure → unit-tested.
@@ -690,7 +712,7 @@ async fn codex_post(
 async fn run_codex(
     model: &str,
     prompt: &str,
-    _max_tokens: Option<u32>,
+    max_tokens: Option<u32>,
     timeout: Duration,
 ) -> Result<mpsc::Receiver<StreamEvent>> {
     let mut creds = load_codex().ok_or_else(|| {
@@ -700,7 +722,7 @@ async fn run_codex(
         .timeout(timeout)
         .build()
         .context("reqwest build")?;
-    let body = codex_responses_body(model, prompt);
+    let body = codex_responses_body(model, prompt, max_tokens);
 
     let mut resp = codex_post(&client, &creds.access_token, &creds.account_id, &body).await;
 
@@ -907,7 +929,9 @@ async fn test_codex(model: &str, timeout: Duration) -> ConnTest {
         Ok(c) => c,
         Err(e) => return (false, None, format!("client build: {e}")),
     };
-    let body = codex_responses_body(model, "ping");
+    // Reachability probe only — no brevity cap needed (keeps the body identical
+    // to the pre-cap test request).
+    let body = codex_responses_body(model, "ping", None);
     let mut resp = codex_post(&client, &creds.access_token, &creds.account_id, &body).await;
     if let Ok(r) = &resp {
         if r.status() == reqwest::StatusCode::UNAUTHORIZED {
@@ -1085,7 +1109,7 @@ mod tests {
 
     #[test]
     fn codex_body_is_a_streaming_responses_request() {
-        let b = codex_responses_body("gpt-5.5", "hello");
+        let b = codex_responses_body("gpt-5.5", "hello", None);
         assert_eq!(b["model"], "gpt-5.5");
         assert_eq!(b["input"][0]["content"][0]["text"], "hello");
         assert_eq!(b["stream"], true);
@@ -1095,9 +1119,144 @@ mod tests {
             .unwrap_or(false));
     }
 
+    /// Cross-provider brevity contract: the depth-appropriate cap from
+    /// `commands::ai::max_tokens_for` must reach EACH provider's constructed
+    /// request body — not just the LM Studio path. These pin the body fields so a
+    /// regression that drops the cap (as the Codex path originally did with its
+    /// ignored `_max_tokens`, or Anthropic's silent 1024 default) is caught
+    /// offline, with no live call. The exact Brief/Deep numbers are the tier
+    /// ceilings owned by `commands::ai`; here we assert the cap the caller passes
+    /// is the cap the body carries.
+    #[test]
+    fn anthropic_body_carries_the_callers_brevity_cap() {
+        // Brief tier value.
+        let brief = anthropic_body("claude-opus-4-8", "hi", Some(200));
+        assert_eq!(
+            brief["max_tokens"], 200,
+            "Anthropic body must carry the Brief cap, not the silent 1024 default"
+        );
+        // Deep tier value — a different number proves it's threaded, not hardcoded.
+        let deep = anthropic_body("claude-opus-4-8", "hi", Some(450));
+        assert_eq!(
+            deep["max_tokens"], 450,
+            "Anthropic body must carry the Deep cap"
+        );
+        assert_eq!(deep["stream"], true);
+        assert_eq!(deep["model"], "claude-opus-4-8");
+        // Only the no-cap fallback hits the generous floor; the real call site
+        // always passes Some(..), so this can never be MORE restrictive than a tier.
+        let fallback = anthropic_body("claude-opus-4-8", "hi", None);
+        assert_eq!(
+            fallback["max_tokens"], 1024,
+            "a capless caller falls back to a generous floor, never a tighter one"
+        );
+    }
+
+    #[test]
+    fn codex_body_carries_the_callers_brevity_cap_as_max_output_tokens() {
+        // The Responses API uses `max_output_tokens` for the generated-token ceiling.
+        let brief = codex_responses_body("gpt-5.5", "hi", Some(200));
+        assert_eq!(
+            brief["max_output_tokens"], 200,
+            "Codex body must honor the Brief cap (was previously ignored)"
+        );
+        let deep = codex_responses_body("gpt-5.5", "hi", Some(450));
+        assert_eq!(
+            deep["max_output_tokens"], 450,
+            "Codex body must honor the Deep cap"
+        );
+        // With no cap the field is omitted entirely, so a capless / probe request
+        // (and any future model that rejects the field) sends the original body.
+        let none = codex_responses_body("gpt-5.5", "hi", None);
+        assert!(
+            none.get("max_output_tokens").is_none(),
+            "no cap → field omitted, body unchanged from the pre-cap shape"
+        );
+    }
+
     // ── Live checks (ignore-gated; network + real creds; never run in CI) ──
     // Run e.g.: `cargo test --lib -- --ignored live_anthropic --nocapture`.
     // They read keys from env / ~/.codex and never print the secret.
+
+    /// HUMAN-RUN ONCE: proves the Anthropic brevity cap actually clamps generation
+    /// end-to-end (the unit tests only pin the body field; only a real round-trip
+    /// proves the API honors it). A deliberately verbose prompt under a TINY 24-tok
+    /// cap must come back short — if the cap were dropped the reply would run long.
+    ///   ANTHROPIC_API_KEY=… cargo test --lib -- --ignored live_anthropic_brevity_cap --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn live_anthropic_brevity_cap() {
+        let key = std::env::var("ANTHROPIC_API_KEY").expect("set ANTHROPIC_API_KEY");
+        let cap = 24u32;
+        let mut rx = run_anthropic(
+            "claude-opus-4-8",
+            &key,
+            "Write three long paragraphs about the history of typography.",
+            Some(cap),
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("run_anthropic");
+        let mut got = String::new();
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                StreamEvent::Delta { text } => got.push_str(&text),
+                StreamEvent::Done => break,
+                StreamEvent::Error { message } => panic!("anthropic stream error: {message}"),
+            }
+        }
+        let words = got.split_whitespace().count();
+        println!("[anthropic-brevity] cap={cap} got {words} words :: {got:?}");
+        assert!(!got.trim().is_empty(), "expected SOME streamed reply");
+        // A 24-token ceiling can't produce three paragraphs; allow generous slack
+        // for tokenizer/word skew but catch a dropped cap (which would run long).
+        assert!(
+            words <= 60,
+            "a {cap}-token cap must clamp output; got {words} words — is the cap reaching the wire?"
+        );
+    }
+
+    /// HUMAN-RUN ONCE: same brevity proof for the Codex Responses path, whose cap
+    /// (`max_output_tokens`) was previously ignored entirely. Needs a real Codex
+    /// (ChatGPT) login in ~/.codex or the app-owned Keychain creds.
+    ///   cargo test --lib -- --ignored live_codex_brevity_cap --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn live_codex_brevity_cap() {
+        let cap = 24u32;
+        let mut rx = match run_codex(
+            "gpt-5.5",
+            "Write three long paragraphs about the history of typography.",
+            Some(cap),
+            Duration::from_secs(30),
+        )
+        .await
+        {
+            Ok(rx) => rx,
+            Err(e) => {
+                println!("[codex-brevity] skipped (no login?): {e}");
+                return;
+            }
+        };
+        let mut got = String::new();
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                StreamEvent::Delta { text } => got.push_str(&text),
+                StreamEvent::Done => break,
+                StreamEvent::Error { message } => {
+                    // Codex backend is an unofficial/fragile contract — report, don't fail.
+                    println!("[codex-brevity] stream error: {message}");
+                    return;
+                }
+            }
+        }
+        let words = got.split_whitespace().count();
+        println!("[codex-brevity] cap={cap} got {words} words :: {got:?}");
+        assert!(
+            words <= 60,
+            "a {cap}-token cap must clamp Codex output; got {words} words — is max_output_tokens honored?"
+        );
+    }
 
     #[tokio::test]
     #[ignore]

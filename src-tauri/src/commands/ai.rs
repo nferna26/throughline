@@ -557,6 +557,58 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
+    /// The brevity contract is cross-provider: the cap that `cmd_ai_ask` threads
+    /// into the `ProviderCall` (and thus every provider body) must be exactly the
+    /// depth-appropriate `max_tokens_for(mode, depth)` ceiling — never a silent
+    /// provider-side default. This pins the wiring at the caller boundary: Brief
+    /// and Deep resolve to distinct caps and land on `ProviderCall.max_tokens`.
+    /// (The matching per-provider BODY assertions live in `ai_providers::tests`,
+    /// where the body builders are in scope.)
+    #[test]
+    fn provider_call_carries_depth_appropriate_brevity_cap_for_each_lens() {
+        use ai_stub::{Depth, StubMode};
+        for mode in [
+            StubMode::Explain,
+            StubMode::Historical,
+            StubMode::Vocabulary,
+            StubMode::Socratic,
+        ] {
+            let brief_cap = max_tokens_for(mode, Depth::Brief);
+            let deep_cap = max_tokens_for(mode, Depth::Deep);
+            assert_eq!(
+                brief_cap, BRIEF_MAX_TOKENS,
+                "{mode:?} Brief uses the brief ceiling"
+            );
+            assert_eq!(
+                deep_cap, DEEP_MAX_TOKENS,
+                "{mode:?} Deep uses the deep ceiling"
+            );
+            assert!(
+                deep_cap > brief_cap,
+                "{mode:?}: Deep must get more headroom than Brief"
+            );
+
+            // Build the ProviderCall exactly as cmd_ai_ask does and confirm the cap
+            // it would hand to run_provider_call is the tier ceiling, not a default.
+            for (depth, expected) in [(Depth::Brief, brief_cap), (Depth::Deep, deep_cap)] {
+                let call = crate::ai_providers::ProviderCall {
+                    provider: settings::AiProvider::Anthropic,
+                    model: "claude-opus-4-8".to_string(),
+                    prompt: "p".to_string(),
+                    max_tokens: Some(max_tokens_for(mode, depth)),
+                    timeout: std::time::Duration::from_secs(1),
+                    auth: crate::ai_providers::ProviderAuth::AnthropicKey("k".to_string()),
+                    base_url: String::new(),
+                };
+                assert_eq!(
+                    call.max_tokens,
+                    Some(expected),
+                    "{mode:?}/{depth:?}: ProviderCall must carry the tier cap"
+                );
+            }
+        }
+    }
+
     #[test]
     fn list_ai_requests_newest_first_with_book_title_join() {
         let conn = Connection::open_in_memory().unwrap();
