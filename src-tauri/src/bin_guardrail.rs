@@ -43,13 +43,17 @@ pub fn init_isolated_data_dir(label: &str) -> PathBuf {
     // SET_VAR safety contract is met by that caller-side discipline.
     unsafe {
         std::env::set_var("THROUGHLINE_DATA_DIR", root.to_string_lossy().to_string());
-        std::env::set_var("THROUGHLINE_EXPORT_DIR", export.to_string_lossy().to_string());
+        std::env::set_var(
+            "THROUGHLINE_EXPORT_DIR",
+            export.to_string_lossy().to_string(),
+        );
     }
 
     // Re-resolve through the same functions the rest of the code uses, and
     // assert both overrides took effect.
     let sys_temp = std::env::temp_dir();
-    let resolved_data = crate::paths::app_support_dir().expect("paths::app_support_dir after override");
+    let resolved_data =
+        crate::paths::app_support_dir().expect("paths::app_support_dir after override");
     assert!(
         resolved_data.starts_with(&sys_temp),
         "BIN GUARDRAIL VIOLATED: paths::app_support_dir() returned {:?}, which is NOT under std::env::temp_dir() ({:?}). \
@@ -57,7 +61,8 @@ pub fn init_isolated_data_dir(label: &str) -> PathBuf {
          Did init_isolated_data_dir() run before any code that opened the DB?",
         resolved_data, sys_temp
     );
-    let resolved_export = crate::paths::default_export_root().expect("paths::default_export_root after override");
+    let resolved_export =
+        crate::paths::default_export_root().expect("paths::default_export_root after override");
     assert!(
         resolved_export.starts_with(&sys_temp),
         "BIN GUARDRAIL VIOLATED: paths::default_export_root() returned {:?}, which is NOT under std::env::temp_dir() ({:?}). \
@@ -70,7 +75,13 @@ pub fn init_isolated_data_dir(label: &str) -> PathBuf {
 fn sanitize_label(label: &str) -> String {
     label
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 
@@ -88,9 +99,13 @@ mod tests {
         assert!(
             chosen.starts_with(&sys_temp),
             "isolated dir {:?} not under temp {:?}",
-            chosen, sys_temp
+            chosen,
+            sys_temp
         );
         let resolved = crate::paths::app_support_dir().unwrap();
-        assert_eq!(resolved, chosen, "paths::app_support_dir() must mirror the override");
+        assert_eq!(
+            resolved, chosen,
+            "paths::app_support_dir() must mirror the override"
+        );
     }
 }

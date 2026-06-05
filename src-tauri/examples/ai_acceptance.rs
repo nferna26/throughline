@@ -35,17 +35,22 @@ async fn main() -> anyhow::Result<()> {
     // ── 1. Loopback enforcement — the hard test ──
     println!("==> Loopback enforcement (local-only=ON)");
     let cases = [
-        ("https://api.openai.com/v1",     "remote provider"),
-        ("https://api.anthropic.com/v1",  "remote provider"),
-        ("http://192.168.1.10:1234/v1",   "LAN host"),
-        ("http://10.0.0.5/v1",            "private network"),
-        ("http://example.com/v1",         "public DNS"),
+        ("https://api.openai.com/v1", "remote provider"),
+        ("https://api.anthropic.com/v1", "remote provider"),
+        ("http://192.168.1.10:1234/v1", "LAN host"),
+        ("http://10.0.0.5/v1", "private network"),
+        ("http://example.com/v1", "public DNS"),
     ];
     for (url, kind) in cases {
         let r = ai_client::validate_base_url(url, true);
         match r {
-            Err(e) => println!("    ✓ refused {:40} ({}) — {}", url, kind, first_line(&e.to_string())),
-            Ok(_)  => anyhow::bail!("FAIL: should have refused {} ({})", url, kind),
+            Err(e) => println!(
+                "    ✓ refused {:40} ({}) — {}",
+                url,
+                kind,
+                first_line(&e.to_string())
+            ),
+            Ok(_) => anyhow::bail!("FAIL: should have refused {} ({})", url, kind),
         }
     }
     let loopback = [
@@ -55,13 +60,15 @@ async fn main() -> anyhow::Result<()> {
     ];
     for url in loopback {
         match ai_client::validate_base_url(url, true) {
-            Ok(_)  => println!("    ✓ allowed {}", url),
+            Ok(_) => println!("    ✓ allowed {}", url),
             Err(e) => anyhow::bail!("FAIL: should have allowed loopback {} ({})", url, e),
         }
     }
     // With local-only OFF, the remote URL becomes acceptable (opt-in).
     match ai_client::validate_base_url("https://api.openai.com/v1", false) {
-        Ok(_)  => println!("    ✓ allowed https://api.openai.com/v1 with local-only OFF (opt-in path)"),
+        Ok(_) => {
+            println!("    ✓ allowed https://api.openai.com/v1 with local-only OFF (opt-in path)")
+        }
         Err(e) => anyhow::bail!("FAIL: with local-only OFF, remote must be allowed: {}", e),
     }
 
@@ -85,8 +92,15 @@ async fn main() -> anyhow::Result<()> {
     ] {
         let preview = ai_stub::build_prompt(mode, &ctx);
         let payload = ai_client::build_request_body("test-model", &preview, true, Some(90));
-        assert_eq!(payload.messages[0].content, preview, "mode {:?}: preview != sent", mode);
-        println!("    ✓ mode={:?} preview bytes == messages[0].content bytes", mode);
+        assert_eq!(
+            payload.messages[0].content, preview,
+            "mode {:?}: preview != sent",
+            mode
+        );
+        println!(
+            "    ✓ mode={:?} preview bytes == messages[0].content bytes",
+            mode
+        );
     }
 
     // ── 3. Live local round-trip (if reachable) ──
@@ -95,7 +109,14 @@ async fn main() -> anyhow::Result<()> {
     let model = settings::get_ai_model(&conn);
     let local_only = settings::get_local_only(&conn);
     println!("    base_url   = {}", base_url);
-    println!("    model      = {}", if model.is_empty() { "(unset — type one in Settings)" } else { &model });
+    println!(
+        "    model      = {}",
+        if model.is_empty() {
+            "(unset — type one in Settings)"
+        } else {
+            &model
+        }
+    );
     println!("    local_only = {}", local_only);
 
     let preview_for_demo = ai_stub::build_prompt(ai_stub::StubMode::Explain, &ctx);
@@ -104,17 +125,26 @@ async fn main() -> anyhow::Result<()> {
 
     match ai_client::test_connection(&base_url, local_only).await {
         Ok((true, first_model)) => {
-            println!("    ✓ {} is reachable. First listed model: {:?}", base_url, first_model);
+            println!(
+                "    ✓ {} is reachable. First listed model: {:?}",
+                base_url, first_model
+            );
             // If no explicit model is set in Settings, fall back to the first one
             // the server advertises so the acceptance can still do a live call.
             if effective_model.is_empty() {
                 if let Some(fm) = first_model.clone() {
                     effective_model = fm;
-                    println!("    · Settings has no model id — falling back to first reachable: {}", effective_model);
+                    println!(
+                        "    · Settings has no model id — falling back to first reachable: {}",
+                        effective_model
+                    );
                 }
             }
             if !effective_model.is_empty() {
-                println!("    → Running Explain stub against {} with model '{}'...", base_url, effective_model);
+                println!(
+                    "    → Running Explain stub against {} with model '{}'...",
+                    base_url, effective_model
+                );
                 let opts = ai_client::ChatCallOpts {
                     base_url: base_url.clone(),
                     model: effective_model.clone(),
@@ -129,21 +159,32 @@ async fn main() -> anyhow::Result<()> {
                     Ok(mut rx) => {
                         let mut full = String::new();
                         let mut done = false;
-                        while let Some(ev) = tokio::time::timeout(Duration::from_secs(120), rx.recv())
-                            .await
-                            .unwrap_or(None)
+                        while let Some(ev) =
+                            tokio::time::timeout(Duration::from_secs(120), rx.recv())
+                                .await
+                                .unwrap_or(None)
                         {
                             match ev {
                                 ai_client::StreamEvent::Delta { text } => full.push_str(&text),
-                                ai_client::StreamEvent::Done => { done = true; break; }
+                                ai_client::StreamEvent::Done => {
+                                    done = true;
+                                    break;
+                                }
                                 ai_client::StreamEvent::Error { message } => {
                                     println!("    · stream error: {}", message);
                                     break;
                                 }
                             }
                         }
-                        println!("    streamed {} chars{}", full.chars().count(),
-                            if done { " (saw [DONE])" } else { " (stream cut)" });
+                        println!(
+                            "    streamed {} chars{}",
+                            full.chars().count(),
+                            if done {
+                                " (saw [DONE])"
+                            } else {
+                                " (stream cut)"
+                            }
+                        );
                         if !full.is_empty() {
                             let preview_len = full.chars().count().min(200);
                             let preview_str: String = full.chars().take(preview_len).collect();
@@ -158,7 +199,10 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Ok((false, _)) => {
-            println!("    · Not reachable at {} — Test-connection correctly reported NOT reachable.", base_url);
+            println!(
+                "    · Not reachable at {} — Test-connection correctly reported NOT reachable.",
+                base_url
+            );
         }
         Err(e) => {
             println!("    · test_connection error: {}", e);
@@ -207,11 +251,13 @@ fn demo_ephemeral_then_approve(
         params![book_id],
         |r| r.get(0),
     )?;
-    let author: Option<String> = conn.query_row(
-        "SELECT author FROM books WHERE id = ?1",
-        params![book_id],
-        |r| r.get(0),
-    ).ok();
+    let author: Option<String> = conn
+        .query_row(
+            "SELECT author FROM books WHERE id = ?1",
+            params![book_id],
+            |r| r.get(0),
+        )
+        .ok();
 
     println!("\n==> Ephemeral → approve invariant");
     let ai_id = format!("ai_{}", uuid::Uuid::new_v4().simple());
@@ -223,13 +269,18 @@ fn demo_ephemeral_then_approve(
     )?;
     let (provider, wrote): (Option<String>, i64) = conn.query_row(
         "SELECT provider, wrote_to_memory FROM ai_requests WHERE id = ?1",
-        params![ai_id], |r| Ok((r.get(0)?, r.get(1)?)),
+        params![ai_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    println!("    after generate: provider={:?}, wrote_to_memory={}", provider, wrote);
+    println!(
+        "    after generate: provider={:?}, wrote_to_memory={}",
+        provider, wrote
+    );
     assert_eq!(wrote, 0, "wrote_to_memory must be 0 before approval");
     let notes_before: i64 = conn.query_row(
         "SELECT COUNT(*) FROM notes WHERE book_id = ?1",
-        params![book_id], |r| r.get(0),
+        params![book_id],
+        |r| r.get(0),
     )?;
 
     // Approve: insert a note + flip wrote_to_memory.
@@ -271,7 +322,7 @@ fn demo_ephemeral_then_approve(
         created_at: "2026-05-24".to_string(),
         last_opened_at: None,
     };
-    let md_path = export::export_note(&export::root_for(&conn), &book, &note)?;
+    let md_path = export::export_note(&export::root_for(conn), &book, &note)?;
     conn.execute(
         "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
         params![md_path.to_string_lossy().to_string(), note_id],
@@ -279,13 +330,19 @@ fn demo_ephemeral_then_approve(
 
     let wrote_after: i64 = conn.query_row(
         "SELECT wrote_to_memory FROM ai_requests WHERE id = ?1",
-        params![ai_id], |r| r.get(0),
+        params![ai_id],
+        |r| r.get(0),
     )?;
     let notes_after: i64 = conn.query_row(
         "SELECT COUNT(*) FROM notes WHERE book_id = ?1",
-        params![book_id], |r| r.get(0),
+        params![book_id],
+        |r| r.get(0),
     )?;
-    println!("    after approve : wrote_to_memory={}, notes_added={}", wrote_after, notes_after - notes_before);
+    println!(
+        "    after approve : wrote_to_memory={}, notes_added={}",
+        wrote_after,
+        notes_after - notes_before
+    );
     println!("    note exported → {}", md_path.display());
     assert_eq!(wrote_after, 1);
     assert_eq!(notes_after - notes_before, 1);

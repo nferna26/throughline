@@ -39,7 +39,10 @@ pub fn cmd_get_settings(state: State<DbState>) -> Result<settings::SettingsDto, 
 }
 
 #[tauri::command]
-pub fn cmd_set_export_path(path: String, state: State<DbState>) -> Result<settings::SettingsDto, AppError> {
+pub fn cmd_set_export_path(
+    path: String,
+    state: State<DbState>,
+) -> Result<settings::SettingsDto, AppError> {
     let conn = state.0.lock()?;
     settings::set_export_path(&conn, &path).map_err(AppError::from)?;
     settings::build_dto(&conn).map_err(AppError::from)
@@ -68,12 +71,17 @@ pub fn cmd_set_ai_settings(
         if matches!(prov, AiProvider::Unset) {
             return Err(AppError::validation(format!("unknown AI provider: {p:?}")));
         }
-        settings::set_string(&conn, settings::KEY_AI_PROVIDER, prov.as_str()).map_err(AppError::from)?;
+        settings::set_string(&conn, settings::KEY_AI_PROVIDER, prov.as_str())
+            .map_err(AppError::from)?;
         // Keep the legacy ai_local_only flag in sync for any old reader of it.
         settings::set_string(
             &conn,
             settings::KEY_LOCAL_ONLY,
-            if matches!(prov, AiProvider::Local) { "true" } else { "false" },
+            if matches!(prov, AiProvider::Local) {
+                "true"
+            } else {
+                "false"
+            },
         )
         .map_err(AppError::from)?;
         if settings::get_string(&conn, settings::KEY_AI_PROVIDER_CHOSEN_AT).is_none() {
@@ -91,7 +99,11 @@ pub fn cmd_set_ai_settings(
         // No provider in this call → the model edits the CURRENT provider's model
         // (falling back to Local) so Settings can tweak a model without re-choosing.
         let cur = settings::get_ai_provider(&conn);
-        let target = if cur.is_remote() || matches!(cur, AiProvider::Local) { cur } else { AiProvider::Local };
+        let target = if cur.is_remote() || matches!(cur, AiProvider::Local) {
+            cur
+        } else {
+            AiProvider::Local
+        };
         settings::set_ai_model_for(&conn, target, m).map_err(AppError::from)?;
     }
 

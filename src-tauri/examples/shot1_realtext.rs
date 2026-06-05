@@ -85,7 +85,10 @@ fn main() -> anyhow::Result<()> {
     furthest = "imported";
 
     assert_eq!(book.source_type, "txt", "Shot 1 is text-first");
-    assert!(!book.source_sha256.is_empty(), "imported source must be SHA-256 hashed");
+    assert!(
+        !book.source_sha256.is_empty(),
+        "imported source must be SHA-256 hashed"
+    );
     let assignable: Vec<&models::BookSection> = sections.iter().filter(|s| s.assignable).collect();
     assert!(
         assignable.len() >= 3,
@@ -94,22 +97,35 @@ fn main() -> anyhow::Result<()> {
     );
     // Real Gutenberg Confessions has BOOK I..XIII headings → the importer must
     // pick those up, NOT fall back to even "Part N" chunks.
-    let part_like = assignable.iter().filter(|s| s.label.to_uppercase().starts_with("PART ")).count();
-    let chapterish = assignable.iter().filter(|s| looks_chapter_like(&s.label)).count();
-    println!(
-        "    title={:?} author={:?}",
-        book.title, book.author
-    );
+    let part_like = assignable
+        .iter()
+        .filter(|s| s.label.to_uppercase().starts_with("PART "))
+        .count();
+    let chapterish = assignable
+        .iter()
+        .filter(|s| looks_chapter_like(&s.label))
+        .count();
+    println!("    title={:?} author={:?}", book.title, book.author);
     println!(
         "    sections={} assignable={} chapter_like={} part_like={}",
-        sections.len(), assignable.len(), chapterish, part_like
+        sections.len(),
+        assignable.len(),
+        chapterish,
+        part_like
     );
-    println!("    first 6 section labels: {:?}",
-        assignable.iter().take(6).map(|s| s.label.clone()).collect::<Vec<_>>());
+    println!(
+        "    first 6 section labels: {:?}",
+        assignable
+            .iter()
+            .take(6)
+            .map(|s| s.label.clone())
+            .collect::<Vec<_>>()
+    );
     assert!(
         chapterish >= 3,
         "sectioning must be chapter-like (BOOK/CHAPTER headings), got {} chapter-like of {}",
-        chapterish, assignable.len()
+        chapterish,
+        assignable.len()
     );
     assert_eq!(
         part_like, 0,
@@ -143,27 +159,64 @@ fn main() -> anyhow::Result<()> {
 
     // ── M3: Today is plan-ready / NOT behind before any session ────────────
     let computed = plan::compute(&plan, &sections, &[])?;
-    assert_eq!(plan.status, "plan_ready", "fresh import is plan_ready, not active");
-    assert_eq!(computed.plan_status, "plan_ready", "computed plan_status mirrors plan_ready");
+    assert_eq!(
+        plan.status, "plan_ready",
+        "fresh import is plan_ready, not active"
+    );
+    assert_eq!(
+        computed.plan_status, "plan_ready",
+        "computed plan_status mirrors plan_ready"
+    );
     assert!(
         matches!(computed.pace, models::PaceState::NotStarted),
-        "a freshly imported book must never read as behind, got {:?}", computed.pace
+        "a freshly imported book must never read as behind, got {:?}",
+        computed.pace
     );
-    assert!(computed.forecast.is_none(), "no slip forecast before activation");
-    println!("    Today: plan_status={} pace=NotStarted (calm, not behind) ✓", computed.plan_status);
+    assert!(
+        computed.forecast.is_none(),
+        "no slip forecast before activation"
+    );
+    println!(
+        "    Today: plan_status={} pace=NotStarted (calm, not behind) ✓",
+        computed.plan_status
+    );
 
     // ── M4: open day-1 section → real prose, no header bleed ───────────────
-    let day1_idx = computed.assigned_section_index.expect("plan assigns a day-1 section");
+    let day1_idx = computed
+        .assigned_section_index
+        .expect("plan assigns a day-1 section");
     let day1 = sections[day1_idx].clone();
     assert!(day1.assignable, "day 1 must be an assignable section");
-    assert!(looks_chapter_like(&day1.label), "day-1 label must be chapter-like, got {:?}", day1.label);
-    let start: usize = day1.start_locator.as_deref().unwrap_or("0").parse().unwrap_or(0);
+    assert!(
+        looks_chapter_like(&day1.label),
+        "day-1 label must be chapter-like, got {:?}",
+        day1.label
+    );
+    let start: usize = day1
+        .start_locator
+        .as_deref()
+        .unwrap_or("0")
+        .parse()
+        .unwrap_or(0);
     let end: Option<usize> = day1.end_locator.as_deref().and_then(|s| s.parse().ok());
     let body = commands::books::read_txt_section(&book.id, start, end)?;
-    assert!(body.trim().chars().count() > 200, "day-1 section must render real prose");
-    assert!(!body.contains("START OF THE PROJECT GUTENBERG"), "PG header must not bleed into section text");
-    assert!(!body.contains("Project Gutenberg License"), "PG license must not bleed into section text");
-    println!("    DAY 1 → {:?} ({} chars, no header bleed) ✓", day1.label, body.trim().chars().count());
+    assert!(
+        body.trim().chars().count() > 200,
+        "day-1 section must render real prose"
+    );
+    assert!(
+        !body.contains("START OF THE PROJECT GUTENBERG"),
+        "PG header must not bleed into section text"
+    );
+    assert!(
+        !body.contains("Project Gutenberg License"),
+        "PG license must not bleed into section text"
+    );
+    println!(
+        "    DAY 1 → {:?} ({} chars, no header bleed) ✓",
+        day1.label,
+        body.trim().chars().count()
+    );
     furthest = "opened-day1";
 
     // ── Normal session: complete the day-1 section ─────────────────────────
@@ -182,7 +235,8 @@ fn main() -> anyhow::Result<()> {
     )?;
     let done: i64 = conn.query_row(
         "SELECT COUNT(*) FROM section_progress WHERE book_id = ?1 AND completed_at IS NOT NULL",
-        params![book.id], |r| r.get(0),
+        params![book.id],
+        |r| r.get(0),
     )?;
     assert_eq!(done, 1, "normal session completes exactly one section");
 
@@ -195,14 +249,23 @@ fn main() -> anyhow::Result<()> {
     )?;
     let (ended, completed_assignment): (Option<String>, i64) = conn.query_row(
         "SELECT ended_at, completed_assignment FROM reading_sessions WHERE id = ?1",
-        params![sess_rescue], |r| Ok((r.get(0)?, r.get(1)?)),
+        params![sess_rescue],
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     assert!(ended.is_some(), "a rescue session still ends");
-    assert_eq!(completed_assignment, 0, "rescue session forces no completion — and that counts");
+    assert_eq!(
+        completed_assignment, 0,
+        "rescue session forces no completion — and that counts"
+    );
     let total_sessions: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM reading_sessions WHERE book_id = ?1", params![book.id], |r| r.get(0),
+        "SELECT COUNT(*) FROM reading_sessions WHERE book_id = ?1",
+        params![book.id],
+        |r| r.get(0),
     )?;
-    assert_eq!(total_sessions, 2, "both the normal and rescue sittings persisted");
+    assert_eq!(
+        total_sessions, 2,
+        "both the normal and rescue sittings persisted"
+    );
     println!("    sessions: 1 normal (1 section done) + 1 rescue (0 sections, still ended) ✓");
     furthest = "sessions";
 
@@ -211,7 +274,10 @@ fn main() -> anyhow::Result<()> {
     // kind of text that must NEVER reach the exported Markdown. The note body is
     // the reader's own words (what the fixed tutor card requires).
     let passage: String = body.trim().chars().skip(20).take(80).collect();
-    assert!(passage.len() > 20, "need a real passage to prove it is not exported");
+    assert!(
+        passage.len() > 20,
+        "need a real passage to prove it is not exported"
+    );
     let user_words = "My own paraphrase: the restless heart is the book's first note to itself.";
     let tutor = models::Note {
         id: format!("note_{}", Uuid::new_v4().simple()),
@@ -240,19 +306,40 @@ fn main() -> anyhow::Result<()> {
 
     // Export landed in the isolated dir, never ~/GBrain.
     let sys_temp = std::env::temp_dir();
-    assert!(md_path.starts_with(&sys_temp), "export escaped isolation: {:?}", md_path);
+    assert!(
+        md_path.starts_with(&sys_temp),
+        "export escaped isolation: {:?}",
+        md_path
+    );
     // Required safe frontmatter + the user's own words present.
-    for needle in ["type: reading_note", "source_private: true", "note_type: TutorNote", "locator: ", "chapter: "] {
-        assert!(md.contains(needle), "exported TutorNote missing `{}`:\n{}", needle, md);
+    for needle in [
+        "type: reading_note",
+        "source_private: true",
+        "note_type: TutorNote",
+        "locator: ",
+        "chapter: ",
+    ] {
+        assert!(
+            md.contains(needle),
+            "exported TutorNote missing `{}`:\n{}",
+            needle,
+            md
+        );
     }
-    assert!(md.contains(user_words), "the reader's own words must be exported");
+    assert!(
+        md.contains(user_words),
+        "the reader's own words must be exported"
+    );
     // PRIVACY (AGENTS.md): the raw selected passage must NOT appear, and no AI
     // prompt fence should leak.
     assert!(
         !md.contains(passage.trim()),
         "PRIVACY VIOLATION: the selected passage leaked into exported Markdown"
     );
-    assert!(!md.contains("```"), "no prompt fence markers in exported Markdown");
+    assert!(
+        !md.contains("```"),
+        "no prompt fence markers in exported Markdown"
+    );
     println!("    TutorNote export: user words present; raw passage absent; source_private:true ✓");
     println!("    exported → {}", md_path.display());
 

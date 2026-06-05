@@ -52,7 +52,9 @@ pub trait Clock: Send + Sync {
 /// Production clock: real wall-clock `Instant::now()`.
 pub struct RealClock;
 impl Clock for RealClock {
-    fn now(&self) -> Instant { Instant::now() }
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
 }
 
 #[derive(Debug)]
@@ -69,7 +71,11 @@ pub struct Breaker {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum BreakerStateKind { Closed, Open, HalfOpen }
+pub enum BreakerStateKind {
+    Closed,
+    Open,
+    HalfOpen,
+}
 
 #[derive(Debug)]
 pub struct OpenError {
@@ -96,7 +102,9 @@ impl Breaker {
 
     pub fn with_clock(config: BreakerConfig, clock: Box<dyn Clock>) -> Self {
         Self {
-            state: Mutex::new(State::Closed { recent_failures: Vec::new() }),
+            state: Mutex::new(State::Closed {
+                recent_failures: Vec::new(),
+            }),
             config,
             clock,
         }
@@ -130,7 +138,9 @@ impl Breaker {
     /// failure window in Closed.
     pub fn on_success(&self) {
         let mut s = self.state.lock().unwrap();
-        *s = State::Closed { recent_failures: Vec::new() };
+        *s = State::Closed {
+            recent_failures: Vec::new(),
+        };
     }
 
     /// Record a failed call. Increments the rolling window in Closed; trips
@@ -174,7 +184,9 @@ mod tests {
     }
     impl ManualClock {
         fn new() -> Arc<Self> {
-            Arc::new(Self { now: Mutex::new(Instant::now()) })
+            Arc::new(Self {
+                now: Mutex::new(Instant::now()),
+            })
         }
         fn advance(&self, d: Duration) {
             let mut t = self.now.lock().unwrap();
@@ -182,18 +194,30 @@ mod tests {
         }
     }
     impl Clock for ManualClock {
-        fn now(&self) -> Instant { *self.now.lock().unwrap() }
+        fn now(&self) -> Instant {
+            *self.now.lock().unwrap()
+        }
     }
 
     struct SharedClock(Arc<ManualClock>);
     impl Clock for SharedClock {
-        fn now(&self) -> Instant { self.0.now() }
+        fn now(&self) -> Instant {
+            self.0.now()
+        }
     }
 
-    fn breaker(threshold: usize, window: Duration, cool_down: Duration) -> (Breaker, Arc<ManualClock>) {
+    fn breaker(
+        threshold: usize,
+        window: Duration,
+        cool_down: Duration,
+    ) -> (Breaker, Arc<ManualClock>) {
         let clock = ManualClock::new();
         let b = Breaker::with_clock(
-            BreakerConfig { failure_threshold: threshold, window, cool_down },
+            BreakerConfig {
+                failure_threshold: threshold,
+                window,
+                cool_down,
+            },
             Box::new(SharedClock(clock.clone())),
         );
         (b, clock)
@@ -234,7 +258,9 @@ mod tests {
     #[test]
     fn cool_down_then_half_open_then_success_closes() {
         let (b, c) = breaker(3, Duration::from_secs(60), Duration::from_secs(30));
-        b.on_failure(); b.on_failure(); b.on_failure();
+        b.on_failure();
+        b.on_failure();
+        b.on_failure();
         assert_eq!(b.current_state(), BreakerStateKind::Open);
 
         // Before cool-down elapses, check() still errors.
@@ -254,7 +280,9 @@ mod tests {
     #[test]
     fn cool_down_then_half_open_then_failure_reopens() {
         let (b, c) = breaker(3, Duration::from_secs(60), Duration::from_secs(30));
-        b.on_failure(); b.on_failure(); b.on_failure();
+        b.on_failure();
+        b.on_failure();
+        b.on_failure();
         c.advance(Duration::from_secs(31));
         assert!(b.check().is_ok());
         assert_eq!(b.current_state(), BreakerStateKind::HalfOpen);
@@ -268,7 +296,8 @@ mod tests {
     #[test]
     fn success_clears_partial_failure_window() {
         let (b, _c) = breaker(3, Duration::from_secs(60), Duration::from_secs(30));
-        b.on_failure(); b.on_failure();
+        b.on_failure();
+        b.on_failure();
         b.on_success(); // wipes the recent_failures buffer
         b.on_failure();
         assert_eq!(b.current_state(), BreakerStateKind::Closed);

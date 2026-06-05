@@ -1,9 +1,9 @@
-/// Classify EPUB spine items into assignable (real reading) vs structural
-/// front/back matter (cover, title page, contents, copyright, also-by, …).
-///
-/// The classifier is intentionally conservative: when uncertain it returns
-/// `true` (assignable). Losing chapter one is much worse than keeping one
-/// stray front-matter page.
+//! Classify EPUB spine items into assignable (real reading) vs structural
+//! front/back matter (cover, title page, contents, copyright, also-by, …).
+//!
+//! The classifier is intentionally conservative: when uncertain it returns
+//! `true` (assignable). Losing chapter one is much worse than keeping one
+//! stray front-matter page.
 
 /// Match logic for "this item is structural front/back matter, don't put it
 /// in the plan." Returns false (= assignable) for anything that doesn't look
@@ -41,7 +41,7 @@ fn matches(needle: &str, idref: &str) -> bool {
         "halftitle",
         "frontispiece",
         "table of contents",
-        "contents",        // safe: a real chapter title would be "X: Contents" not just "Contents"
+        "contents", // safe: a real chapter title would be "X: Contents" not just "Contents"
         "toc",
         "copyright",
         "colophon",
@@ -74,9 +74,9 @@ fn matches(needle: &str, idref: &str) -> bool {
     // they are never filename-form and stay assignable.
     if let Some(stem) = filename_stem(needle).or_else(|| filename_stem(&idref_l)) {
         const FILENAME_SKIP_STEMS: &[&str] = &[
-            "praise",     // praise.xhtml — endorsement blurbs
-            "blurb",      // opening-blurb.xhtml
-            "quote",      // quote.xhtml — standalone epigraph page
+            "praise", // praise.xhtml — endorsement blurbs
+            "blurb",  // opening-blurb.xhtml
+            "quote",  // quote.xhtml — standalone epigraph page
             "epigraph",
             "frontmatter",
             "endpaper",
@@ -91,7 +91,7 @@ fn matches(needle: &str, idref: &str) -> bool {
     // Common compressed idrefs publishers use for back matter.
     // Match as a whole token so we don't catch "Chapter_*" by accident.
     const SKIP_IDREF_TOKENS: &[&str] = &[
-        "ba",            // "Books also by" / "By Andrew" — publisher shorthand
+        "ba", // "Books also by" / "By Andrew" — publisher shorthand
         "bookalso",
         "alsoby",
         "newsletter",
@@ -144,10 +144,26 @@ mod tests {
 
     #[test]
     fn keeps_real_chapters() {
-        assert!(!is_front_back_matter(Some("Introduction"), "Introduction", true));
-        assert!(!is_front_back_matter(Some("Part I: Network Effects"), "Part_1", true));
-        assert!(!is_front_back_matter(Some("1. What’s a Network Effect, Anyway?"), "Chapter_1", true));
-        assert!(!is_front_back_matter(Some("Conclusion: The Future of Network Effects"), "Conclusion", true));
+        assert!(!is_front_back_matter(
+            Some("Introduction"),
+            "Introduction",
+            true
+        ));
+        assert!(!is_front_back_matter(
+            Some("Part I: Network Effects"),
+            "Part_1",
+            true
+        ));
+        assert!(!is_front_back_matter(
+            Some("1. What’s a Network Effect, Anyway?"),
+            "Chapter_1",
+            true
+        ));
+        assert!(!is_front_back_matter(
+            Some("Conclusion: The Future of Network Effects"),
+            "Conclusion",
+            true
+        ));
         // Notes can be substantive endnotes — keep by default.
         assert!(!is_front_back_matter(None, "Notes", true));
         // Foreword / Preface / Prologue are usually real reading.
@@ -167,9 +183,18 @@ mod tests {
         // No human TOC label → the caller passes the href basename. These must be
         // skipped even though "praise for" / "blurb" / "quote" as phrases don't
         // appear. This is the "Obviously Awesome starts on a praise page" bug.
-        assert!(is_front_back_matter(Some("praise.xhtml"), "praise", true), "praise.xhtml is endorsement boilerplate");
-        assert!(is_front_back_matter(Some("opening-blurb.xhtml"), "opening-blurb", true), "blurb page is boilerplate");
-        assert!(is_front_back_matter(Some("quote.xhtml"), "quote", true), "standalone quote page is an epigraph");
+        assert!(
+            is_front_back_matter(Some("praise.xhtml"), "praise", true),
+            "praise.xhtml is endorsement boilerplate"
+        );
+        assert!(
+            is_front_back_matter(Some("opening-blurb.xhtml"), "opening-blurb", true),
+            "blurb page is boilerplate"
+        );
+        assert!(
+            is_front_back_matter(Some("quote.xhtml"), "quote", true),
+            "standalone quote page is an epigraph"
+        );
         // Also catch it when the label is absent and only the idref is filename-y.
         assert!(is_front_back_matter(None, "Text/praise.xhtml", true));
     }
@@ -178,11 +203,27 @@ mod tests {
     fn keeps_filename_form_real_content() {
         // A filename-form label that ISN'T boilerplate stays assignable — the
         // operator's rule: skip marketing wrappers, keep authored intros/chapters.
-        assert!(!is_front_back_matter(Some("introduction.xhtml"), "introduction", true));
-        assert!(!is_front_back_matter(Some("chapter1.xhtml"), "chapter1", true));
+        assert!(!is_front_back_matter(
+            Some("introduction.xhtml"),
+            "introduction",
+            true
+        ));
+        assert!(!is_front_back_matter(
+            Some("chapter1.xhtml"),
+            "chapter1",
+            true
+        ));
         assert!(!is_front_back_matter(Some("part1.xhtml"), "part1", true));
-        assert!(!is_front_back_matter(Some("foreword.xhtml"), "foreword", true));
-        assert!(!is_front_back_matter(Some("preface.xhtml"), "preface", true));
+        assert!(!is_front_back_matter(
+            Some("foreword.xhtml"),
+            "foreword",
+            true
+        ));
+        assert!(!is_front_back_matter(
+            Some("preface.xhtml"),
+            "preface",
+            true
+        ));
     }
 
     #[test]

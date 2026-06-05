@@ -40,7 +40,7 @@ pub fn cmd_save_note(
     )?;
 
     let note = read_note(&conn, &id)?;
-    Ok(reexport_note(&conn, note)?)
+    reexport_note(&conn, note)
 }
 
 /// Update an existing note in place (autosave / edit on a marginalia card).
@@ -72,7 +72,7 @@ pub fn cmd_update_note(
         return Err(AppError::not_found("note", Some(note_id)));
     }
     let note = read_note(&conn, &note_id)?;
-    Ok(reexport_note(&conn, note)?)
+    reexport_note(&conn, note)
 }
 
 /// Delete a note and remove its exported Markdown mirror (so the notebook and
@@ -129,7 +129,9 @@ pub fn cmd_list_notes(book_id: String, state: State<DbState>) -> Result<Vec<Note
     )?;
     let rows = stmt.query_map(params![book_id], note_from_row)?;
     let mut out = Vec::new();
-    for r in rows { out.push(r?); }
+    for r in rows {
+        out.push(r?);
+    }
     Ok(out)
 }
 
@@ -158,7 +160,11 @@ mod tests {
 
     fn insert_note(conn: &Connection, id: &str, anchor: Option<(&str, &str, &str)>) {
         let (start, end, text) = match anchor {
-            Some((s, e, t)) => (Some(s.to_string()), Some(e.to_string()), Some(t.to_string())),
+            Some((s, e, t)) => (
+                Some(s.to_string()),
+                Some(e.to_string()),
+                Some(t.to_string()),
+            ),
             None => (None, None, None),
         };
         conn.execute(
@@ -172,7 +178,11 @@ mod tests {
     #[test]
     fn anchor_columns_round_trip_through_hydrator() {
         let conn = migrated();
-        insert_note(&conn, "note_a", Some(("char:120", "char:180", "a highlighted run")));
+        insert_note(
+            &conn,
+            "note_a",
+            Some(("char:120", "char:180", "a highlighted run")),
+        );
         let note = read_note(&conn, "note_a").unwrap();
         assert_eq!(note.anchor_start.as_deref(), Some("char:120"));
         assert_eq!(note.anchor_end.as_deref(), Some("char:180"));
@@ -203,13 +213,24 @@ mod tests {
                anchored_text = COALESCE(?5, anchored_text),
                updated_at = ?6
              WHERE id = ?1",
-            params!["note_c", Option::<String>::None, Some("edited body"), Option::<String>::None, Option::<String>::None, "2026-05-29T11:00:00Z"],
+            params![
+                "note_c",
+                Option::<String>::None,
+                Some("edited body"),
+                Option::<String>::None,
+                Option::<String>::None,
+                "2026-05-29T11:00:00Z"
+            ],
         )
         .unwrap();
         let note = read_note(&conn, "note_c").unwrap();
         assert_eq!(note.body, "edited body", "body patched");
         assert_eq!(note.note_type, "MarginNote", "type preserved by COALESCE");
-        assert_eq!(note.anchored_text.as_deref(), Some("hi"), "anchor preserved");
+        assert_eq!(
+            note.anchored_text.as_deref(),
+            Some("hi"),
+            "anchor preserved"
+        );
         assert_ne!(note.updated_at, note.created_at, "updated_at advanced");
     }
 
@@ -217,7 +238,8 @@ mod tests {
     fn delete_removes_row() {
         let conn = migrated();
         insert_note(&conn, "note_d", None);
-        conn.execute("DELETE FROM notes WHERE id = ?1", params!["note_d"]).unwrap();
+        conn.execute("DELETE FROM notes WHERE id = ?1", params!["note_d"])
+            .unwrap();
         assert!(read_note(&conn, "note_d").is_err(), "row is gone");
     }
 }

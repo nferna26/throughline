@@ -244,7 +244,12 @@ fn v004_book_sections_assignable(conn: &Connection) -> Result<()> {
 /// `activated_at` is stamped on the first reading session; `original_finish_date`
 /// preserves the pre-rebalance target so the forecast has a stable baseline.
 fn v005_reading_plans_status(conn: &Connection) -> Result<()> {
-    add_column_if_missing(conn, "reading_plans", "status", "TEXT NOT NULL DEFAULT 'active'")?;
+    add_column_if_missing(
+        conn,
+        "reading_plans",
+        "status",
+        "TEXT NOT NULL DEFAULT 'active'",
+    )?;
     add_column_if_missing(conn, "reading_plans", "activated_at", "TEXT")?;
     add_column_if_missing(conn, "reading_plans", "original_finish_date", "TEXT")?;
     Ok(())
@@ -263,7 +268,12 @@ fn v006_notes_anchor(conn: &Connection) -> Result<()> {
 /// Idempotent ALTER ADD COLUMN. Used inside migration bodies so a DB that
 /// already has the column (because it was migrated via the pre-Shot-6a
 /// `add_column_if_missing` path) doesn't error.
-fn add_column_if_missing(conn: &Connection, table: &str, column: &str, col_type: &str) -> Result<()> {
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    col_type: &str,
+) -> Result<()> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
     let cols: Vec<String> = stmt
         .query_map([], |r| r.get::<_, String>(1))?
@@ -327,10 +337,16 @@ mod tests {
         // Apply v001 manually
         v001_init_base_tables(&conn).unwrap();
         // Apply v002..v004's columns out-of-band, the old way
-        conn.execute("ALTER TABLE section_progress ADD COLUMN last_percent REAL", [])
-            .unwrap();
-        conn.execute("ALTER TABLE section_progress ADD COLUMN updated_at TEXT", [])
-            .unwrap();
+        conn.execute(
+            "ALTER TABLE section_progress ADD COLUMN last_percent REAL",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "ALTER TABLE section_progress ADD COLUMN updated_at TEXT",
+            [],
+        )
+        .unwrap();
         conn.execute(
             "ALTER TABLE book_sections ADD COLUMN assignable INTEGER NOT NULL DEFAULT 1",
             [],

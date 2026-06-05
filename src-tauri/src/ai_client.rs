@@ -92,7 +92,10 @@ pub fn build_openai_cloud_body(
 ) -> ChatRequest {
     ChatRequest {
         model: model.to_string(),
-        messages: vec![ChatMessage { role: "user".to_string(), content: prompt.to_string() }],
+        messages: vec![ChatMessage {
+            role: "user".to_string(),
+            content: prompt.to_string(),
+        }],
         stream,
         temperature: None,
         max_tokens: None,
@@ -125,7 +128,10 @@ pub fn validate_base_url(base_url: &str, local_only: bool) -> Result<Url> {
     let url = Url::parse(trimmed).with_context(|| format!("invalid AI base URL: {}", base_url))?;
     let scheme = url.scheme();
     if scheme != "http" && scheme != "https" {
-        return Err(anyhow!("AI base URL must be http or https (got {})", scheme));
+        return Err(anyhow!(
+            "AI base URL must be http or https (got {})",
+            scheme
+        ));
     }
     let host = url
         .host_str()
@@ -159,8 +165,6 @@ struct OpenAiStreamChunk {
 #[derive(Debug, Deserialize)]
 struct StreamChoice {
     delta: Option<StreamDelta>,
-    #[serde(default)]
-    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,12 +197,15 @@ pub fn parse_sse_data_line(line: &str) -> Result<Option<String>> {
     if trimmed.is_empty() {
         return Ok(None);
     }
-    let payload = trimmed.strip_prefix("data:").map(str::trim).unwrap_or(trimmed);
+    let payload = trimmed
+        .strip_prefix("data:")
+        .map(str::trim)
+        .unwrap_or(trimmed);
     if payload == "[DONE]" {
         return Ok(Some("[DONE]".to_string()));
     }
-    let chunk: OpenAiStreamChunk = serde_json::from_str(payload)
-        .with_context(|| format!("parsing SSE chunk: {}", payload))?;
+    let chunk: OpenAiStreamChunk =
+        serde_json::from_str(payload).with_context(|| format!("parsing SSE chunk: {}", payload))?;
     let mut text = String::new();
     for ch in &chunk.choices {
         if let Some(delta) = &ch.delta {
@@ -207,9 +214,7 @@ pub fn parse_sse_data_line(line: &str) -> Result<Option<String>> {
             }
         }
     }
-    if text.is_empty() && chunk.choices.iter().any(|c| c.finish_reason.is_some()) {
-        Ok(None)
-    } else if text.is_empty() {
+    if text.is_empty() {
         Ok(None)
     } else {
         Ok(Some(text))
@@ -276,7 +281,10 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
     };
     // Bearer token: real key for OpenAI cloud, else the literal "local" (LM Studio
     // ignores it; some endpoints require any token). Never logged.
-    let auth_token = opts.auth_token.clone().unwrap_or_else(|| "local".to_string());
+    let auth_token = opts
+        .auth_token
+        .clone()
+        .unwrap_or_else(|| "local".to_string());
 
     tokio::spawn(async move {
         // Local-only enforcement is also re-checked at the top of run_chat_call
@@ -292,7 +300,11 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
             Ok(r) => r,
             Err(e) => {
                 breaker().on_failure();
-                let _ = tx.send(StreamEvent::Error { message: format!("request failed: {}", e) }).await;
+                let _ = tx
+                    .send(StreamEvent::Error {
+                        message: format!("request failed: {}", e),
+                    })
+                    .await;
                 return;
             }
         };
@@ -317,7 +329,11 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
                     Ok(b) => b,
                     Err(e) => {
                         breaker().on_failure();
-                        let _ = tx.send(StreamEvent::Error { message: format!("stream error: {}", e) }).await;
+                        let _ = tx
+                            .send(StreamEvent::Error {
+                                message: format!("stream error: {}", e),
+                            })
+                            .await;
                         return;
                     }
                 };
@@ -360,7 +376,11 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
             match resp.json::<OpenAiBlockingResponse>().await {
                 Ok(j) => {
                     breaker().on_success();
-                    let text = j.choices.first().map(|c| c.message.content.clone()).unwrap_or_default();
+                    let text = j
+                        .choices
+                        .first()
+                        .map(|c| c.message.content.clone())
+                        .unwrap_or_default();
                     if !text.is_empty() {
                         let _ = tx.send(StreamEvent::Delta { text }).await;
                     }
@@ -394,11 +414,20 @@ pub async fn list_models(base_url: &str, local_only: bool) -> Result<Vec<String>
         return Err(anyhow!("models endpoint returned HTTP {}", resp.status()));
     }
     #[derive(Deserialize)]
-    struct ModelsResp { data: Option<Vec<ModelEntry>> }
+    struct ModelsResp {
+        data: Option<Vec<ModelEntry>>,
+    }
     #[derive(Deserialize)]
-    struct ModelEntry { id: String }
+    struct ModelEntry {
+        id: String,
+    }
     let parsed: ModelsResp = resp.json().await?;
-    let mut ids: Vec<String> = parsed.data.unwrap_or_default().into_iter().map(|m| m.id).collect();
+    let mut ids: Vec<String> = parsed
+        .data
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
     // Stable order so the dropdown doesn't shuffle between refreshes.
     ids.sort();
     Ok(ids)
@@ -424,11 +453,16 @@ pub async fn test_connection(base_url: &str, local_only: bool) -> Result<(bool, 
                 return Ok((false, None));
             }
             #[derive(Deserialize)]
-            struct ModelsResp { data: Option<Vec<ModelEntry>> }
+            struct ModelsResp {
+                data: Option<Vec<ModelEntry>>,
+            }
             #[derive(Deserialize)]
-            struct ModelEntry { id: String }
+            struct ModelEntry {
+                id: String,
+            }
             let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
-            let typed: ModelsResp = serde_json::from_value(body).unwrap_or(ModelsResp { data: None });
+            let typed: ModelsResp =
+                serde_json::from_value(body).unwrap_or(ModelsResp { data: None });
             let first = typed.data.and_then(|v| v.into_iter().next().map(|m| m.id));
             breaker().on_success();
             Ok((true, first))
@@ -470,8 +504,16 @@ mod tests {
         let r = validate_base_url("https://api.openai.com/v1", true);
         assert!(r.is_err(), "must refuse non-loopback when local-only ON");
         let msg = r.unwrap_err().to_string();
-        assert!(msg.contains("Local-only"), "error must mention local-only: {}", msg);
-        assert!(msg.contains("api.openai.com"), "error must name the rejected host: {}", msg);
+        assert!(
+            msg.contains("Local-only"),
+            "error must mention local-only: {}",
+            msg
+        );
+        assert!(
+            msg.contains("api.openai.com"),
+            "error must name the rejected host: {}",
+            msg
+        );
     }
 
     #[test]
@@ -484,7 +526,10 @@ mod tests {
     #[test]
     fn validate_accepts_remote_when_local_only_off() {
         let r = validate_base_url("https://api.openai.com/v1", false);
-        assert!(r.is_ok(), "with local-only OFF, remote must be allowed (opt-in path)");
+        assert!(
+            r.is_ok(),
+            "with local-only OFF, remote must be allowed (opt-in path)"
+        );
     }
 
     #[test]
@@ -502,9 +547,16 @@ mod tests {
         assert_eq!(body.model, "qwen-7b");
         assert_eq!(body.messages.len(), 1);
         assert_eq!(body.messages[0].role, "user");
-        assert_eq!(body.messages[0].content, prompt, "preview text MUST equal sent text");
+        assert_eq!(
+            body.messages[0].content, prompt,
+            "preview text MUST equal sent text"
+        );
         assert!(body.stream);
-        assert_eq!(body.max_tokens, Some(90), "the brevity ceiling must be carried on the body");
+        assert_eq!(
+            body.max_tokens,
+            Some(90),
+            "the brevity ceiling must be carried on the body"
+        );
     }
 
     #[test]
@@ -512,14 +564,20 @@ mod tests {
         let body = build_request_body("m", "p", true, None);
         assert_eq!(body.max_tokens, None);
         let json = serde_json::to_string(&body).unwrap();
-        assert!(!json.contains("max_tokens"), "None max_tokens must not serialize: {json}");
+        assert!(
+            !json.contains("max_tokens"),
+            "None max_tokens must not serialize: {json}"
+        );
     }
 
     #[test]
     fn request_body_serializes_max_tokens_when_set() {
         let body = build_request_body("m", "p", true, Some(256));
         let json = serde_json::to_string(&body).unwrap();
-        assert!(json.contains("\"max_tokens\":256"), "max_tokens must reach the wire: {json}");
+        assert!(
+            json.contains("\"max_tokens\":256"),
+            "max_tokens must reach the wire: {json}"
+        );
     }
 
     #[test]
@@ -531,7 +589,8 @@ mod tests {
         assert_eq!(r.as_deref(), Some("[DONE]"));
         let r = parse_sse_data_line("").unwrap();
         assert!(r.is_none());
-        let r = parse_sse_data_line(r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#).unwrap();
+        let r = parse_sse_data_line(r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#)
+            .unwrap();
         assert!(r.is_none());
     }
 }

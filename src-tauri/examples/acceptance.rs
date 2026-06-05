@@ -41,18 +41,26 @@ fn main() -> anyhow::Result<()> {
         println!("    title     = {}", result.book.title);
         println!(
             "    author    = {}",
-            result.book.author.clone().unwrap_or_else(|| "(none)".to_string())
+            result
+                .book
+                .author
+                .clone()
+                .unwrap_or_else(|| "(none)".to_string())
         );
-        println!("    sections  = {} ({} assignable, {} skipped)",
-                 result.sections.len(),
-                 result.sections.iter().filter(|s| s.assignable).count(),
-                 result.sections.iter().filter(|s| !s.assignable).count());
+        println!(
+            "    sections  = {} ({} assignable, {} skipped)",
+            result.sections.len(),
+            result.sections.iter().filter(|s| s.assignable).count(),
+            result.sections.iter().filter(|s| !s.assignable).count()
+        );
         println!("    spine label vs classifier:");
         for s in &result.sections {
-            println!("        {} [{}]  '{}'",
+            println!(
+                "        {} [{}]  '{}'",
                 if s.assignable { "✓" } else { "·" },
                 s.sort_order,
-                s.label);
+                s.label
+            );
         }
 
         conn.execute(
@@ -87,18 +95,28 @@ fn main() -> anyhow::Result<()> {
             .assigned_section_index
             .and_then(|i| result.sections.get(i))
             .ok_or_else(|| anyhow::anyhow!("plan produced no day-1 assignment"))?;
-        println!("\n    DAY 1 → '{}' (spine idx {}, assignable={})",
-                 day1.label, day1.sort_order, day1.assignable);
-        assert!(day1.assignable, "day 1 must be an assignable section, not front matter");
+        println!(
+            "\n    DAY 1 → '{}' (spine idx {}, assignable={})",
+            day1.label, day1.sort_order, day1.assignable
+        );
+        assert!(
+            day1.assignable,
+            "day 1 must be an assignable section, not front matter"
+        );
 
         // ── Multi-section session ─────────────────────────────────────────
         println!("\n=== Opening ONE session and advancing across multiple assignable sections ===");
         let session_id = format!("sess_{}", Uuid::new_v4().simple());
         let started = Utc::now().to_rfc3339();
         let start_loc = match result.book.source_type.as_str() {
-            "txt"  => format!("char:{}", day1.start_locator.clone().unwrap_or_else(|| "0".to_string())),
+            "txt" => format!(
+                "char:{}",
+                day1.start_locator
+                    .clone()
+                    .unwrap_or_else(|| "0".to_string())
+            ),
             "epub" => format!("cfi:{}", day1.href.clone().unwrap_or_default()),
-            other  => format!("unknown:{}", other),
+            other => format!("unknown:{}", other),
         };
         conn.execute(
             "INSERT INTO reading_sessions (id, book_id, started_at, ended_at, start_locator, end_locator, minutes, completed_assignment, subjective_difficulty)
@@ -107,30 +125,49 @@ fn main() -> anyhow::Result<()> {
         )?;
 
         // Pick the next 3 ASSIGNABLE sections after day 1 (simulating Next › presses)
-        let assignable_seq: Vec<&models::BookSection> = result.sections.iter().filter(|s| s.assignable).collect();
-        let day1_pos = assignable_seq.iter().position(|s| s.id == day1.id).unwrap_or(0);
+        let assignable_seq: Vec<&models::BookSection> =
+            result.sections.iter().filter(|s| s.assignable).collect();
+        let day1_pos = assignable_seq
+            .iter()
+            .position(|s| s.id == day1.id)
+            .unwrap_or(0);
         let crossed: Vec<&models::BookSection> = assignable_seq
             .iter()
             .skip(day1_pos)
             .take(4)
             .copied()
             .collect();
-        println!("    crossed {} sections in this single session:", crossed.len());
+        println!(
+            "    crossed {} sections in this single session:",
+            crossed.len()
+        );
         for s in &crossed {
             println!("        → '{}'", s.label);
         }
         let landed_on = crossed.last().expect("at least one section");
         let end_loc = match result.book.source_type.as_str() {
-            "txt"  => format!("char:{}", landed_on.end_locator.clone().unwrap_or_else(|| "0".to_string())),
+            "txt" => format!(
+                "char:{}",
+                landed_on
+                    .end_locator
+                    .clone()
+                    .unwrap_or_else(|| "0".to_string())
+            ),
             "epub" => format!("cfi:{}", landed_on.href.clone().unwrap_or_default()),
-            other  => format!("unknown:{}", other),
+            other => format!("unknown:{}", other),
         };
 
         // Note written mid-session (locator should be a tagged cfi: for EPUB)
         let note_locator = match result.book.source_type.as_str() {
-            "txt"  => format!("char:{}", landed_on.start_locator.clone().unwrap_or_else(|| "0".to_string())),
+            "txt" => format!(
+                "char:{}",
+                landed_on
+                    .start_locator
+                    .clone()
+                    .unwrap_or_else(|| "0".to_string())
+            ),
             "epub" => format!("cfi:{}", landed_on.href.clone().unwrap_or_default()),
-            other  => format!("unknown:{}", other),
+            other => format!("unknown:{}", other),
         };
         let note_id = format!("note_{}", Uuid::new_v4().simple());
         let now = Utc::now().to_rfc3339();
@@ -141,7 +178,8 @@ fn main() -> anyhow::Result<()> {
             note_type: "Reflection".to_string(),
             locator: note_locator.clone(),
             chapter_label: Some(landed_on.label.clone()),
-            body: "Mid-session note: tagged-locator scheme survives the 2.5 session refactor.".to_string(),
+            body: "Mid-session note: tagged-locator scheme survives the 2.5 session refactor."
+                .to_string(),
             short_quote: None,
             created_at: now.clone(),
             updated_at: now.clone(),
@@ -163,7 +201,11 @@ fn main() -> anyhow::Result<()> {
         println!("    note saved → {}", note_md.display());
 
         // Finish session: pass ALL crossed except the last (still mid-section)
-        let completed_ids: Vec<String> = crossed.iter().take(crossed.len() - 1).map(|s| s.id.clone()).collect();
+        let completed_ids: Vec<String> = crossed
+            .iter()
+            .take(crossed.len() - 1)
+            .map(|s| s.id.clone())
+            .collect();
         let ended = Utc::now().to_rfc3339();
         let minutes: i64 = 32;
         conn.execute(
@@ -219,7 +261,12 @@ fn main() -> anyhow::Result<()> {
             completed_assignment: true,
             subjective_difficulty: None,
         };
-        let session_md = export::export_session(&export::root_for(&conn), &result.book, &session, Some("Crossed multiple sections in one sitting."))?;
+        let session_md = export::export_session(
+            &export::root_for(&conn),
+            &result.book,
+            &session,
+            Some("Crossed multiple sections in one sitting."),
+        )?;
         println!("    session export → {}", session_md.display());
     }
 

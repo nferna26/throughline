@@ -51,7 +51,8 @@ mod tests {
                 locator TEXT, context_char_count INTEGER, provider TEXT,
                 created_at TEXT NOT NULL, wrote_to_memory INTEGER DEFAULT 0
              );",
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     fn insert(conn: &Connection, id: &str, created_at: &str, wrote: i64) {
@@ -63,7 +64,8 @@ mod tests {
     }
 
     fn count(conn: &Connection) -> i64 {
-        conn.query_row("SELECT COUNT(*) FROM ai_requests", [], |r| r.get(0)).unwrap()
+        conn.query_row("SELECT COUNT(*) FROM ai_requests", [], |r| r.get(0))
+            .unwrap()
     }
 
     /// The load-bearing invariant: old + never-saved rows are swept; old + saved
@@ -73,19 +75,25 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         schema(&conn);
         insert(&conn, "old_unsaved", "2020-01-01T00:00:00+00:00", 0); // → deleted
-        insert(&conn, "old_saved",   "2020-01-01T00:00:00+00:00", 1); // → kept (mirrors a note)
+        insert(&conn, "old_saved", "2020-01-01T00:00:00+00:00", 1); // → kept (mirrors a note)
         let recent = chrono::Utc::now().to_rfc3339();
-        insert(&conn, "recent_unsaved", &recent, 0);                  // → kept (within window)
+        insert(&conn, "recent_unsaved", &recent, 0); // → kept (within window)
 
         let removed = sweep(&conn, 90).unwrap();
         assert_eq!(removed, 1, "exactly the old unsaved row should be swept");
         assert_eq!(count(&conn), 2);
         // The kept ids are the saved-old one and the recent one.
         let kept: Vec<String> = conn
-            .prepare("SELECT id FROM ai_requests ORDER BY id").unwrap()
-            .query_map([], |r| r.get::<_, String>(0)).unwrap()
-            .filter_map(|r| r.ok()).collect();
-        assert_eq!(kept, vec!["old_saved".to_string(), "recent_unsaved".to_string()]);
+            .prepare("SELECT id FROM ai_requests ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(
+            kept,
+            vec!["old_saved".to_string(), "recent_unsaved".to_string()]
+        );
     }
 
     /// `days <= 0` is an explicit opt-out: keep the full audit trail.
