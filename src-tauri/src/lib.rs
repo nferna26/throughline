@@ -15,11 +15,18 @@
 //! starts the Tauri runtime. Production behavior is fully contained in the
 //! command modules; this file holds only the wiring.
 
+// App-crate lint posture: these clippy lints flag intentional, idiomatic patterns
+// rather than defects — Tauri command handlers legitimately take many parameters,
+// and a few enums expose deliberate `from_str` constructors that don't fit the
+// fallible `std::str::FromStr` shape. Allowed crate-wide instead of scattering
+// per-item attributes.
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::should_implement_trait)]
+
 pub mod ai_client;
 pub mod ai_providers;
 pub mod ai_retention;
 pub mod ai_stub;
-pub mod keystore;
 pub mod bin_guardrail;
 pub mod circuit_breaker;
 pub mod commands;
@@ -29,6 +36,7 @@ pub mod error;
 pub mod export;
 pub mod import;
 pub mod import_epub;
+pub mod keystore;
 pub mod log;
 pub mod migrations;
 pub mod models;
@@ -47,17 +55,20 @@ use crate::db::DbState;
 /// commands, type-shape changes of args or returns). See `docs/IPC.md` for
 /// the full contract.
 ///
-/// - Patch (1 → 1): bug fixes, internal refactors, no contract change.
-/// - Minor (1 → 1): new commands or strictly-additive optional args.
+/// - Patch (e.g. 3 → 3): bug fixes, internal refactors, no contract change.
+/// - Minor (e.g. 3 → 3): new commands or strictly-additive optional args.
 ///   The integer stays the same; CHANGELOG records the addition.
-/// - Major (1 → 2): any change that could break an existing JS caller.
+/// - Major (e.g. 3 → 4): any change that could break an existing JS caller.
 ///
 /// The constant is exposed to JS via `cmd_api_version` so the frontend can
 /// refuse to talk to an incompatible backend.
 ///
-/// 1 → 2: `cmd_import_book` now returns `ImportOutcome { book, created }`
-/// instead of a bare `Book` (so the Book Setup Sheet shows only for genuinely
-/// new imports). This is a return-shape change → major bump per docs/IPC.md.
+/// History (each a major, JS-caller-breaking change per docs/IPC.md):
+/// - 1 → 2: `cmd_import_book` now returns `ImportOutcome { book, created }`
+///   instead of a bare `Book` (so the Book Setup Sheet shows only for genuinely
+///   new imports) — a return-shape change.
+/// - 2 → 3: cloud AI command surface (provider keys, model listing, Codex device
+///   login, request history) reshaped the AI args/returns.
 pub const COMMAND_API_VERSION: u32 = 3;
 
 /// Open the database, recovering from a CORRUPT file rather than crash-looping on
@@ -71,9 +82,15 @@ fn open_db_resilient() -> rusqlite::Connection {
         Ok(c) => c,
         Err(e) => {
             let msg = format!("{e:#}").to_lowercase();
-            let looks_corrupt = ["malformed", "corrupt", "not a database", "disk image", "file is encrypted"]
-                .iter()
-                .any(|s| msg.contains(s));
+            let looks_corrupt = [
+                "malformed",
+                "corrupt",
+                "not a database",
+                "disk image",
+                "file is encrypted",
+            ]
+            .iter()
+            .any(|s| msg.contains(s));
             if !looks_corrupt {
                 panic!("Throughline could not open its database (usually a permissions or disk problem, not data loss): {e:#}");
             }
@@ -84,7 +101,8 @@ fn open_db_resilient() -> rusqlite::Connection {
                 let _ = std::fs::remove_file(dbp.with_extension("db-wal"));
                 let _ = std::fs::remove_file(dbp.with_extension("db-shm"));
             }
-            db::open_and_migrate().expect("could not create a fresh database after corruption recovery")
+            db::open_and_migrate()
+                .expect("could not create a fresh database after corruption recovery")
         }
     }
 }
@@ -100,7 +118,10 @@ pub fn run() {
     {
         let days = settings::get_ai_retention_days(&conn);
         match ai_retention::sweep(&conn, days) {
-            Ok(n) if n > 0 => eprintln!("[tl] ai_retention: swept {} ai_requests row(s) older than {} days", n, days),
+            Ok(n) if n > 0 => eprintln!(
+                "[tl] ai_retention: swept {} ai_requests row(s) older than {} days",
+                n, days
+            ),
             Ok(_) => {}
             Err(e) => eprintln!("[tl] ai_retention: sweep failed: {}", e),
         }
@@ -109,14 +130,12 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             // ── books ──
             commands::books::cmd_import_book,
-            commands::books::cmd_read_book_bytes,
             commands::books::cmd_today,
             commands::books::cmd_read_section_text,
             commands::books::cmd_read_section_structure,
@@ -283,9 +302,15 @@ mod tests {
                 _ => { /* properly classified */ }
             }
         }
-        assert!(count > 0, "examples dir appears empty — guardrail test would silently no-op");
+        assert!(
+            count > 0,
+            "examples dir appears empty — guardrail test would silently no-op"
+        );
         if !violations.is_empty() {
-            panic!("Bin guardrail violations:\n  - {}", violations.join("\n  - "));
+            panic!(
+                "Bin guardrail violations:\n  - {}",
+                violations.join("\n  - ")
+            );
         }
     }
 
@@ -382,8 +407,12 @@ mod tests {
             user_note: None,
         };
         for mode in [
-            StubMode::Explain, StubMode::Historical, StubMode::Vocabulary,
-            StubMode::Socratic, StubMode::DurableNote, StubMode::PrepareNext,
+            StubMode::Explain,
+            StubMode::Historical,
+            StubMode::Vocabulary,
+            StubMode::Socratic,
+            StubMode::DurableNote,
+            StubMode::PrepareNext,
         ] {
             let preview = build_prompt(mode, &ctx);
             let payload = ai_client::build_request_body("any-model", &preview, true, None);
@@ -439,17 +468,23 @@ mod tests {
             params![ai_id, book_id, now],
         ).unwrap();
 
-        let (provider, wrote): (Option<String>, i64) = conn.query_row(
-            "SELECT provider, wrote_to_memory FROM ai_requests WHERE id = ?1",
-            params![ai_id], |r| Ok((r.get(0)?, r.get(1)?)),
-        ).unwrap();
+        let (provider, wrote): (Option<String>, i64) = conn
+            .query_row(
+                "SELECT provider, wrote_to_memory FROM ai_requests WHERE id = ?1",
+                params![ai_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
         assert_eq!(provider, None);
         assert_eq!(wrote, 0);
 
-        let note_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM notes WHERE book_id = ?1",
-            params![book_id], |r| r.get(0),
-        ).unwrap();
+        let note_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE book_id = ?1",
+                params![book_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(note_count, 0);
 
         let note_id = format!("note_{}", uuid::Uuid::new_v4().simple());
@@ -458,17 +493,27 @@ mod tests {
              VALUES (?1, ?2, NULL, 'Reflection', 'char:42', NULL, 'my thoughts on the prompt', NULL, ?3, ?3, NULL)",
             params![note_id, book_id, now],
         ).unwrap();
-        conn.execute("UPDATE ai_requests SET wrote_to_memory = 1 WHERE id = ?1", params![ai_id]).unwrap();
+        conn.execute(
+            "UPDATE ai_requests SET wrote_to_memory = 1 WHERE id = ?1",
+            params![ai_id],
+        )
+        .unwrap();
 
-        let wrote_after: i64 = conn.query_row(
-            "SELECT wrote_to_memory FROM ai_requests WHERE id = ?1",
-            params![ai_id], |r| r.get(0),
-        ).unwrap();
+        let wrote_after: i64 = conn
+            .query_row(
+                "SELECT wrote_to_memory FROM ai_requests WHERE id = ?1",
+                params![ai_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(wrote_after, 1);
-        let note_count_after: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM notes WHERE book_id = ?1",
-            params![book_id], |r| r.get(0),
-        ).unwrap();
+        let note_count_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE book_id = ?1",
+                params![book_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(note_count_after, 1);
     }
 }

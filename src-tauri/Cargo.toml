@@ -21,7 +21,6 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
 # Reader-initiated auto-update (click → download → relaunch). Only checks when the
 # user asks (a Settings button), never on launch or a timer — within the
 # no-background-network posture. NOT tauri-plugin-http/shell (which stay banned).

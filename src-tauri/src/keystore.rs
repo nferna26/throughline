@@ -9,6 +9,12 @@
 //! Under `#[cfg(test)]` the Keychain is replaced by an in-process map so CI is
 //! hermetic (no real credentials, no ACL prompt).
 
+// Keychain *service* name — a deliberate org-scoped (Trainable LLC) namespace,
+// intentionally distinct from the app bundle identifier (`com.throughline.app`
+// in tauri.conf.json). v0.2.0 shipped with this exact string, so renaming it to
+// match the bundle id would strand every existing user's stored API keys behind
+// an unreachable service. It MUST stay stable to keep saved keys readable.
+#[cfg_attr(test, allow(dead_code))] // real-Keychain const; tests use an in-process map
 const SERVICE: &str = "com.trainable.throughline";
 
 /// Keychain account name for a provider's key, or None for providers that need
@@ -103,7 +109,10 @@ mod backend {
         let val = keyring::Entry::new(SERVICE, account)
             .ok()
             .and_then(|e| e.get_password().ok());
-        cache().lock().unwrap().insert(account.to_string(), val.clone());
+        cache()
+            .lock()
+            .unwrap()
+            .insert(account.to_string(), val.clone());
         val
     }
 
@@ -128,7 +137,10 @@ mod backend {
         STORE.get_or_init(|| Mutex::new(HashMap::new()))
     }
     pub fn set(account: &str, secret: &str) -> anyhow::Result<()> {
-        store().lock().unwrap().insert(account.to_string(), secret.to_string());
+        store()
+            .lock()
+            .unwrap()
+            .insert(account.to_string(), secret.to_string());
         Ok(())
     }
     pub fn get(account: &str) -> Option<String> {

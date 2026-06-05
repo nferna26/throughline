@@ -46,7 +46,10 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
                 existing.id
             );
             bump_last_opened_at(&conn, &existing.id)?;
-            return Ok(ImportOutcome { book: existing, created: false });
+            return Ok(ImportOutcome {
+                book: existing,
+                created: false,
+            });
         }
     }
 
@@ -59,7 +62,9 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
     };
     eprintln!(
         "[tl] import_or_dedup: imported '{}' [{}] with {} sections",
-        result.book.title, result.book.source_type, result.sections.len()
+        result.book.title,
+        result.book.source_type,
+        result.sections.len()
     );
     let conn = state.0.lock()?;
     insert_book(&conn, &result.book)?;
@@ -81,7 +86,10 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
         &result.book.source_sha256,
     );
     eprintln!("[tl] import_or_dedup: OK book_id={}", result.book.id);
-    Ok(ImportOutcome { book: result.book, created: true })
+    Ok(ImportOutcome {
+        book: result.book,
+        created: true,
+    })
 }
 
 /// Configure a freshly imported book's plan from the Book Setup Sheet: set the
@@ -104,11 +112,17 @@ pub fn cmd_configure_plan(
     let plan = fetch_plan_for_book(&conn, &book_id)?
         .ok_or_else(|| AppError::not_found("plan", Some(book_id.clone())))?;
 
-    let finish = chrono::NaiveDate::parse_from_str(target_finish_date.trim(), "%Y-%m-%d")
-        .map_err(|_| AppError::validation(format!("invalid finish date: {target_finish_date:?} (expected YYYY-MM-DD)")))?;
+    let finish =
+        chrono::NaiveDate::parse_from_str(target_finish_date.trim(), "%Y-%m-%d").map_err(|_| {
+            AppError::validation(format!(
+                "invalid finish date: {target_finish_date:?} (expected YYYY-MM-DD)"
+            ))
+        })?;
     let today = chrono::Utc::now().naive_utc().date();
     if finish < today {
-        return Err(AppError::validation("finish date cannot be in the past".to_string()));
+        return Err(AppError::validation(
+            "finish date cannot be in the past".to_string(),
+        ));
     }
     let dpw = days_per_week.clamp(1, 7);
     let mins = session_minutes.clamp(5, 120);
@@ -125,35 +139,22 @@ pub fn cmd_configure_plan(
         "UPDATE reading_plans SET target_finish_date = ?1, days_per_week = ?2, daily_target_units = ?3 WHERE id = ?4",
         params![finish.to_string(), dpw, daily_target, plan.id],
     )?;
-    settings::set_string(&conn, settings::KEY_READING_RHYTHM_MINUTES, &mins.to_string())
-        .map_err(|e| AppError::internal(e.to_string()))?;
-    if let Some(help) = margin_help.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    settings::set_string(
+        &conn,
+        settings::KEY_READING_RHYTHM_MINUTES,
+        &mins.to_string(),
+    )
+    .map_err(|e| AppError::internal(e.to_string()))?;
+    if let Some(help) = margin_help
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         settings::set_string(&conn, settings::KEY_MARGIN_HELP, help)
             .map_err(|e| AppError::internal(e.to_string()))?;
     }
 
-    fetch_plan_for_book(&conn, &book_id)?
-        .ok_or_else(|| AppError::not_found("plan", Some(book_id)))
-}
-
-/// Return a book's stored source bytes (source.epub / source.txt). No longer used
-/// by any reader (EPUBs are read as extracted text now), but kept for inspection /
-/// future use. The raw bytes are never exported.
-#[tauri::command]
-pub fn cmd_read_book_bytes(book_id: String, state: State<DbState>) -> Result<Vec<u8>, AppError> {
-    let conn = state.0.lock()?;
-    let source_type: String = conn.query_row(
-        "SELECT source_type FROM books WHERE id = ?1",
-        params![book_id],
-        |r| r.get(0),
-    )?;
-    let filename = match source_type.as_str() {
-        "epub" => "source.epub",
-        "txt" => "source.txt",
-        other => return Err(AppError::validation(format!("unknown source type: {}", other))),
-    };
-    let path = paths::book_dir(&book_id)?.join(filename);
-    Ok(fs::read(&path)?)
+    fetch_plan_for_book(&conn, &book_id)?.ok_or_else(|| AppError::not_found("plan", Some(book_id)))
 }
 
 #[tauri::command]
@@ -169,7 +170,9 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
     let completed = list_completed_section_ids(&conn, &book.id)?;
     let computed = plan::compute(&plan, &sections, &completed)?;
 
-    let section = computed.assigned_section_index.and_then(|i| sections.get(i).cloned());
+    let section = computed
+        .assigned_section_index
+        .and_then(|i| sections.get(i).cloned());
     let section_completed = section
         .as_ref()
         .map(|s| completed.contains(&s.id))
@@ -181,7 +184,8 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
         .unwrap_or(20);
 
     // Resume locator: per-section last position (if any)
-    let (resume_locator, resume_percent): (Option<String>, Option<f64>) = if let Some(s) = &section {
+    let (resume_locator, resume_percent): (Option<String>, Option<f64>) = if let Some(s) = &section
+    {
         conn.query_row(
             "SELECT last_locator, last_percent FROM section_progress WHERE book_id = ?1 AND section_id = ?2",
             params![book.id, s.id],
@@ -201,7 +205,7 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
     let needs_recovery = computed
         .forecast
         .as_ref()
-        .map_or(false, |f| matches!(f.state.as_str(), "needs_rebalance" | "plan_unrealistic"));
+        .is_some_and(|f| matches!(f.state.as_str(), "needs_rebalance" | "plan_unrealistic"));
     let days_behind = computed.forecast.as_ref().map_or(0, |f| f.days_late).max(0);
     let recovery = if needs_recovery {
         let today = chrono::Utc::now().naive_utc().date();
@@ -240,7 +244,10 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
 /// construction: `last_capture` only ever carries a user-authored Takeaway or
 /// Question body (the reader's own words), never a raw passage, AI output, or
 /// short quote. Counts are pure aggregates.
-fn today_memory(conn: &rusqlite::Connection, book_id: &str) -> rusqlite::Result<models::TodayMemory> {
+fn today_memory(
+    conn: &rusqlite::Connection,
+    book_id: &str,
+) -> rusqlite::Result<models::TodayMemory> {
     let highlight_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM notes WHERE book_id = ?1 AND note_type = 'Highlight'",
         params![book_id],
@@ -270,7 +277,11 @@ fn today_memory(conn: &rusqlite::Connection, book_id: &str) -> rusqlite::Result<
             },
         )
         .optional()?;
-    Ok(models::TodayMemory { last_capture, highlight_count, note_count })
+    Ok(models::TodayMemory {
+        last_capture,
+        highlight_count,
+        note_count,
+    })
 }
 
 fn compute_streak(conn: &Connection, book_id: &str) -> rusqlite::Result<models::StreakSummary> {
@@ -287,28 +298,44 @@ fn compute_streak(conn: &Connection, book_id: &str) -> rusqlite::Result<models::
         days += 1;
         minutes += row.get::<_, i64>(1)?;
     }
-    Ok(models::StreakSummary { days_read_last_7: days, minutes_last_7: minutes })
+    Ok(models::StreakSummary {
+        days_read_last_7: days,
+        minutes_last_7: minutes,
+    })
 }
 
 #[tauri::command]
-pub fn cmd_read_section_text(book_id: String, section_id: String, state: State<DbState>) -> Result<String, AppError> {
+pub fn cmd_read_section_text(
+    book_id: String,
+    section_id: String,
+    state: State<DbState>,
+) -> Result<String, AppError> {
     let conn = state.0.lock()?;
     // Lazy one-time backfill: EPUBs imported before the text pivot have an
     // immutable source.epub but no derived source.txt (and NULL section locators).
     // Generate the text + fill locators in place on first open. Best-effort — on
     // failure we read what exists rather than blocking the reader.
     let source_type: Option<String> = conn
-        .query_row("SELECT source_type FROM books WHERE id = ?1", params![book_id], |r| r.get(0))
+        .query_row(
+            "SELECT source_type FROM books WHERE id = ?1",
+            params![book_id],
+            |r| r.get(0),
+        )
         .optional()?;
     if source_type.as_deref() == Some("epub") {
         if let Err(e) = crate::import_epub::ensure_epub_text(&conn, &book_id) {
             eprintln!("[tl] epub text backfill skipped for {book_id}: {e}");
         }
     }
-    let mut stmt = conn.prepare("SELECT start_locator, end_locator FROM book_sections WHERE id = ?1 AND book_id = ?2")?;
-    let (start, end): (Option<String>, Option<String>) = stmt
-        .query_row(params![section_id, book_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
-    let start: usize = start.unwrap_or_else(|| "0".to_string()).parse().unwrap_or(0);
+    let mut stmt = conn.prepare(
+        "SELECT start_locator, end_locator FROM book_sections WHERE id = ?1 AND book_id = ?2",
+    )?;
+    let (start, end): (Option<String>, Option<String>) =
+        stmt.query_row(params![section_id, book_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let start: usize = start
+        .unwrap_or_else(|| "0".to_string())
+        .parse()
+        .unwrap_or(0);
     let end: Option<usize> = end.and_then(|s| s.parse().ok());
     read_txt_section(&book_id, start, end).map_err(AppError::from)
 }
@@ -319,9 +346,14 @@ pub fn cmd_read_section_text(book_id: String, section_id: String, state: State<D
 /// any section with no captured ranges. Reads the per-book sidecar written at
 /// import; never touches the DB.
 #[tauri::command]
-pub fn cmd_read_section_structure(book_id: String, section_id: String) -> Result<Vec<StyleRange>, AppError> {
+pub fn cmd_read_section_structure(
+    book_id: String,
+    section_id: String,
+) -> Result<Vec<StyleRange>, AppError> {
     let path = paths::book_dir(&book_id)?.join("structure.json");
-    let Ok(raw) = fs::read_to_string(&path) else { return Ok(Vec::new()); };
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return Ok(Vec::new());
+    };
     let map: HashMap<String, Vec<StyleRange>> = serde_json::from_str(&raw).unwrap_or_default();
     Ok(map.get(&section_id).cloned().unwrap_or_default())
 }
@@ -330,8 +362,12 @@ pub fn cmd_read_section_structure(book_id: String, section_id: String) -> Result
 /// text importer after stripping a Project Gutenberg header; `0` when there is
 /// no header (or for legacy imports with no `body_offsets.json`).
 fn body_start_offset(book_id: &str) -> usize {
-    let Ok(dir) = paths::book_dir(book_id) else { return 0 };
-    let Ok(raw) = fs::read_to_string(dir.join("body_offsets.json")) else { return 0 };
+    let Ok(dir) = paths::book_dir(book_id) else {
+        return 0;
+    };
+    let Ok(raw) = fs::read_to_string(dir.join("body_offsets.json")) else {
+        return 0;
+    };
     serde_json::from_str::<serde_json::Value>(&raw)
         .ok()
         .and_then(|v| v.get("body_start").and_then(|n| n.as_u64()))
@@ -344,9 +380,13 @@ fn body_start_offset(book_id: &str) -> usize {
 /// must be rebased by `body_start` before slicing the RAW file — otherwise a
 /// Gutenberg-headed import renders text shifted by the header length. See
 /// [`slice_body`] for the pure slicing math (unit-tested).
-pub fn read_txt_section(book_id: &str, start: usize, end: Option<usize>) -> std::io::Result<String> {
+pub fn read_txt_section(
+    book_id: &str,
+    start: usize,
+    end: Option<usize>,
+) -> std::io::Result<String> {
     let src_path = paths::book_dir(book_id)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+        .map_err(|e| std::io::Error::other(e.to_string()))?
         .join("source.txt");
     let raw = fs::read_to_string(&src_path)?;
     Ok(slice_body(&raw, body_start_offset(book_id), start, end))
@@ -364,14 +404,19 @@ fn slice_body(raw: &str, body_start: usize, start: usize, end: Option<usize>) ->
     // upstream, but defend the slice regardless).
     let snap = |i: usize| {
         let mut i = i.min(body.len());
-        while i > 0 && !body.is_char_boundary(i) { i -= 1; }
+        while i > 0 && !body.is_char_boundary(i) {
+            i -= 1;
+        }
         i
     };
     body[snap(start)..snap(end)].to_string()
 }
 
 #[tauri::command]
-pub fn cmd_list_sections(book_id: String, state: State<DbState>) -> Result<Vec<BookSection>, AppError> {
+pub fn cmd_list_sections(
+    book_id: String,
+    state: State<DbState>,
+) -> Result<Vec<BookSection>, AppError> {
     let conn = state.0.lock()?;
     Ok(list_sections(&conn, &book_id)?)
 }
@@ -385,19 +430,27 @@ pub fn cmd_list_sections(book_id: String, state: State<DbState>) -> Result<Vec<B
 /// (every section currently assignable), re-parse `source.epub` and update
 /// `assignable` in place. One-shot per stale book.
 #[tauri::command]
-pub fn cmd_assignable_sections(book_id: String, state: State<DbState>) -> Result<Vec<BookSection>, AppError> {
+pub fn cmd_assignable_sections(
+    book_id: String,
+    state: State<DbState>,
+) -> Result<Vec<BookSection>, AppError> {
     let conn = state.0.lock()?;
     Ok(canonical_assignable_sections(&conn, &book_id)?)
 }
 
-fn canonical_assignable_sections(conn: &Connection, book_id: &str) -> rusqlite::Result<Vec<BookSection>> {
+fn canonical_assignable_sections(
+    conn: &Connection,
+    book_id: &str,
+) -> rusqlite::Result<Vec<BookSection>> {
     let all = list_sections(conn, book_id)?;
     let all_assignable = !all.is_empty() && all.iter().all(|s| s.assignable);
-    let source_type: Option<String> = conn.query_row(
-        "SELECT source_type FROM books WHERE id = ?1",
-        params![book_id],
-        |r| r.get::<_, String>(0),
-    ).ok();
+    let source_type: Option<String> = conn
+        .query_row(
+            "SELECT source_type FROM books WHERE id = ?1",
+            params![book_id],
+            |r| r.get::<_, String>(0),
+        )
+        .ok();
 
     // Reclassify an EPUB when EITHER every section is still assignable (a
     // pre-classification import) OR the classifier version this book was last
@@ -423,7 +476,10 @@ fn canonical_assignable_sections(conn: &Connection, book_id: &str) -> rusqlite::
                 list_sections(conn, book_id)?
             }
             Err(e) => {
-                eprintln!("reclassify failed for {}: {} — falling back to original list", book_id, e);
+                eprintln!(
+                    "reclassify failed for {}: {} — falling back to original list",
+                    book_id, e
+                );
                 all
             }
         }
@@ -445,23 +501,31 @@ fn classify_version_key(book_id: &str) -> String {
 }
 
 fn reclassify_epub_in_place(conn: &Connection, book_id: &str) -> anyhow::Result<()> {
-    let src = paths::book_dir(book_id).map_err(|e| anyhow::anyhow!("{}", e))?.join("source.epub");
+    let src = paths::book_dir(book_id)
+        .map_err(|e| anyhow::anyhow!("{}", e))?
+        .join("source.epub");
     if !src.exists() {
         return Err(anyhow::anyhow!("source.epub missing for {}", book_id));
     }
-    let doc = epub::doc::EpubDoc::new(&src)
-        .map_err(|e| anyhow::anyhow!("re-parse {:?}: {}", src, e))?;
+    let doc =
+        epub::doc::EpubDoc::new(&src).map_err(|e| anyhow::anyhow!("re-parse {:?}: {}", src, e))?;
 
     let mut toc_label_by_href: HashMap<String, String> = HashMap::new();
     let mut toc_pairs: Vec<(String, String)> = Vec::new();
     walk_toc_for_labels(&doc.toc, &mut toc_pairs, 0);
     for (label, href) in &toc_pairs {
         let key = strip_fragment(href);
-        toc_label_by_href.entry(key).or_insert_with(|| label.clone());
+        toc_label_by_href
+            .entry(key)
+            .or_insert_with(|| label.clone());
     }
 
     #[derive(Clone)]
-    struct SpineMeta { idref: String, linear: bool, label: Option<String> }
+    struct SpineMeta {
+        idref: String,
+        linear: bool,
+        label: Option<String>,
+    }
     let mut spine_meta_by_href: HashMap<String, SpineMeta> = HashMap::new();
     for item in &doc.spine {
         if let Some(res) = doc.resources.get(&item.idref) {
@@ -478,7 +542,11 @@ fn reclassify_epub_in_place(conn: &Connection, book_id: &str) -> anyhow::Result<
             });
             spine_meta_by_href.insert(
                 href,
-                SpineMeta { idref: item.idref.clone(), linear: item.linear, label },
+                SpineMeta {
+                    idref: item.idref.clone(),
+                    linear: item.linear,
+                    label,
+                },
             );
         }
     }
@@ -489,18 +557,26 @@ fn reclassify_epub_in_place(conn: &Connection, book_id: &str) -> anyhow::Result<
         let new_assignable = if let Some(href) = sec_href {
             let key = strip_fragment(&href);
             if let Some(meta) = spine_meta_by_href.get(&key) {
-                !epub_classify::is_front_back_matter(meta.label.as_deref(), &meta.idref, meta.linear)
+                !epub_classify::is_front_back_matter(
+                    meta.label.as_deref(),
+                    &meta.idref,
+                    meta.linear,
+                )
             } else {
                 true
             }
         } else {
             true
         };
-        if new_assignable { any_assignable = true; }
+        if new_assignable {
+            any_assignable = true;
+        }
         updates.push((sec_id, new_assignable));
     }
     if !any_assignable {
-        return Err(anyhow::anyhow!("reclassification would mark every section non-assignable; refusing"));
+        return Err(anyhow::anyhow!(
+            "reclassification would mark every section non-assignable; refusing"
+        ));
     }
 
     for (sec_id, new_assignable) in updates {
@@ -512,13 +588,19 @@ fn reclassify_epub_in_place(conn: &Connection, book_id: &str) -> anyhow::Result<
     Ok(())
 }
 
-fn list_section_id_href(conn: &Connection, book_id: &str) -> rusqlite::Result<Vec<(String, Option<String>)>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, href FROM book_sections WHERE book_id = ?1 ORDER BY sort_order ASC",
-    )?;
-    let rows = stmt.query_map(params![book_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
+fn list_section_id_href(
+    conn: &Connection,
+    book_id: &str,
+) -> rusqlite::Result<Vec<(String, Option<String>)>> {
+    let mut stmt = conn
+        .prepare("SELECT id, href FROM book_sections WHERE book_id = ?1 ORDER BY sort_order ASC")?;
+    let rows = stmt.query_map(params![book_id], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+    })?;
     let mut out = Vec::new();
-    for r in rows { out.push(r?); }
+    for r in rows {
+        out.push(r?);
+    }
     Ok(out)
 }
 
@@ -550,7 +632,9 @@ pub fn cmd_list_books(state: State<DbState>) -> Result<Vec<Book>, AppError> {
     )?;
     let rows = stmt.query_map([], book_from_row)?;
     let mut out = Vec::new();
-    for r in rows { out.push(r?); }
+    for r in rows {
+        out.push(r?);
+    }
     Ok(out)
 }
 
@@ -590,7 +674,8 @@ mod tests {
                 id TEXT PRIMARY KEY, title TEXT, author TEXT, source_type TEXT,
                 source_path TEXT, source_sha256 TEXT, created_at TEXT, last_opened_at TEXT
              );",
-        ).unwrap();
+        )
+        .unwrap();
         // `a` was created later than `b` and neither has been opened, so `a`
         // wins the COALESCE(last_opened_at, created_at) tiebreaker initially.
         conn.execute(
@@ -622,7 +707,8 @@ mod tests {
                 id TEXT PRIMARY KEY, title TEXT, author TEXT, source_type TEXT,
                 source_path TEXT, source_sha256 TEXT, created_at TEXT, last_opened_at TEXT
              );",
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO books (id, title, source_type, source_path, source_sha256, created_at, last_opened_at)
              VALUES ('b_old', 'Dup', 'epub', '', 'deadbeef', '2026-01-01T00:00:00Z', NULL),
@@ -630,8 +716,13 @@ mod tests {
             [],
         ).unwrap();
 
-        let found = fetch_book_by_sha(&conn, "deadbeef").unwrap().expect("should find by sha");
-        assert_eq!(found.id, "b_old", "dedup must resolve to the oldest matching import");
+        let found = fetch_book_by_sha(&conn, "deadbeef")
+            .unwrap()
+            .expect("should find by sha");
+        assert_eq!(
+            found.id, "b_old",
+            "dedup must resolve to the oldest matching import"
+        );
         assert!(fetch_book_by_sha(&conn, "no-such-hash").unwrap().is_none());
     }
 
@@ -652,31 +743,49 @@ mod tests {
                 start_locator TEXT, end_locator TEXT, estimated_units INTEGER,
                 sort_order INTEGER, assignable INTEGER NOT NULL DEFAULT 1
              );",
-        ).unwrap();
+        )
+        .unwrap();
         // Cold-Start-shaped seed: 51 sections, the leading 3 and trailing 5 marked non-assignable
         // (= 8 skipped, 43 assignable), plus source_type = 'txt' so the lazy EPUB reclassifier doesn't fire.
         conn.execute(
             "INSERT INTO books (id, title, source_type, source_path, source_sha256, created_at) VALUES ('b', 't', 'txt', '', '', '')",
             [],
         ).unwrap();
-        let skip_idx: std::collections::HashSet<i64> = [0, 1, 2, 45, 47, 48, 49, 50].into_iter().collect();
+        let skip_idx: std::collections::HashSet<i64> =
+            [0, 1, 2, 45, 47, 48, 49, 50].into_iter().collect();
         for i in 0..51i64 {
             let assignable = if skip_idx.contains(&i) { 0 } else { 1 };
             conn.execute(
                 "INSERT INTO book_sections (id, book_id, label, sort_order, assignable)
                  VALUES (?1, 'b', ?2, ?3, ?4)",
-                params![format!("sec_{}", i), format!("Section {}", i), i, assignable],
-            ).unwrap();
+                params![
+                    format!("sec_{}", i),
+                    format!("Section {}", i),
+                    i,
+                    assignable
+                ],
+            )
+            .unwrap();
         }
 
         let canonical = canonical_assignable_sections(&conn, "b").expect("canonical");
         let all = list_sections(&conn, "b").expect("list");
         let filtered: Vec<&BookSection> = all.iter().filter(|s| s.assignable).collect();
 
-        assert_eq!(canonical.len(), filtered.len(), "canonical length must equal filter(assignable)");
+        assert_eq!(
+            canonical.len(),
+            filtered.len(),
+            "canonical length must equal filter(assignable)"
+        );
         for (a, b) in canonical.iter().zip(filtered.iter()) {
-            assert_eq!(a.id, b.id, "canonical order must match spine-ordered assignable filter");
-            assert!(a.assignable, "front matter must never appear in canonical list");
+            assert_eq!(
+                a.id, b.id,
+                "canonical order must match spine-ordered assignable filter"
+            );
+            assert!(
+                a.assignable,
+                "front matter must never appear in canonical list"
+            );
         }
         assert_eq!(canonical.len(), 43);
         assert_eq!(canonical[0].id, "sec_3");
@@ -698,18 +807,21 @@ mod tests {
                 start_locator TEXT, end_locator TEXT, estimated_units INTEGER,
                 sort_order INTEGER, assignable INTEGER NOT NULL DEFAULT 1
              );",
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO books (id, title, source_type, source_path, source_sha256, created_at)
              VALUES ('b_stale', 't', 'epub', '/nonexistent.epub', '', '')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         for i in 0..5i64 {
             conn.execute(
                 "INSERT INTO book_sections (id, book_id, label, sort_order, assignable)
                  VALUES (?1, 'b_stale', ?2, ?3, 1)",
                 params![format!("sec_{}", i), format!("Section {}", i), i],
-            ).unwrap();
+            )
+            .unwrap();
         }
         let canonical = canonical_assignable_sections(&conn, "b_stale").expect("canonical");
         assert_eq!(canonical.len(), 5);
@@ -727,8 +839,14 @@ mod tests {
 
         // Section 0 = first "BOOK I" chapter, body offsets [0, 33).
         let s0 = super::slice_body(&raw, body_start, 0, Some(33));
-        assert!(s0.starts_with("BOOK I."), "section text must begin at the body, got {s0:?}");
-        assert!(!s0.contains("START OF"), "header must never bleed into section text");
+        assert!(
+            s0.starts_with("BOOK I."),
+            "section text must begin at the body, got {s0:?}"
+        );
+        assert!(
+            !s0.contains("START OF"),
+            "header must never bleed into section text"
+        );
 
         // Section to end-of-body.
         let s1 = super::slice_body(&raw, body_start, 33, None);
