@@ -41,7 +41,8 @@ fn main() -> anyhow::Result<()> {
         .map(|id| {
             let res = doc.resources.get(id);
             (
-                res.map(|r| r.path.to_string_lossy().to_string()).unwrap_or_default(),
+                res.map(|r| r.path.to_string_lossy().to_string())
+                    .unwrap_or_default(),
                 res.map(|r| r.mime.clone()).unwrap_or_default(),
             )
         })
@@ -50,18 +51,30 @@ fn main() -> anyhow::Result<()> {
     for (i, id) in idrefs.iter().enumerate() {
         let (path, mime) = &metas[i];
         // Same length heuristic the importer uses, surfaced for verification.
-        let chars = doc.get_resource_str(id).map(|(h, _)| html_len(&h)).unwrap_or(0);
+        let chars = doc
+            .get_resource_str(id)
+            .map(|(h, _)| html_len(&h))
+            .unwrap_or(0);
         total += chars;
         println!(
             "  {:>3} idref={:24} linear={} chars~{:>6} path={} mime={}",
             i, id, linears[i], chars, path, mime
         );
     }
-    println!("== total readable chars ~ {} (≈ {} min @200wpm)", total, ((total as f64 / 5.0) / 200.0).ceil() as i64);
+    println!(
+        "== total readable chars ~ {} (≈ {} min @200wpm)",
+        total,
+        ((total as f64 / 5.0) / 200.0).ceil() as i64
+    );
     println!("== toc ({}):", doc.toc.len());
     fn walk(n: &epub::doc::NavPoint, d: usize) {
         let pad = " ".repeat(d * 2);
-        println!("  {}- {:<40} → {}", pad, n.label, n.content.to_string_lossy());
+        println!(
+            "  {}- {:<40} → {}",
+            pad,
+            n.label,
+            n.content.to_string_lossy()
+        );
         for c in &n.children {
             walk(c, d + 1);
         }

@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use anyhow::{Context, Result};
+use std::path::{Component, PathBuf};
 
 pub fn app_support_dir() -> Result<PathBuf> {
     // Acceptance/test binaries set THROUGHLINE_DATA_DIR via `bin_guardrail::init_isolated_data_dir`
@@ -21,14 +21,16 @@ pub fn app_support_dir() -> Result<PathBuf> {
         let test_dir = std::env::temp_dir()
             .join("throughline-test")
             .join(std::process::id().to_string());
-        std::fs::create_dir_all(&test_dir)
-            .context("create cfg(test) data dir")?;
-        return Ok(test_dir);
+        std::fs::create_dir_all(&test_dir).context("create cfg(test) data dir")?;
+        Ok(test_dir)
     }
     #[cfg(not(test))]
     {
         let home = dirs::home_dir().context("no home dir")?;
-        Ok(home.join("Library").join("Application Support").join("Throughline"))
+        Ok(home
+            .join("Library")
+            .join("Application Support")
+            .join("Throughline"))
     }
 }
 
@@ -41,6 +43,18 @@ pub fn books_dir() -> Result<PathBuf> {
 }
 
 pub fn book_dir(book_id: &str) -> Result<PathBuf> {
+    // Path-traversal guard: a `book_id` flows in from IPC args (read_section_*,
+    // body_start_offset, read_txt_section) and is joined onto `books_dir()`. A
+    // value like "../etc", "/abs/path", or "" would escape the per-book sandbox,
+    // so reject anything that isn't a single Normal path component.
+    if book_id.is_empty() {
+        return Err(anyhow::anyhow!("invalid book_id: empty"));
+    }
+    let mut comps = std::path::Path::new(book_id).components();
+    match (comps.next(), comps.next()) {
+        (Some(Component::Normal(_)), None) => {}
+        _ => return Err(anyhow::anyhow!("invalid book_id: {book_id:?}")),
+    }
     Ok(books_dir()?.join(book_id))
 }
 
@@ -83,10 +97,7 @@ pub fn atomic_write_string(dest: &std::path::Path, content: &str) -> Result<()> 
 
     // Unique per-process temp path that lives next to the destination so the
     // rename is guaranteed to be same-filesystem (and therefore atomic on Unix).
-    let base_name = dest
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("rg");
+    let base_name = dest.file_name().and_then(|s| s.to_str()).unwrap_or("rg");
     let tmp = parent.join(format!(
         ".{}.tmp.{}.{}",
         base_name,
@@ -105,8 +116,7 @@ pub fn atomic_write_string(dest: &std::path::Path, content: &str) -> Result<()> 
         f.sync_all()
             .with_context(|| format!("fsync temp file {:?}", tmp))?;
         drop(f);
-        std::fs::rename(&tmp, dest)
-            .with_context(|| format!("rename {:?} -> {:?}", tmp, dest))?;
+        std::fs::rename(&tmp, dest).with_context(|| format!("rename {:?} -> {:?}", tmp, dest))?;
         Ok(())
     })();
 
@@ -155,14 +165,37 @@ mod tests {
     fn cfg_test_app_support_dir_is_under_temp() {
         let _g = lock_env_for_test();
         // Make sure no override is set, so we exercise the real branch.
-        unsafe { std::env::remove_var("THROUGHLINE_DATA_DIR"); }
+        unsafe {
+            std::env::remove_var("THROUGHLINE_DATA_DIR");
+        }
         let resolved = app_support_dir().expect("app_support_dir under cfg(test)");
         let sys_temp = std::env::temp_dir();
         assert!(
             resolved.starts_with(&sys_temp),
             "cfg(test) app_support_dir() returned {:?}, NOT under temp_dir ({:?}). \
              Unit tests would be writing to the user's real DB.",
-            resolved, sys_temp
+            resolved,
+            sys_temp
+        );
+    }
+
+    /// **Path-traversal guard.** `book_dir` joins an IPC-supplied `book_id` onto
+    /// the books sandbox, so it MUST reject anything that could escape it — a
+    /// `..` component, an absolute path, or an empty string — while still
+    /// accepting a normal `book_<hex>` id.
+    #[test]
+    fn book_dir_rejects_traversal_and_absolute_and_empty() {
+        for bad in ["../etc", "/abs/path", ""] {
+            assert!(
+                book_dir(bad).is_err(),
+                "book_dir must reject path-escaping id {bad:?}"
+            );
+        }
+        let good = "book_deadbeefcafe";
+        let dir = book_dir(good).expect("normal book id must be accepted");
+        assert!(
+            dir.ends_with(good),
+            "accepted id must resolve under books/, got {dir:?}"
         );
     }
 
@@ -207,7 +240,10 @@ mod tests {
         assert!(result.is_err(), "rename onto a directory must error");
 
         // Real note is untouched.
-        assert_eq!(std::fs::read_to_string(&real_note).unwrap(), "original content");
+        assert_eq!(
+            std::fs::read_to_string(&real_note).unwrap(),
+            "original content"
+        );
 
         // No `.tmp.` litter left in the directory.
         let leftovers: Vec<_> = std::fs::read_dir(&dir)

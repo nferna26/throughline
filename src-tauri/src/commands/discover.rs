@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -27,6 +28,12 @@ use crate::models::ImportOutcome;
 
 const GUTENDEX_BASE: &str = "https://gutendex.com/books/";
 const USER_AGENT: &str = concat!("Throughline/", env!("CARGO_PKG_VERSION"));
+
+/// Upper bound on a single download's body. Public-domain plain-text/EPUB sources
+/// are kilobytes-to-low-megabytes; this leaves a generous margin for the largest
+/// collected works while refusing a hostile or runaway response that would
+/// otherwise be buffered into memory unbounded. ~64 MiB.
+const MAX_DOWNLOAD_BYTES: usize = 64 * 1024 * 1024;
 
 // ───────────────────────── Gutendex wire shapes ─────────────────────────
 // Only the fields we use; everything else is ignored.
@@ -173,8 +180,51 @@ fn http_client(secs: u64) -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(secs))
+        // Cap redirect chains: a download URL is validated up front (see
+        // `validate_download_url`), but a malicious/misconfigured redirect could
+        // try to walk us off the allowlist. A few hops cover Gutenberg's own
+        // canonicalisation; the final host is re-validated after the response.
+        .redirect(reqwest::redirect::Policy::limited(3))
         .build()
         .map_err(|e| AppError::io(format!("could not build http client: {e}")))
+}
+
+/// Gate every outbound download URL before a request is made. The frontend
+/// round-trips `txt_url`/`epub_url` back to us verbatim, so they are treated as
+/// untrusted input even though we originally produced them. Accept only:
+///   - scheme `https` (no cleartext, no `file:`/`ftp:`/etc.), and
+///   - a host on the Project Gutenberg / Gutendex allowlist — the exact set this
+///     module itself emits (`gutenberg.org`, any `*.gutenberg.org` such as
+///     `www.gutenberg.org`, and `gutendex.com` for the API).
+///
+/// Everything else — other domains, `localhost`, loopback, RFC-1918 literals —
+/// is refused, so a tampered URL can't turn the importer into an SSRF gadget.
+fn validate_download_url(url: &str) -> Result<reqwest::Url, AppError> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| AppError::validation(format!("download URL is not a valid URL: {url}")))?;
+    if parsed.scheme() != "https" {
+        return Err(AppError::validation(format!(
+            "download URL must be https (got {})",
+            parsed.scheme()
+        )));
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| AppError::validation("download URL has no host".to_string()))?;
+    if is_allowed_download_host(host) {
+        Ok(parsed)
+    } else {
+        Err(AppError::validation(format!(
+            "download host '{host}' is not in the public-domain library allowlist"
+        )))
+    }
+}
+
+/// The host allowlist for downloads/API. Case-insensitive; `*.gutenberg.org`
+/// subdomains (e.g. `www.gutenberg.org`) are accepted along with the apex.
+fn is_allowed_download_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host == "gutenberg.org" || host.ends_with(".gutenberg.org") || host == "gutendex.com"
 }
 
 // ───────────────────────── offline seed ─────────────────────────
@@ -236,7 +286,9 @@ fn seed() -> &'static [DiscoverBook] {
 /// popularity order, paginated to match the live page size. An empty query is
 /// idle browse (the whole seed). Always flagged `offline: true`.
 fn seed_search(query: Option<&str>, page: u32) -> DiscoverPage {
-    let needle = query.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    let needle = query
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
     let matched: Vec<&DiscoverBook> = seed()
         .iter()
         .filter(|b| match &needle {
@@ -399,9 +451,8 @@ pub async fn cmd_import_from_gutendex(
         }
     }
 
-    Err(last_err.unwrap_or_else(|| {
-        AppError::validation("this book has no importable format".to_string())
-    }))
+    Err(last_err
+        .unwrap_or_else(|| AppError::validation("this book has no importable format".to_string())))
 }
 
 /// Counter for unique temp filenames (process-local; the file is deleted right
@@ -415,28 +466,56 @@ async fn download_and_import(
     ext: &str,
     state: &DbState,
 ) -> Result<ImportOutcome, AppError> {
+    // Validate before touching the network: only https + an allowlisted
+    // Gutenberg/Gutendex host is ever fetched, even though we produced this URL
+    // ourselves (the frontend round-trips it back as untrusted input).
+    let validated = validate_download_url(url)?;
     let resp = client
-        .get(url)
+        .get(validated)
         .send()
         .await
         .map_err(|e| AppError::io(format!("download failed: {e}")))?;
     if !resp.status().is_success() {
         return Err(AppError::io(format!("download returned {}", resp.status())));
     }
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| AppError::io(format!("download interrupted: {e}")))?;
+    // Re-validate the host actually reached: redirects are capped (Policy::limited)
+    // but a permitted hop could still land on an off-allowlist host, so refuse it
+    // before reading any body.
+    if let Some(final_host) = resp.url().host_str() {
+        if !is_allowed_download_host(final_host) {
+            return Err(AppError::validation(format!(
+                "download redirected to disallowed host '{final_host}'"
+            )));
+        }
+    }
+
+    // A cheap pre-check when the server advertises its size, then a hard cap while
+    // streaming so a missing/lying Content-Length can't blow past the budget. The
+    // body is bounded in memory at ~MAX_DOWNLOAD_BYTES either way.
+    if let Some(len) = resp.content_length() {
+        if len as usize > MAX_DOWNLOAD_BYTES {
+            return Err(AppError::validation(format!(
+                "download is {len} bytes, over the {MAX_DOWNLOAD_BYTES}-byte limit"
+            )));
+        }
+    }
+    let mut stream = resp.bytes_stream();
+    let mut bytes: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| AppError::io(format!("download interrupted: {e}")))?;
+        if bytes.len() + chunk.len() > MAX_DOWNLOAD_BYTES {
+            return Err(AppError::validation(format!(
+                "download exceeded the {MAX_DOWNLOAD_BYTES}-byte limit"
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
 
     // Stage the download as a temp file with the right extension; import_any
     // dispatches on extension. import_or_dedup then copies it into the immutable
     // store, so the temp file is disposable.
     let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp = std::env::temp_dir().join(format!(
-        "tl-import-{}-{}.{ext}",
-        std::process::id(),
-        seq
-    ));
+    let tmp = std::env::temp_dir().join(format!("tl-import-{}-{}.{ext}", std::process::id(), seq));
     std::fs::write(&tmp, &bytes)
         .map_err(|e| AppError::io(format!("could not stage download: {e}")))?;
 
@@ -465,13 +544,19 @@ mod tests {
 
     #[test]
     fn humanize_author_reformats_last_first() {
-        assert_eq!(humanize_author("Shakespeare, William"), "William Shakespeare");
+        assert_eq!(
+            humanize_author("Shakespeare, William"),
+            "William Shakespeare"
+        );
         assert_eq!(
             humanize_author("Twain, Mark (Samuel Langhorne Clemens)"),
             "Mark Twain"
         );
         // Life dates are dropped.
-        assert_eq!(humanize_author("Dickens, Charles, 1812-1870"), "Charles Dickens");
+        assert_eq!(
+            humanize_author("Dickens, Charles, 1812-1870"),
+            "Charles Dickens"
+        );
         // Single-token / organisation names pass through.
         assert_eq!(humanize_author("Anonymous"), "Anonymous");
         assert_eq!(humanize_author("Various"), "Various");
@@ -534,7 +619,10 @@ mod tests {
     fn parse_page_param_reads_next_url() {
         let next = "https://gutendex.com/books/?languages=en&mime_type=text%2Fplain&page=3";
         assert_eq!(parse_page_param(next), Some(3));
-        assert_eq!(parse_page_param("https://gutendex.com/books/?languages=en"), None);
+        assert_eq!(
+            parse_page_param("https://gutendex.com/books/?languages=en"),
+            None
+        );
     }
 
     #[test]
@@ -639,5 +727,48 @@ mod tests {
         assert!(page.results.is_empty());
         assert!(page.next_page.is_none());
         assert!(page.offline);
+    }
+
+    // ── download URL validation (SSRF / scheme hardening) ──
+
+    #[test]
+    fn validate_download_url_accepts_real_gutenberg_https() {
+        // The exact shape this module emits for seeded books.
+        assert!(
+            validate_download_url("https://www.gutenberg.org/cache/epub/1342/pg1342.txt").is_ok()
+        );
+        // Apex and the Gutendex API host are allowlisted too.
+        assert!(validate_download_url("https://gutenberg.org/files/1342/1342-0.txt").is_ok());
+        assert!(validate_download_url("https://gutendex.com/books/").is_ok());
+    }
+
+    #[test]
+    fn validate_download_url_rejects_non_https_scheme() {
+        // Cleartext is refused even on an otherwise allowlisted host.
+        assert!(validate_download_url("http://www.gutenberg.org/cache/epub/1/pg1.txt").is_err());
+        assert!(validate_download_url("file:///etc/passwd").is_err());
+        assert!(validate_download_url("ftp://www.gutenberg.org/pg1.txt").is_err());
+    }
+
+    #[test]
+    fn validate_download_url_rejects_non_allowlisted_host() {
+        // Other domains, look-alikes, and loopback/RFC-1918 are all refused.
+        assert!(validate_download_url("https://evil.example.com/pg1342.txt").is_err());
+        assert!(validate_download_url("https://gutenberg.org.evil.com/x.txt").is_err());
+        assert!(validate_download_url("https://localhost/pg1.txt").is_err());
+        assert!(validate_download_url("https://127.0.0.1/pg1.txt").is_err());
+        assert!(validate_download_url("https://192.168.1.10/pg1.txt").is_err());
+        assert!(validate_download_url("not a url at all").is_err());
+    }
+
+    #[test]
+    fn allowed_host_matching_is_case_insensitive_and_subdomain_aware() {
+        assert!(is_allowed_download_host("WWW.Gutenberg.ORG"));
+        assert!(is_allowed_download_host("www.gutenberg.org"));
+        assert!(is_allowed_download_host("gutenberg.org"));
+        assert!(is_allowed_download_host("gutendex.com"));
+        // A suffix match must respect the dot boundary.
+        assert!(!is_allowed_download_host("notgutenberg.org"));
+        assert!(!is_allowed_download_host("gutenberg.org.evil.com"));
     }
 }

@@ -41,15 +41,25 @@ fn main() -> anyhow::Result<()> {
             params![id],
             |r| r.get(0),
         )?;
-        println!("    after:  {} of {} assignable {}",
-            after, total,
-            if after != before { "(lazy reclassify applied)" } else { "" });
+        println!(
+            "    after:  {} of {} assignable {}",
+            after,
+            total,
+            if after != before {
+                "(lazy reclassify applied)"
+            } else {
+                ""
+            }
+        );
     }
     Ok(())
 }
 
 // Bypass the Tauri State<>; reach into the pure function the command calls.
-fn invoke_canonical(conn: &rusqlite::Connection, book_id: &str) -> anyhow::Result<Vec<models::BookSection>> {
+fn invoke_canonical(
+    conn: &rusqlite::Connection,
+    book_id: &str,
+) -> anyhow::Result<Vec<models::BookSection>> {
     // canonical_assignable_sections is not pub from the lib crate; we re-implement
     // the same path here using public helpers + a direct UPDATE so the diagnostic
     // doesn't drag in private items. (Production code calls the cmd_ from JS.)
@@ -72,10 +82,13 @@ fn invoke_canonical(conn: &rusqlite::Connection, book_id: &str) -> anyhow::Resul
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    let source_type: Option<String> = conn.query_row(
-        "SELECT source_type FROM books WHERE id = ?1",
-        params![book_id], |r| r.get(0),
-    ).ok();
+    let source_type: Option<String> = conn
+        .query_row(
+            "SELECT source_type FROM books WHERE id = ?1",
+            params![book_id],
+            |r| r.get(0),
+        )
+        .ok();
 
     let all_assignable = !all.is_empty() && all.iter().all(|s| s.assignable);
     if matches!(source_type.as_deref(), Some("epub")) && all_assignable {
@@ -87,7 +100,9 @@ fn invoke_canonical(conn: &rusqlite::Connection, book_id: &str) -> anyhow::Resul
             walk_toc(&doc.toc, &mut toc_pairs, 0);
             let mut label_by_href: HashMap<String, String> = HashMap::new();
             for (l, h) in &toc_pairs {
-                label_by_href.entry(strip_frag(h)).or_insert_with(|| l.clone());
+                label_by_href
+                    .entry(strip_frag(h))
+                    .or_insert_with(|| l.clone());
             }
             let mut meta_by_href: HashMap<String, (String, bool, Option<String>)> = HashMap::new();
             for item in &doc.spine {
@@ -104,16 +119,22 @@ fn invoke_canonical(conn: &rusqlite::Connection, book_id: &str) -> anyhow::Resul
                 let new_a = if let Some(h) = &s.href {
                     if let Some((idref, linear, label)) = meta_by_href.get(&strip_frag(h)) {
                         !epub_classify::is_front_back_matter(label.as_deref(), idref, *linear)
-                    } else { true }
-                } else { true };
-                if new_a { any = true; }
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+                if new_a {
+                    any = true;
+                }
                 updates.push((s.id.clone(), new_a));
             }
             if any {
                 for (sid, new_a) in &updates {
                     conn.execute(
                         "UPDATE book_sections SET assignable = ?1 WHERE id = ?2",
-                        params![if *new_a {1} else {0}, sid],
+                        params![if *new_a { 1 } else { 0 }, sid],
                     )?;
                 }
                 for s in all.iter_mut() {
@@ -128,7 +149,10 @@ fn invoke_canonical(conn: &rusqlite::Connection, book_id: &str) -> anyhow::Resul
 }
 
 fn strip_frag(h: &str) -> String {
-    match h.find('#') { Some(i) => h[..i].to_string(), None => h.to_string() }
+    match h.find('#') {
+        Some(i) => h[..i].to_string(),
+        None => h.to_string(),
+    }
 }
 fn walk_toc(nav: &[epub::doc::NavPoint], out: &mut Vec<(String, String)>, depth: usize) {
     for n in nav {
@@ -137,6 +161,8 @@ fn walk_toc(nav: &[epub::doc::NavPoint], out: &mut Vec<(String, String)>, depth:
         if !label.is_empty() && !href.is_empty() {
             out.push((label, href));
         }
-        if depth < 1 { walk_toc(&n.children, out, depth + 1); }
+        if depth < 1 {
+            walk_toc(&n.children, out, depth + 1);
+        }
     }
 }

@@ -34,17 +34,24 @@ async fn mock_server_streams_deltas_to_client() {
         // Read headers + body in one shot — small request, small buffer
         loop {
             let n = stream.read(&mut buf).expect("read");
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             total.push_str(&String::from_utf8_lossy(&buf[..n]));
             if total.contains("\r\n\r\n") {
                 // Pull the Content-Length so we know when the body is done.
                 let cl = total
                     .lines()
-                    .find_map(|l| l.strip_prefix("Content-Length:").or_else(|| l.strip_prefix("content-length:")))
+                    .find_map(|l| {
+                        l.strip_prefix("Content-Length:")
+                            .or_else(|| l.strip_prefix("content-length:"))
+                    })
                     .and_then(|v| v.trim().parse::<usize>().ok())
                     .unwrap_or(0);
                 let body_so_far = total.split("\r\n\r\n").nth(1).unwrap_or("").len();
-                if body_so_far >= cl { break; }
+                if body_so_far >= cl {
+                    break;
+                }
             }
         }
         *received_body_clone.lock().unwrap() = total.clone();
@@ -80,28 +87,53 @@ async fn mock_server_streams_deltas_to_client() {
     let mut full = String::new();
     let mut got_done = false;
     let mut got_error: Option<String> = None;
-    while let Some(ev) = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap_or(None) {
+    while let Some(ev) = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap_or(None)
+    {
         match ev {
             StreamEvent::Delta { text } => full.push_str(&text),
-            StreamEvent::Done => { got_done = true; break; }
-            StreamEvent::Error { message } => { got_error = Some(message); break; }
+            StreamEvent::Done => {
+                got_done = true;
+                break;
+            }
+            StreamEvent::Error { message } => {
+                got_error = Some(message);
+                break;
+            }
         }
     }
 
     server_thread.join().expect("server thread");
 
-    assert!(got_error.is_none(), "client surfaced an error: {:?}", got_error);
+    assert!(
+        got_error.is_none(),
+        "client surfaced an error: {:?}",
+        got_error
+    );
     assert!(got_done, "client did not see [DONE] sentinel");
-    assert_eq!(full, "Hello, world", "deltas did not concatenate to expected text");
+    assert_eq!(
+        full, "Hello, world",
+        "deltas did not concatenate to expected text"
+    );
 
     // Verify the actual bytes sent — POST /v1/chat/completions with the exact prompt text.
     let body = received_body.lock().unwrap().clone();
-    assert!(body.starts_with("POST /v1/chat/completions"), "wrong request line: {}", body.lines().next().unwrap_or(""));
-    assert!(body.contains("PROMPT-MARKER: this exact string MUST reach the server unchanged."),
-        "prompt bytes did not arrive verbatim");
+    assert!(
+        body.starts_with("POST /v1/chat/completions"),
+        "wrong request line: {}",
+        body.lines().next().unwrap_or("")
+    );
+    assert!(
+        body.contains("PROMPT-MARKER: this exact string MUST reach the server unchanged."),
+        "prompt bytes did not arrive verbatim"
+    );
     assert!(body.contains("\"stream\":true"));
     assert!(body.contains("\"model\":\"mock-model\""));
-    assert!(body.contains("\"max_tokens\":64"), "the brevity ceiling must reach the server");
+    assert!(
+        body.contains("\"max_tokens\":64"),
+        "the brevity ceiling must reach the server"
+    );
 }
 
 #[tokio::test]
@@ -118,6 +150,14 @@ async fn remote_url_refused_when_local_only_on() {
     };
     let err = run_chat_call(opts).await.expect_err("must be rejected");
     let msg = err.to_string();
-    assert!(msg.contains("Local-only"), "rejection must mention Local-only: {}", msg);
-    assert!(msg.contains("api.openai.com"), "rejection must name the host: {}", msg);
+    assert!(
+        msg.contains("Local-only"),
+        "rejection must mention Local-only: {}",
+        msg
+    );
+    assert!(
+        msg.contains("api.openai.com"),
+        "rejection must name the host: {}",
+        msg
+    );
 }

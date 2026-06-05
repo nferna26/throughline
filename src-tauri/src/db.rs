@@ -21,7 +21,9 @@ pub fn open_and_migrate() -> Result<Connection> {
     // (written atomically before commit), not the DB row. Halves the per-commit
     // fsync cost vs. WAL's FULL default. See cto-kb
     // adr-002-throughline-sqlite-synchronous-normal.
-    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
+    )?;
     migrations::apply_pending(&conn)?;
     Ok(conn)
 }
@@ -37,9 +39,17 @@ mod tests {
     fn open_sets_synchronous_normal_with_wal() {
         let _g = paths::lock_env_for_test();
         let conn = open_and_migrate().expect("open_and_migrate");
-        let sync: i64 = conn.query_row("PRAGMA synchronous", [], |r| r.get(0)).unwrap();
+        let sync: i64 = conn
+            .query_row("PRAGMA synchronous", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(sync, 1, "expected synchronous=NORMAL (1), got {}", sync);
-        let journal: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
-        assert_eq!(journal.to_lowercase(), "wal", "WAL must stay on alongside NORMAL");
+        let journal: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            journal.to_lowercase(),
+            "wal",
+            "WAL must stay on alongside NORMAL"
+        );
     }
 }

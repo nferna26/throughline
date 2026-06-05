@@ -34,7 +34,9 @@ fn confessions_fixture() -> String {
     s.push_str("Title: The Confessions of Saint Augustine\n");
     s.push_str("Author: Saint Augustine, Bishop of Hippo\n");
     s.push_str("Translator: E. B. Pusey\n\n");
-    s.push_str("*** START OF THE PROJECT GUTENBERG EBOOK THE CONFESSIONS OF SAINT AUGUSTINE ***\n\n");
+    s.push_str(
+        "*** START OF THE PROJECT GUTENBERG EBOOK THE CONFESSIONS OF SAINT AUGUSTINE ***\n\n",
+    );
 
     // Flat sequence of Roman-numeral chapters, EACH followed by real content so
     // no section is empty. The importer makes one section per heading spanning
@@ -43,8 +45,8 @@ fn confessions_fixture() -> String {
     // public-domain quote); the rest is original filler so nothing long is
     // reproduced verbatim.
     let chapters = [
-        "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
-        "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX",
+        "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV",
+        "XV", "XVI", "XVII", "XVIII", "XIX", "XX",
     ];
     for (i, ch) in chapters.iter().enumerate() {
         s.push_str(&format!("{}.\n\n", ch));
@@ -86,7 +88,10 @@ fn main() -> anyhow::Result<()> {
     let sections = result.sections.clone();
 
     assert_eq!(book.source_type, "txt", "Shot 1 is text-first");
-    assert!(!book.source_sha256.is_empty(), "every imported source must be SHA-256 hashed");
+    assert!(
+        !book.source_sha256.is_empty(),
+        "every imported source must be SHA-256 hashed"
+    );
     assert_eq!(
         book.author.as_deref(),
         Some("Saint Augustine, Bishop of Hippo"),
@@ -130,8 +135,15 @@ fn main() -> anyhow::Result<()> {
         params![plan.id, plan.book_id, plan.start_date, plan.target_finish_date, plan.daily_target_units, plan.days_per_week, plan.catchup_mode, plan.status, plan.activated_at, plan.original_finish_date],
     )?;
     let total_days = plan::total_days(&plan);
-    assert_eq!(total_days, 30, "AGENTS.md: generate a 30-day plan, got {}", total_days);
-    println!("    plan: {} → {} ({} days)", plan.start_date, plan.target_finish_date, total_days);
+    assert_eq!(
+        total_days, 30,
+        "AGENTS.md: generate a 30-day plan, got {}",
+        total_days
+    );
+    println!(
+        "    plan: {} → {} ({} days)",
+        plan.start_date, plan.target_finish_date, total_days
+    );
 
     // ── 3. Open today's (day-1) text section ───────────────────────────────
     let computed = plan::compute(&plan, &sections, &[])?;
@@ -139,9 +151,20 @@ fn main() -> anyhow::Result<()> {
         .assigned_section_index
         .expect("plan must assign a day-1 section");
     let today_sec = sections[day1_idx].clone();
-    assert!(today_sec.assignable, "day 1 must be an assignable section, not front matter");
-    let start: usize = today_sec.start_locator.as_deref().unwrap_or("0").parse().unwrap_or(0);
-    let end: Option<usize> = today_sec.end_locator.as_deref().and_then(|s| s.parse().ok());
+    assert!(
+        today_sec.assignable,
+        "day 1 must be an assignable section, not front matter"
+    );
+    let start: usize = today_sec
+        .start_locator
+        .as_deref()
+        .unwrap_or("0")
+        .parse()
+        .unwrap_or(0);
+    let end: Option<usize> = today_sec
+        .end_locator
+        .as_deref()
+        .and_then(|s| s.parse().ok());
     // Same on-disk read path the reader uses (rebases by the stripped header offset).
     let body = commands::books::read_txt_section(&book.id, start, end)?;
     assert!(
@@ -149,7 +172,11 @@ fn main() -> anyhow::Result<()> {
         "today's section must render real text, got {} chars",
         body.trim().chars().count()
     );
-    println!("    DAY 1 → {:?} ({} chars of text)", today_sec.label, body.trim().chars().count());
+    println!(
+        "    DAY 1 → {:?} ({} chars of text)",
+        today_sec.label,
+        body.trim().chars().count()
+    );
 
     // ── 4. Mark today's section complete ───────────────────────────────────
     let now = Utc::now().to_rfc3339();
@@ -233,6 +260,8 @@ fn main() -> anyhow::Result<()> {
 
     println!("\n==> SHOT 1 ACCEPTANCE OK");
     println!("    import → 30-day plan → today's section → complete → note → export");
-    println!("    frontmatter: type ✓  source_private:true ✓  source_sha256 ✓  locator ✓  chapter ✓");
+    println!(
+        "    frontmatter: type ✓  source_private:true ✓  source_sha256 ✓  locator ✓  chapter ✓"
+    );
     Ok(())
 }

@@ -46,7 +46,10 @@ pub enum AppError {
 
     /// Resource lookup failed. `resource` is the type ("book", "section",
     /// "ai_request"); `id` is the requested identifier if known.
-    NotFound { resource: String, id: Option<String> },
+    NotFound {
+        resource: String,
+        id: Option<String>,
+    },
 
     /// Catch-all. Used by the `From<anyhow::Error>` impl for errors that
     /// haven't been classified into a more specific variant yet. Adding a
@@ -55,15 +58,42 @@ pub enum AppError {
 }
 
 impl AppError {
-    pub fn db(msg: impl Into<String>) -> Self { AppError::Db { message: msg.into() } }
-    pub fn ai(msg: impl Into<String>) -> Self { AppError::Ai { message: msg.into() } }
-    pub fn io(msg: impl Into<String>) -> Self { AppError::Io { message: msg.into() } }
-    pub fn validation(msg: impl Into<String>) -> Self { AppError::Validation { message: msg.into() } }
-    pub fn config(msg: impl Into<String>) -> Self { AppError::Config { message: msg.into() } }
-    pub fn not_found(resource: impl Into<String>, id: impl Into<Option<String>>) -> Self {
-        AppError::NotFound { resource: resource.into(), id: id.into() }
+    pub fn db(msg: impl Into<String>) -> Self {
+        AppError::Db {
+            message: msg.into(),
+        }
     }
-    pub fn internal(msg: impl Into<String>) -> Self { AppError::Internal { message: msg.into() } }
+    pub fn ai(msg: impl Into<String>) -> Self {
+        AppError::Ai {
+            message: msg.into(),
+        }
+    }
+    pub fn io(msg: impl Into<String>) -> Self {
+        AppError::Io {
+            message: msg.into(),
+        }
+    }
+    pub fn validation(msg: impl Into<String>) -> Self {
+        AppError::Validation {
+            message: msg.into(),
+        }
+    }
+    pub fn config(msg: impl Into<String>) -> Self {
+        AppError::Config {
+            message: msg.into(),
+        }
+    }
+    pub fn not_found(resource: impl Into<String>, id: impl Into<Option<String>>) -> Self {
+        AppError::NotFound {
+            resource: resource.into(),
+            id: id.into(),
+        }
+    }
+    pub fn internal(msg: impl Into<String>) -> Self {
+        AppError::Internal {
+            message: msg.into(),
+        }
+    }
 
     /// Short, user-facing one-liner for log / UI display. Maps NotFound
     /// to a sensible string instead of exposing the JSON shape.
@@ -108,32 +138,42 @@ impl std::error::Error for AppError {}
 
 impl From<rusqlite::Error> for AppError {
     fn from(e: rusqlite::Error) -> Self {
-        AppError::Db { message: e.to_string() }
+        AppError::Db {
+            message: e.to_string(),
+        }
     }
 }
 
 impl From<std::io::Error> for AppError {
     fn from(e: std::io::Error) -> Self {
-        AppError::Io { message: e.to_string() }
+        AppError::Io {
+            message: e.to_string(),
+        }
     }
 }
 
 impl From<anyhow::Error> for AppError {
     fn from(e: anyhow::Error) -> Self {
         // `{:#}` flattens the anyhow chain so the user sees the proximate cause.
-        AppError::Internal { message: format!("{:#}", e) }
+        AppError::Internal {
+            message: format!("{:#}", e),
+        }
     }
 }
 
 impl From<std::sync::PoisonError<std::sync::MutexGuard<'_, rusqlite::Connection>>> for AppError {
     fn from(e: std::sync::PoisonError<std::sync::MutexGuard<'_, rusqlite::Connection>>) -> Self {
-        AppError::Internal { message: format!("mutex poisoned: {}", e) }
+        AppError::Internal {
+            message: format!("mutex poisoned: {}", e),
+        }
     }
 }
 
 impl From<serde_json::Error> for AppError {
     fn from(e: serde_json::Error) -> Self {
-        AppError::Internal { message: format!("json: {}", e) }
+        AppError::Internal {
+            message: format!("json: {}", e),
+        }
     }
 }
 
@@ -150,7 +190,9 @@ impl From<String> for AppError {
 
 impl From<&str> for AppError {
     fn from(message: &str) -> Self {
-        AppError::Internal { message: message.to_string() }
+        AppError::Internal {
+            message: message.to_string(),
+        }
     }
 }
 
@@ -196,10 +238,10 @@ mod tests {
 
     #[test]
     fn anyhow_error_converts_to_internal() {
-        let r: Result<(), AppError> = (|| -> Result<(), AppError> {
+        let r: Result<(), AppError> = {
             let e: anyhow::Error = anyhow::anyhow!("upstream failure");
             Err(e.into())
-        })();
+        };
         match r {
             Err(AppError::Internal { message }) => assert!(message.contains("upstream failure")),
             other => panic!("expected Internal, got {:?}", other),

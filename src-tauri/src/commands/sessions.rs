@@ -63,13 +63,22 @@ pub fn cmd_extend_finish_date(
                status = 'rebalanced',
                original_finish_date = COALESCE(original_finish_date, ?3)
          WHERE id = ?4",
-        params![recomputed.new_target_finish_date, recomputed.new_daily_target_units, plan.target_finish_date, plan.id],
+        params![
+            recomputed.new_target_finish_date,
+            recomputed.new_daily_target_units,
+            plan.target_finish_date,
+            plan.id
+        ],
     )?;
     Ok(recomputed)
 }
 
 #[tauri::command]
-pub fn cmd_restart_current_section(book_id: String, section_id: String, state: State<DbState>) -> Result<(), AppError> {
+pub fn cmd_restart_current_section(
+    book_id: String,
+    section_id: String,
+    state: State<DbState>,
+) -> Result<(), AppError> {
     let conn = state.0.lock()?;
     conn.execute(
         "DELETE FROM section_progress WHERE book_id = ?1 AND section_id = ?2",
@@ -79,17 +88,26 @@ pub fn cmd_restart_current_section(book_id: String, section_id: String, state: S
 }
 
 #[tauri::command]
-pub fn cmd_start_session(book_id: String, section_id: Option<String>, start_locator: Option<String>, state: State<DbState>) -> Result<ReadingSession, AppError> {
+pub fn cmd_start_session(
+    book_id: String,
+    section_id: Option<String>,
+    start_locator: Option<String>,
+    state: State<DbState>,
+) -> Result<ReadingSession, AppError> {
     let conn = state.0.lock()?;
     let id = format!("sess_{}", Uuid::new_v4().simple());
     let now = Utc::now().to_rfc3339();
-    let start_loc = start_locator.or_else(|| section_id.as_ref().and_then(|sid| {
-        conn.query_row(
-            "SELECT start_locator FROM book_sections WHERE id = ?1",
-            params![sid],
-            |r| r.get::<_, Option<String>>(0),
-        ).ok().flatten()
-    }));
+    let start_loc = start_locator.or_else(|| {
+        section_id.as_ref().and_then(|sid| {
+            conn.query_row(
+                "SELECT start_locator FROM book_sections WHERE id = ?1",
+                params![sid],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
+        })
+    });
     conn.execute(
         "INSERT INTO reading_sessions (id, book_id, started_at, ended_at, start_locator, end_locator, minutes, completed_assignment, subjective_difficulty)
          VALUES (?1, ?2, ?3, NULL, ?4, NULL, NULL, 0, NULL)",
@@ -132,11 +150,13 @@ pub fn cmd_end_session(
     )?;
 
     for sec_id in &completed {
-        let book_id: Option<String> = conn.query_row(
-            "SELECT book_id FROM book_sections WHERE id = ?1",
-            params![sec_id],
-            |r| r.get(0),
-        ).ok();
+        let book_id: Option<String> = conn
+            .query_row(
+                "SELECT book_id FROM book_sections WHERE id = ?1",
+                params![sec_id],
+                |r| r.get(0),
+            )
+            .ok();
         if let Some(book_id) = book_id {
             conn.execute(
                 "INSERT INTO section_progress (book_id, section_id, completed_at, last_locator)
@@ -178,9 +198,18 @@ pub fn cmd_end_session(
             "SELECT id, title, author, source_type, source_path, source_sha256, created_at, last_opened_at FROM books WHERE id = ?1",
         )?;
         let mut rows = s.query(params![session.book_id])?;
-        if let Some(row) = rows.next()? { Ok(Some(book_from_row(row)?)) } else { Ok(None) }
+        if let Some(row) = rows.next()? {
+            Ok(Some(book_from_row(row)?))
+        } else {
+            Ok(None)
+        }
     })() {
-        if let Ok(p) = export::export_session(&export::root_for(&conn), &book, &session, summary_sentence.as_deref()) {
+        if let Ok(p) = export::export_session(
+            &export::root_for(&conn),
+            &book,
+            &session,
+            summary_sentence.as_deref(),
+        ) {
             log::log_export("session", &p.to_string_lossy());
         }
     }

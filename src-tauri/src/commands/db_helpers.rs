@@ -47,7 +47,9 @@ pub fn plan_from_row(row: &rusqlite::Row) -> rusqlite::Result<ReadingPlan> {
         days_per_week: row.get(5)?,
         catchup_mode: row.get(6)?,
         // Columns 7-9 added in migration v005; read defensively for legacy rows.
-        status: row.get::<_, Option<String>>(7)?.unwrap_or_else(|| "active".to_string()),
+        status: row
+            .get::<_, Option<String>>(7)?
+            .unwrap_or_else(|| "active".to_string()),
         activated_at: row.get(8)?,
         original_finish_date: row.get(9)?,
     })
@@ -142,17 +144,24 @@ pub fn list_sections(conn: &Connection, book_id: &str) -> rusqlite::Result<Vec<B
     )?;
     let rows = stmt.query_map(params![book_id], section_from_row)?;
     let mut out = Vec::new();
-    for r in rows { out.push(r?); }
+    for r in rows {
+        out.push(r?);
+    }
     Ok(out)
 }
 
-pub fn list_completed_section_ids(conn: &Connection, book_id: &str) -> rusqlite::Result<Vec<String>> {
+pub fn list_completed_section_ids(
+    conn: &Connection,
+    book_id: &str,
+) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT section_id FROM section_progress WHERE book_id = ?1 AND completed_at IS NOT NULL",
     )?;
     let rows = stmt.query_map(params![book_id], |r| r.get::<_, String>(0))?;
     let mut out = Vec::new();
-    for r in rows { out.push(r?); }
+    for r in rows {
+        out.push(r?);
+    }
     Ok(out)
 }
 
@@ -186,7 +195,10 @@ pub fn bump_last_opened_at(conn: &Connection, book_id: &str) -> rusqlite::Result
     Ok(())
 }
 
-pub fn fetch_plan_for_book(conn: &Connection, book_id: &str) -> rusqlite::Result<Option<ReadingPlan>> {
+pub fn fetch_plan_for_book(
+    conn: &Connection,
+    book_id: &str,
+) -> rusqlite::Result<Option<ReadingPlan>> {
     let mut stmt = conn.prepare(
         "SELECT id, book_id, start_date, target_finish_date, daily_target_units, days_per_week, catchup_mode, status, activated_at, original_finish_date
          FROM reading_plans WHERE book_id = ?1 ORDER BY start_date DESC LIMIT 1",
@@ -206,7 +218,9 @@ pub fn fetch_book(conn: &Connection, book_id: &str) -> rusqlite::Result<Option<B
     let mut rows = s.query(params![book_id])?;
     if let Some(row) = rows.next()? {
         Ok(Some(book_from_row(row)?))
-    } else { Ok(None) }
+    } else {
+        Ok(None)
+    }
 }
 
 /// All AI audit rows, newest first, with the book title LEFT-JOINed for display
@@ -220,7 +234,9 @@ pub fn list_ai_requests(conn: &Connection) -> rusqlite::Result<Vec<AiRequest>> {
     )?;
     let rows = stmt.query_map([], ai_request_from_row)?;
     let mut out = Vec::new();
-    for r in rows { out.push(r?); }
+    for r in rows {
+        out.push(r?);
+    }
     Ok(out)
 }
 
@@ -236,5 +252,7 @@ pub fn fetch_book_by_sha(conn: &Connection, sha: &str) -> rusqlite::Result<Optio
     let mut rows = s.query(params![sha])?;
     if let Some(row) = rows.next()? {
         Ok(Some(book_from_row(row)?))
-    } else { Ok(None) }
+    } else {
+        Ok(None)
+    }
 }

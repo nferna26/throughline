@@ -74,7 +74,20 @@ impl AiProvider {
     }
     /// True for the cloud providers that send the selection off-device.
     pub fn is_remote(self) -> bool {
-        matches!(self, AiProvider::OpenAi | AiProvider::Anthropic | AiProvider::Codex)
+        matches!(
+            self,
+            AiProvider::OpenAi | AiProvider::Anthropic | AiProvider::Codex
+        )
+    }
+    /// The remote host the selection is sent to, for the cloud providers. None
+    /// for on-device/unset providers. Mirrors `provider_host` in `commands::ai`.
+    pub fn remote_host(self) -> Option<&'static str> {
+        match self {
+            AiProvider::OpenAi => Some("api.openai.com"),
+            AiProvider::Anthropic => Some("api.anthropic.com"),
+            AiProvider::Codex => Some("chatgpt.com"),
+            _ => None,
+        }
     }
 }
 /// Default length of a planned reading sitting, in minutes (the "Reading rhythm"
@@ -97,7 +110,10 @@ pub struct SettingsDto {
     pub export_path_is_default: bool,
     /// Always the OS app-support path. Read-only display.
     pub app_data_path: String,
-    /// "Local-only mode: ON" or "Local-only mode: OFF" — derived from local_only.
+    /// Human label for the real send target, derived from the AUTHORITATIVE
+    /// `ai_provider` (NOT from `local_only`) so it can never contradict where a
+    /// request actually goes: an on-device label for local/unset/disabled, and a
+    /// "sends to <host>" label for a cloud provider.
     pub ai_posture: String,
     /// AI base URL (default http://localhost:1234/v1). May point at any
     /// OpenAI-compatible endpoint, but is rejected at call time if it is
@@ -183,11 +199,16 @@ pub fn validate_export_path(raw: &str) -> Result<PathBuf> {
         return Err(anyhow!("export path must be absolute (got {:?})", expanded));
     }
     if expanded.exists() && expanded.is_file() {
-        return Err(anyhow!("export path points at a file, not a directory: {:?}", expanded));
+        return Err(anyhow!(
+            "export path points at a file, not a directory: {:?}",
+            expanded
+        ));
     }
     // Refuse to overwrite obvious system directories.
     let s = expanded.to_string_lossy().to_string();
-    let banned = ["/", "/etc", "/System", "/Library", "/usr", "/bin", "/sbin", "/var"];
+    let banned = [
+        "/", "/etc", "/System", "/Library", "/usr", "/bin", "/sbin", "/var",
+    ];
     if banned.iter().any(|b| s == *b) {
         return Err(anyhow!("refusing to use {} as the export root", s));
     }
@@ -233,10 +254,7 @@ pub fn set_string(conn: &Connection, key: &str, value: &str) -> Result<()> {
 pub fn get_local_only(conn: &Connection) -> bool {
     // Default ON. The flag is stored as a string ("true"/"false") so it shares
     // the same key/value table as the others.
-    match get_string(conn, KEY_LOCAL_ONLY).as_deref() {
-        Some("false") => false,
-        _ => true,
-    }
+    !matches!(get_string(conn, KEY_LOCAL_ONLY).as_deref(), Some("false"))
 }
 
 pub fn get_ai_base_url(conn: &Connection) -> String {
@@ -337,7 +355,11 @@ pub fn mark_key_present(conn: &Connection, provider: &str, present: bool) {
 
 /// Record (or clear) the Codex-credentials marker.
 pub fn mark_codex_creds_present(conn: &Connection, present: bool) {
-    let _ = set_string(conn, KEY_CODEX_CREDS_PRESENT, if present { "1" } else { "0" });
+    let _ = set_string(
+        conn,
+        KEY_CODEX_CREDS_PRESENT,
+        if present { "1" } else { "0" },
+    );
 }
 
 /// Read a persisted presence flag, seeding it once from the Keychain if it has
@@ -357,6 +379,16 @@ fn key_present_seeded(conn: &Connection, flag_key: &str, probe: impl FnOnce() ->
     }
 }
 
+/// Build the AI posture label from the AUTHORITATIVE provider, so the label can
+/// never disagree with the real send target. A cloud provider names the host it
+/// sends to; everything else (local, unset, or explicitly disabled) is on-device.
+pub fn ai_posture_label(provider: AiProvider) -> String {
+    match provider.remote_host() {
+        Some(host) => format!("Sends your selection to {host}"),
+        None => "On-device only".to_string(),
+    }
+}
+
 pub fn build_dto(conn: &Connection) -> Result<SettingsDto> {
     let export = get_export_path(conn)?;
     let local_only = get_local_only(conn);
@@ -365,7 +397,7 @@ pub fn build_dto(conn: &Connection) -> Result<SettingsDto> {
         export_path: export.to_string_lossy().to_string(),
         export_path_is_default: export_path_is_default(conn),
         app_data_path: paths::app_support_dir()?.to_string_lossy().to_string(),
-        ai_posture: if local_only { "Local-only mode: ON".to_string() } else { "Local-only mode: OFF".to_string() },
+        ai_posture: ai_posture_label(provider),
         ai_base_url: get_ai_base_url(conn),
         ai_model: get_ai_model(conn),
         ai_local_only: local_only,
@@ -434,7 +466,11 @@ mod tests {
 
     fn mem() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)", []).unwrap();
+        conn.execute(
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)",
+            [],
+        )
+        .unwrap();
         conn
     }
 
@@ -468,7 +504,11 @@ mod tests {
         set_string(&conn, KEY_READING_RHYTHM_MINUTES, "9000").unwrap();
         assert_eq!(get_reading_rhythm_minutes(&conn), 120, "cap at 120 min");
         set_string(&conn, KEY_READING_RHYTHM_MINUTES, "not-a-number").unwrap();
-        assert_eq!(get_reading_rhythm_minutes(&conn), DEFAULT_RHYTHM_MINUTES, "fall back on garbage");
+        assert_eq!(
+            get_reading_rhythm_minutes(&conn),
+            DEFAULT_RHYTHM_MINUTES,
+            "fall back on garbage"
+        );
     }
 
     #[test]
@@ -502,9 +542,11 @@ mod tests {
             panic!("probe must not run when the flag is already set")
         }));
         mark_key_present(&conn, "openai", false);
-        assert!(!key_present_seeded(&conn, KEY_AI_KEY_PRESENT_OPENAI, || {
-            panic!("probe must not run when the flag is already set")
-        }));
+        assert!(!key_present_seeded(
+            &conn,
+            KEY_AI_KEY_PRESENT_OPENAI,
+            || { panic!("probe must not run when the flag is already set") }
+        ));
         // Providers without a stored key (local/codex/none) have no openai/anthropic flag.
         mark_key_present(&conn, "local", true); // no-op, must not panic
     }
@@ -513,8 +555,55 @@ mod tests {
     fn codex_presence_flag_round_trips() {
         let conn = mem();
         mark_codex_creds_present(&conn, true);
-        assert_eq!(get_string(&conn, KEY_CODEX_CREDS_PRESENT).as_deref(), Some("1"));
+        assert_eq!(
+            get_string(&conn, KEY_CODEX_CREDS_PRESENT).as_deref(),
+            Some("1")
+        );
         mark_codex_creds_present(&conn, false);
-        assert_eq!(get_string(&conn, KEY_CODEX_CREDS_PRESENT).as_deref(), Some("0"));
+        assert_eq!(
+            get_string(&conn, KEY_CODEX_CREDS_PRESENT).as_deref(),
+            Some("0")
+        );
+    }
+
+    /// The posture label is derived from the AUTHORITATIVE provider, not from
+    /// `local_only`, so it can never claim "on-device" while a cloud provider is
+    /// the real send target. Each cloud provider names its host; everything else
+    /// is on-device. (Pinned on the pure helper rather than `build_dto`, which
+    /// touches the filesystem/Keychain and so is never exercised in the default
+    /// suite.)
+    #[test]
+    fn posture_label_follows_authoritative_provider_not_local_only() {
+        // On-device for the non-remote providers and the unset/disabled states.
+        for p in [AiProvider::Local, AiProvider::Unset, AiProvider::Disabled] {
+            assert_eq!(
+                ai_posture_label(p),
+                "On-device only",
+                "{p:?} must read on-device"
+            );
+        }
+        // Cloud providers name the exact host the selection is sent to.
+        assert_eq!(
+            ai_posture_label(AiProvider::OpenAi),
+            "Sends your selection to api.openai.com"
+        );
+        assert_eq!(
+            ai_posture_label(AiProvider::Anthropic),
+            "Sends your selection to api.anthropic.com"
+        );
+        assert_eq!(
+            ai_posture_label(AiProvider::Codex),
+            "Sends your selection to chatgpt.com"
+        );
+        // Regression: a remote provider must never read on-device, regardless of
+        // any lingering stale `local_only` flag — the label follows the provider.
+        for p in [AiProvider::OpenAi, AiProvider::Anthropic, AiProvider::Codex] {
+            assert_ne!(
+                ai_posture_label(p),
+                "On-device only",
+                "{p:?} must not read on-device"
+            );
+            assert!(p.remote_host().is_some(), "{p:?} must expose a remote host");
+        }
     }
 }

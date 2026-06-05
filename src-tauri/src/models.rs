@@ -30,7 +30,9 @@ pub struct BookSection {
     pub assignable: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// An inline/block style range within a section's plain text, in **UTF-16
 /// code-unit** offsets relative to that section's text — matching the reader's JS

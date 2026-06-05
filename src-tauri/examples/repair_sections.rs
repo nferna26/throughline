@@ -12,10 +12,10 @@
 // Usage:
 //   cargo run --example repair_sections                 # all unread txt books
 //   cargo run --example repair_sections -- <book_id>    # one specific book
-use throughline_lib::*;
 use rusqlite::params;
 use std::fs;
 use std::path::Path;
+use throughline_lib::*;
 
 fn main() -> anyhow::Result<()> {
     let target = std::env::args().nth(1); // None => all unread txt books
@@ -63,7 +63,8 @@ fn main() -> anyhow::Result<()> {
         let offsets: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(dir.join("body_offsets.json"))?)?;
         let body_start = offsets["body_start"].as_u64().unwrap_or(0) as usize;
-        let body_end = (offsets["body_end"].as_u64().unwrap_or(raw.len() as u64) as usize).min(raw.len());
+        let body_end =
+            (offsets["body_end"].as_u64().unwrap_or(raw.len() as u64) as usize).min(raw.len());
         let body = &raw[body_start..body_end];
 
         let new_secs = import::sectionize(body);
@@ -72,7 +73,10 @@ fn main() -> anyhow::Result<()> {
             params![id],
             |r| r.get(0),
         )?;
-        println!("→ '{title}' [{id}]: {before} old sections → {} new", new_secs.len());
+        println!(
+            "→ '{title}' [{id}]: {before} old sections → {} new",
+            new_secs.len()
+        );
 
         let tx = conn.unchecked_transaction()?;
         tx.execute("DELETE FROM book_sections WHERE book_id = ?1", params![id])?;
@@ -93,7 +97,11 @@ fn main() -> anyhow::Result<()> {
         tx.commit()?;
 
         for (i, (label, s, e)) in new_secs.iter().take(3).enumerate() {
-            let snip: String = body[*s..*e].chars().filter(|c| !c.is_control()).take(46).collect();
+            let snip: String = body[*s..*e]
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(46)
+                .collect();
             println!("    [{i}] {label} ({} chars): {}", e - s, snip.trim());
         }
     }

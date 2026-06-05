@@ -10,7 +10,10 @@ pub enum RecoveryOption {
     /// "Resume today" — always available, no schedule change.
     ResumeToday,
     /// "+10 min for next N sessions" — small daily bump until caught up.
-    GentleCatchup { extra_minutes: i64, for_sessions: i64 },
+    GentleCatchup {
+        extra_minutes: i64,
+        for_sessions: i64,
+    },
     /// "Catch up on the weekend" — only when there's a weekend within reach.
     WeekendCatchup { weekend_starts_in_days: i64 },
     /// "Extend finish date by N days" — moves the goalpost, recomputes plan.
@@ -40,20 +43,26 @@ pub const HEADLINE: &str = "Next smallest step: 10 minutes.";
 /// - GentleCatchup is offered when 1–4 behind. Higher values bias to ExtendFinish.
 /// - WeekendCatchup is offered only when there's a weekend day in the next 3 days.
 /// - ExtendFinish is offered when >= 2 behind. Adds days_behind days by default.
-pub fn options_for(days_behind: i64, today: NaiveDate, finish_date: NaiveDate) -> Vec<RecoveryOption> {
+pub fn options_for(
+    days_behind: i64,
+    today: NaiveDate,
+    finish_date: NaiveDate,
+) -> Vec<RecoveryOption> {
     let mut out: Vec<RecoveryOption> = Vec::new();
     out.push(RecoveryOption::ResumeToday);
 
-    if days_behind >= 1 && days_behind <= 4 {
+    if (1..=4).contains(&days_behind) {
         out.push(RecoveryOption::GentleCatchup {
             extra_minutes: 10,
-            for_sessions: days_behind.max(1).min(4),
+            for_sessions: days_behind.clamp(1, 4),
         });
     }
 
     if let Some(days_to_weekend) = days_until_next_weekend(today) {
         if days_behind >= 1 && days_to_weekend <= 3 {
-            out.push(RecoveryOption::WeekendCatchup { weekend_starts_in_days: days_to_weekend });
+            out.push(RecoveryOption::WeekendCatchup {
+                weekend_starts_in_days: days_to_weekend,
+            });
         }
     }
 
@@ -143,13 +152,21 @@ mod tests {
     #[test]
     fn gentle_catchup_offered_for_small_deficit() {
         let opts = options_for(2, d(2026, 5, 25), d(2026, 6, 25));
-        assert!(opts.iter().any(|o| matches!(o, RecoveryOption::GentleCatchup { extra_minutes: 10, for_sessions: 2 })));
+        assert!(opts.iter().any(|o| matches!(
+            o,
+            RecoveryOption::GentleCatchup {
+                extra_minutes: 10,
+                for_sessions: 2
+            }
+        )));
     }
 
     #[test]
     fn extend_finish_offered_when_significantly_behind() {
         let opts = options_for(3, d(2026, 5, 25), d(2026, 6, 25));
-        assert!(opts.iter().any(|o| matches!(o, RecoveryOption::ExtendFinish { add_days: 3, .. })));
+        assert!(opts
+            .iter()
+            .any(|o| matches!(o, RecoveryOption::ExtendFinish { add_days: 3, .. })));
     }
 
     #[test]
@@ -178,10 +195,14 @@ mod tests {
     fn weekend_catchup_only_when_close_to_weekend() {
         // 2026-05-25 is a Monday → 4 days to Saturday → not offered
         let mon = options_for(2, d(2026, 5, 25), d(2026, 6, 25));
-        assert!(!mon.iter().any(|o| matches!(o, RecoveryOption::WeekendCatchup { .. })));
+        assert!(!mon
+            .iter()
+            .any(|o| matches!(o, RecoveryOption::WeekendCatchup { .. })));
         // 2026-05-28 is a Thursday → 1 day to Saturday → offered
         let thu = options_for(2, d(2026, 5, 28), d(2026, 6, 25));
-        assert!(thu.iter().any(|o| matches!(o, RecoveryOption::WeekendCatchup { .. })));
+        assert!(thu
+            .iter()
+            .any(|o| matches!(o, RecoveryOption::WeekendCatchup { .. })));
     }
 
     #[test]

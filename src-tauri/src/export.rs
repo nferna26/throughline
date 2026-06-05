@@ -57,7 +57,7 @@ pub fn export_note(root: &Path, book: &Book, note: &Note) -> Result<PathBuf> {
 
     let mut out = String::new();
     out.push_str("---\n");
-    out.push_str(&format!("type: reading_note\n"));
+    out.push_str("type: reading_note\n");
     out.push_str(&format!("book_id: {}\n", note.book_id));
     out.push_str(&format!("title: {}\n", yaml_escape(&book.title)));
     if let Some(a) = &book.author {
@@ -83,6 +83,77 @@ pub fn export_note(root: &Path, book: &Book, note: &Note) -> Result<PathBuf> {
         }
     }
 
+    paths::atomic_write_string(&dest, &out)?;
+    Ok(dest)
+}
+
+pub fn export_session(
+    root: &Path,
+    book: &Book,
+    session: &ReadingSession,
+    summary_sentence: Option<&str>,
+) -> Result<PathBuf> {
+    ensure_export_dirs(root)?;
+    let dest = root.join("Sessions").join(session_filename(session));
+    let mut out = String::new();
+    out.push_str("---\n");
+    out.push_str("type: reading_session\n");
+    out.push_str(&format!("book_id: {}\n", session.book_id));
+    out.push_str(&format!("title: {}\n", yaml_escape(&book.title)));
+    if let Some(a) = &book.author {
+        out.push_str(&format!("author: {}\n", yaml_escape(a)));
+    }
+    out.push_str(&format!("source_sha256: {}\n", book.source_sha256));
+    out.push_str("source_private: true\n");
+    out.push_str(&format!("started_at: {}\n", session.started_at));
+    if let Some(e) = &session.ended_at {
+        out.push_str(&format!("ended_at: {}\n", e));
+    }
+    if let Some(m) = session.minutes {
+        out.push_str(&format!("minutes: {}\n", m));
+    }
+    if let Some(s) = &session.start_locator {
+        out.push_str(&format!("start_locator: {}\n", yaml_escape(s)));
+    }
+    if let Some(s) = &session.end_locator {
+        out.push_str(&format!("end_locator: {}\n", yaml_escape(s)));
+    }
+    out.push_str(&format!(
+        "completed_assignment: {}\n",
+        session.completed_assignment
+    ));
+    out.push_str("---\n\n");
+    if let Some(s) = summary_sentence {
+        if !s.trim().is_empty() {
+            out.push_str("## One sentence to remember\n\n");
+            out.push_str(s);
+            out.push('\n');
+        }
+    }
+    paths::atomic_write_string(&dest, &out)?;
+    Ok(dest)
+}
+
+pub fn export_book(root: &Path, book: &Book) -> Result<PathBuf> {
+    ensure_export_dirs(root)?;
+    let dest = root.join("Books").join(book_filename(book));
+    let mut out = String::new();
+    out.push_str("---\n");
+    out.push_str("type: reading_book\n");
+    out.push_str(&format!("book_id: {}\n", book.id));
+    out.push_str(&format!("title: {}\n", yaml_escape(&book.title)));
+    if let Some(a) = &book.author {
+        out.push_str(&format!("author: {}\n", yaml_escape(a)));
+    }
+    out.push_str(&format!("source_type: {}\n", book.source_type));
+    out.push_str(&format!("source_sha256: {}\n", book.source_sha256));
+    out.push_str("source_private: true\n");
+    out.push_str(&format!("created: {}\n", book.created_at));
+    out.push_str("---\n\n");
+    out.push_str(&format!("# {}\n", book.title));
+    if let Some(a) = &book.author {
+        out.push_str(&format!("\n_{}_\n", a));
+    }
     paths::atomic_write_string(&dest, &out)?;
     Ok(dest)
 }
@@ -132,15 +203,22 @@ mod tests {
     /// and NEVER leaks the raw anchored passage held in the DB.
     #[test]
     fn takeaway_exports_typed_and_privacy_safe() {
-        let export_dir = std::env::temp_dir().join(format!("tl-export-takeaway-{}", std::process::id()));
+        let export_dir =
+            std::env::temp_dir().join(format!("tl-export-takeaway-{}", std::process::id()));
         std::fs::remove_dir_all(&export_dir).ok();
         std::fs::create_dir_all(&export_dir).unwrap();
 
         let path = export_note(&export_dir, &book(), &takeaway_note()).expect("export takeaway");
-        assert!(path.starts_with(&export_dir), "export must land under the given root: {path:?}");
+        assert!(
+            path.starts_with(&export_dir),
+            "export must land under the given root: {path:?}"
+        );
         let md = std::fs::read_to_string(&path).expect("export file exists");
 
-        assert!(md.contains("note_type: Takeaway"), "note_type must be exported:\n{md}");
+        assert!(
+            md.contains("note_type: Takeaway"),
+            "note_type must be exported:\n{md}"
+        );
         assert!(md.contains("source_private: true"));
         assert!(md.contains("grace precedes effort"));
         assert!(
@@ -153,7 +231,8 @@ mod tests {
 
     #[test]
     fn question_exports_with_question_type() {
-        let export_dir = std::env::temp_dir().join(format!("tl-export-question-{}", std::process::id()));
+        let export_dir =
+            std::env::temp_dir().join(format!("tl-export-question-{}", std::process::id()));
         std::fs::remove_dir_all(&export_dir).ok();
         std::fs::create_dir_all(&export_dir).unwrap();
 
@@ -165,7 +244,10 @@ mod tests {
         let md = std::fs::read_to_string(&path).expect("export file exists");
         assert!(md.contains("note_type: Question"));
         assert!(md.contains("can you seek what you do not know?"));
-        assert!(!md.contains("the unjust man is happy"), "no raw passage leak");
+        assert!(
+            !md.contains("the unjust man is happy"),
+            "no raw passage leak"
+        );
 
         std::fs::remove_dir_all(&export_dir).ok();
     }
@@ -175,80 +257,33 @@ mod tests {
     #[test]
     fn export_root_honors_the_configured_folder() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)", []).unwrap();
+        conn.execute(
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)",
+            [],
+        )
+        .unwrap();
         let custom = std::env::temp_dir().join(format!("tl-export-custom-{}", std::process::id()));
         std::fs::remove_dir_all(&custom).ok();
-        crate::settings::set_string(&conn, crate::settings::KEY_EXPORT_PATH, &custom.to_string_lossy()).unwrap();
+        crate::settings::set_string(
+            &conn,
+            crate::settings::KEY_EXPORT_PATH,
+            &custom.to_string_lossy(),
+        )
+        .unwrap();
 
         // The effective root is the configured folder…
-        assert_eq!(root_for(&conn), custom, "root_for must return the configured path");
+        assert_eq!(
+            root_for(&conn),
+            custom,
+            "root_for must return the configured path"
+        );
         // …and a note actually lands there, not under the default.
         let path = export_note(&root_for(&conn), &book(), &takeaway_note()).expect("export");
-        assert!(path.starts_with(&custom), "note must land under the configured folder: {path:?}");
+        assert!(
+            path.starts_with(&custom),
+            "note must land under the configured folder: {path:?}"
+        );
 
         std::fs::remove_dir_all(&custom).ok();
     }
-}
-
-pub fn export_session(root: &Path, book: &Book, session: &ReadingSession, summary_sentence: Option<&str>) -> Result<PathBuf> {
-    ensure_export_dirs(root)?;
-    let dest = root.join("Sessions").join(session_filename(session));
-    let mut out = String::new();
-    out.push_str("---\n");
-    out.push_str("type: reading_session\n");
-    out.push_str(&format!("book_id: {}\n", session.book_id));
-    out.push_str(&format!("title: {}\n", yaml_escape(&book.title)));
-    if let Some(a) = &book.author {
-        out.push_str(&format!("author: {}\n", yaml_escape(a)));
-    }
-    out.push_str(&format!("source_sha256: {}\n", book.source_sha256));
-    out.push_str("source_private: true\n");
-    out.push_str(&format!("started_at: {}\n", session.started_at));
-    if let Some(e) = &session.ended_at {
-        out.push_str(&format!("ended_at: {}\n", e));
-    }
-    if let Some(m) = session.minutes {
-        out.push_str(&format!("minutes: {}\n", m));
-    }
-    if let Some(s) = &session.start_locator {
-        out.push_str(&format!("start_locator: {}\n", yaml_escape(s)));
-    }
-    if let Some(s) = &session.end_locator {
-        out.push_str(&format!("end_locator: {}\n", yaml_escape(s)));
-    }
-    out.push_str(&format!("completed_assignment: {}\n", session.completed_assignment));
-    out.push_str("---\n\n");
-    if let Some(s) = summary_sentence {
-        if !s.trim().is_empty() {
-            out.push_str("## One sentence to remember\n\n");
-            out.push_str(s);
-            out.push_str("\n");
-        }
-    }
-    paths::atomic_write_string(&dest, &out)?;
-    Ok(dest)
-}
-
-pub fn export_book(root: &Path, book: &Book) -> Result<PathBuf> {
-    ensure_export_dirs(root)?;
-    let dest = root.join("Books").join(book_filename(book));
-    let mut out = String::new();
-    out.push_str("---\n");
-    out.push_str("type: reading_book\n");
-    out.push_str(&format!("book_id: {}\n", book.id));
-    out.push_str(&format!("title: {}\n", yaml_escape(&book.title)));
-    if let Some(a) = &book.author {
-        out.push_str(&format!("author: {}\n", yaml_escape(a)));
-    }
-    out.push_str(&format!("source_type: {}\n", book.source_type));
-    out.push_str(&format!("source_sha256: {}\n", book.source_sha256));
-    out.push_str("source_private: true\n");
-    out.push_str(&format!("created: {}\n", book.created_at));
-    out.push_str("---\n\n");
-    out.push_str(&format!("# {}\n", book.title));
-    if let Some(a) = &book.author {
-        out.push_str(&format!("\n_{}_\n", a));
-    }
-    paths::atomic_write_string(&dest, &out)?;
-    Ok(dest)
 }
