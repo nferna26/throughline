@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import RGIcon from "../components/RGIcon";
+import TLIcon from "../components/TLIcon";
 import type { Book, BookSection } from "../types";
 
 interface Props {
@@ -40,13 +40,42 @@ function humanHours(minutes: number): string {
   return `${Math.round(h)} hours`;
 }
 
+/** One unified segmented-pill control for every choice group (the design
+ *  handoff's .tl-choice). Single-select, so it keeps radio semantics
+ *  (role=radiogroup / aria-checked) for WCAG-AA, not the handoff's aria-pressed.
+ *  Module-level so its identity is stable across renders (a nested definition
+ *  would remount the subtree and strand element refs). */
+function Choice<T extends string | number>(props: {
+  label: string;
+  value: T;
+  set: (v: T) => void;
+  options: Array<{ v: T; l: string }>;
+  compact?: boolean;
+}) {
+  return (
+    <div className={"tl-choice" + (props.compact ? " compact" : "")} role="radiogroup" aria-label={props.label}>
+      {props.options.map((o) => (
+        <button
+          type="button"
+          key={String(o.v)}
+          role="radio"
+          aria-checked={props.value === o.v}
+          onClick={() => props.set(o.v)}
+        >
+          {o.l}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function BookSetupSheet({ book, onDone }: Props) {
   const [sections, setSections] = useState<BookSection[]>([]);
   const [finishMode, setFinishMode] = useState<FinishMode>("month");
   const [customDate, setCustomDate] = useState<string>(isoDate(addDays(30)));
   const [sessionMinutes, setSessionMinutes] = useState<number>(25);
   const [daysPerWeek, setDaysPerWeek] = useState<number>(5);
-  const [marginHelp, setMarginHelp] = useState<"guided" | "quiet">("guided");
+  const [marginHelp, setMarginHelp] = useState<"guided" | "quiet" | "deep_study">("guided");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -108,89 +137,116 @@ export default function BookSetupSheet({ book, onDone }: Props) {
   }
 
   return (
-    <div className="rg-setup">
-      <div className="rg-setup-card">
-        <div className="rg-kicker"><span className="dot" />New book</div>
-        <h1 className="rg-setup-title">{book.title}</h1>
-        {book.author && <div className="rg-today-author">{book.author}</div>}
-        <p className="rg-planready-note" style={{ marginTop: "var(--rg-4)" }}>
-          Plan ready. You are not behind. Set a rhythm below, or decide later — your pace clock
-          only starts when you begin reading.
-        </p>
-
-        <fieldset className="rg-setup-group">
-          <legend>Finish rhythm</legend>
-          <div className="rg-chips" role="radiogroup" aria-label="Finish rhythm">
-            <button type="button" role="radio" aria-checked={finishMode === "week"} className={finishMode === "week" ? "rg-chip on" : "rg-chip"} onClick={() => setFinishMode("week")}>This week</button>
-            <button type="button" role="radio" aria-checked={finishMode === "month"} className={finishMode === "month" ? "rg-chip on" : "rg-chip"} onClick={() => setFinishMode("month")}>This month</button>
-            <button type="button" role="radio" aria-checked={finishMode === "date"} className={finishMode === "date" ? "rg-chip on" : "rg-chip"} onClick={() => setFinishMode("date")}>Pick a date</button>
-          </div>
-          {finishMode === "date" && (
-            <input
-              type="date"
-              className="rg-input"
-              style={{ marginTop: "var(--rg-3)", maxWidth: 200 }}
-              value={customDate}
-              min={isoDate(addDays(1))}
-              onChange={(e) => setCustomDate(e.target.value)}
-              aria-label="Target finish date"
-            />
-          )}
-        </fieldset>
-
-        <fieldset className="rg-setup-group">
-          <legend>Reading rhythm</legend>
-          <div className="rg-setup-row">
-            <span className="rg-setup-label">Session length</span>
-            <div className="rg-chips" role="radiogroup" aria-label="Session length in minutes">
-              {MINUTE_PRESETS.map((m) => (
-                <button type="button" key={m} role="radio" aria-checked={sessionMinutes === m} className={sessionMinutes === m ? "rg-chip on" : "rg-chip"} onClick={() => setSessionMinutes(m)}>{m} min</button>
-              ))}
-            </div>
-          </div>
-          <div className="rg-setup-row">
-            <span className="rg-setup-label">Days per week</span>
-            <div className="rg-chips" role="radiogroup" aria-label="Reading days per week">
-              {DAY_PRESETS.map((d) => (
-                <button type="button" key={d} role="radio" aria-checked={daysPerWeek === d} className={daysPerWeek === d ? "rg-chip on" : "rg-chip"} onClick={() => setDaysPerWeek(d)}>{d}</button>
-              ))}
-            </div>
-          </div>
-          <p className="rg-setup-hint">{daysPerWeek} reading days, {7 - daysPerWeek} to rest. No streak to break.</p>
-        </fieldset>
-
-        <fieldset className="rg-setup-group">
-          <legend>Margin help</legend>
-          <div className="rg-chips" role="radiogroup" aria-label="Margin help">
-            <button type="button" role="radio" aria-checked={marginHelp === "guided"} className={marginHelp === "guided" ? "rg-chip on" : "rg-chip"} onClick={() => setMarginHelp("guided")}>Guided</button>
-            <button type="button" role="radio" aria-checked={marginHelp === "quiet"} className={marginHelp === "quiet" ? "rg-chip on" : "rg-chip"} onClick={() => setMarginHelp("quiet")}>Quiet</button>
-          </div>
-          <p className="rg-setup-hint">
-            {marginHelp === "guided"
-              ? "Gentle prompts in the margin while you read."
-              : "The margin stays out of the way until you ask."}
+    <div className="tl-plan-screen">
+      <div className="tl-plan-scroll">
+        <div className="tl-col tl-plan">
+          <div className="tl-kicker"><span className="dot" />New book</div>
+          <h1 className="tl-plan-title">{book.title}</h1>
+          {book.author && <div className="tl-plan-author">{book.author}</div>}
+          <p className="tl-plan-lead">
+            Your plan is ready — you are not behind. Set a rhythm, or decide later. The pace clock
+            only starts when you begin reading.
           </p>
-        </fieldset>
 
-        {est && (
-          <div className={est.feasible ? "rg-setup-estimate" : "rg-setup-estimate tight"} role="note">
-            <RGIcon name={est.feasible ? "clock" : "behind"} size={15} />
-            <span>
-              About {humanHours(est.minsFast)}–{humanHours(est.minsSlow)} of reading.{" "}
-              {est.feasible
-                ? `At ${sessionMinutes} min × ${daysPerWeek} days, that's roughly ${est.weeks} week${est.weeks === 1 ? "" : "s"} — comfortably before ${targetDate}.`
-                : `Finishing by ${targetDate} would mean about ${est.neededPerSession} min per session. At this rhythm it's closer to ${est.weeks} week${est.weeks === 1 ? "" : "s"} — give it more time, longer sittings, or more days.`}
-            </span>
+          <div className="tl-plan-card">
+            <div className="tl-plan-row">
+              <span className="tl-plan-rowlabel">Finish by</span>
+              <Choice<FinishMode>
+                label="Finish by"
+                value={finishMode}
+                set={setFinishMode}
+                options={[
+                  { v: "week", l: "This week" },
+                  { v: "month", l: "This month" },
+                  { v: "date", l: "Pick a date" },
+                ]}
+              />
+            </div>
+            {finishMode === "date" && (
+              <div className="tl-plan-row">
+                <span className="tl-plan-rowlabel" />
+                <input
+                  type="date"
+                  className="tl-input"
+                  style={{ maxWidth: 200 }}
+                  value={customDate}
+                  min={isoDate(addDays(1))}
+                  onChange={(e) => setCustomDate(e.target.value)}
+                  aria-label="Target finish date"
+                />
+              </div>
+            )}
+            <div className="tl-plan-row">
+              <span className="tl-plan-rowlabel">Session</span>
+              <Choice<number>
+                label="Session length in minutes"
+                value={sessionMinutes}
+                set={setSessionMinutes}
+                options={MINUTE_PRESETS.map((m) => ({ v: m, l: `${m} min` }))}
+              />
+            </div>
+            <div className="tl-plan-row">
+              <span className="tl-plan-rowlabel">Days a week</span>
+              <Choice<number>
+                label="Reading days per week"
+                value={daysPerWeek}
+                set={setDaysPerWeek}
+                compact
+                options={DAY_PRESETS.map((d) => ({ v: d, l: String(d) }))}
+              />
+            </div>
+            <div className="tl-plan-row">
+              <span className="tl-plan-rowlabel">Margin help</span>
+              <Choice<"guided" | "quiet" | "deep_study">
+                label="Margin help"
+                value={marginHelp}
+                set={setMarginHelp}
+                options={[
+                  { v: "guided", l: "Guided" },
+                  { v: "quiet", l: "Quiet" },
+                  { v: "deep_study", l: "Deep study" },
+                ]}
+              />
+            </div>
           </div>
-        )}
 
-        {error && <p className="rg-warn-text" role="alert">Couldn't save the plan: {error}</p>}
+          {est && (
+            <div className={"tl-estimate" + (est.feasible ? "" : " tight")} role="note">
+              <TLIcon name={est.feasible ? "clock" : "behind"} size={16} />
+              <div className="tl-estimate-body">
+                <span>
+                  About <span className="num">{humanHours(est.minsFast)}–{humanHours(est.minsSlow)}</span> of reading.{" "}
+                  {est.feasible
+                    ? <>At {sessionMinutes} min × {daysPerWeek} days, that is roughly <span className="num">{est.weeks} week{est.weeks === 1 ? "" : "s"}</span> — comfortably before {targetDate}.</>
+                    : null}
+                </span>
+                {!est.feasible && (
+                  <div className="soft-note">
+                    <TLIcon name="behind" size={13} />
+                    <span>
+                      Finishing by {targetDate} would mean about {est.neededPerSession} min per session. At this
+                      rhythm it is closer to {est.weeks} week{est.weeks === 1 ? "" : "s"} — give it more time, longer
+                      sittings, or more days. Or leave it; nothing is lost.
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
-        <div className="rg-setup-actions">
-          <button className="rg-btn rg-btn-ghost" disabled={submitting} onClick={onDone}>Decide later</button>
-          <button className="rg-btn rg-btn-primary" disabled={submitting} onClick={startPlan}>
-            {submitting ? "Saving…" : "Start this plan"}
-          </button>
+          {error && <p className="tl-warn-text" role="alert" style={{ marginTop: "var(--tl-4)" }}>Couldn't save the plan: {error}</p>}
+        </div>
+      </div>
+
+      <div className="tl-actionbar">
+        <div className="tl-actionbar-inner">
+          <span className="reassure">No streak to break.</span>
+          <span className="right">
+            <button className="tl-btn tl-btn-ghost" disabled={submitting} onClick={onDone}>Decide later</button>
+            <button className="tl-btn tl-btn-primary" disabled={submitting} onClick={startPlan}>
+              {submitting ? "Saving…" : "Start this plan"}
+            </button>
+          </span>
         </div>
       </div>
     </div>

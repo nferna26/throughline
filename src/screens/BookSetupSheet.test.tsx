@@ -81,4 +81,21 @@ describe("BookSetupSheet", () => {
     expect(onDone).toHaveBeenCalledTimes(1);
     expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_configure_plan")).toBe(false);
   });
+
+  // Deep Study is a recognized margin-help level (Quiet | Guided | Deep Study).
+  // Selecting it must round-trip to cmd_configure_plan as marginHelp:"deep_study"
+  // so the backend persists it (settings::MARGIN_HELP_LEVELS).
+  it("round-trips the Deep Study margin-help choice to cmd_configure_plan", async () => {
+    const onDone = vi.fn();
+    render(<BookSetupSheet book={book} onDone={onDone} />);
+    await waitFor(() => expect(screen.getByText(/of reading/i)).toBeInTheDocument());
+    const deep = screen.getByRole("radio", { name: /Deep Study/i });
+    fireEvent.click(deep);
+    expect(deep).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("button", { name: /Start this plan/i }));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    const call = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_configure_plan");
+    expect(call).toBeTruthy();
+    expect((call![1] as { marginHelp: string }).marginHelp).toBe("deep_study");
+  });
 });

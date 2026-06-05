@@ -1,6 +1,6 @@
 # macOS Code Signing & Notarization
 
-This is the one-time setup to make ReadingGym's `.dmg` open cleanly on any Mac
+This is the one-time setup to make Throughline's `.dmg` open cleanly on any Mac
 (no Gatekeeper warning). The release workflow (`.github/workflows/release.yml`)
 already consumes the secrets below — once you set them, tagged releases sign +
 notarize automatically.
@@ -48,15 +48,15 @@ is your **signing identity**.
 1. Open **Keychain Access** → **login** keychain → **My Certificates**.
 2. Find **Developer ID Application: …**, expand it (there's a private key under it).
 3. Right-click the certificate → **Export "Developer ID Application: …"** →
-   save as `reading-gym-cert.p12`. Set a strong export password — you'll need it
+   save as `throughline-cert.p12`. Set a strong export password — you'll need it
    in step 4 (this is `APPLE_CERTIFICATE_PASSWORD`).
 
 Base64-encode it for GitHub (secrets must be text):
 
 ```bash
-base64 -i reading-gym-cert.p12 | pbcopy   # now on your clipboard
+base64 -i throughline-cert.p12 | pbcopy   # now on your clipboard
 # or to a file:
-base64 -i reading-gym-cert.p12 -o reading-gym-cert.p12.b64
+base64 -i throughline-cert.p12 -o throughline-cert.p12.b64
 ```
 
 ---
@@ -66,7 +66,7 @@ base64 -i reading-gym-cert.p12 -o reading-gym-cert.p12.b64
 Apple won't accept your main Apple ID password here. Generate a dedicated one:
 
 1. Go to <https://appleid.apple.com> → **Sign-In and Security** → **App-Specific Passwords**.
-2. Generate one named e.g. `reading-gym-notarize`. Copy the `xxxx-xxxx-xxxx-xxxx` value.
+2. Generate one named e.g. `throughline-notarize`. Copy the `xxxx-xxxx-xxxx-xxxx` value.
    This is `APPLE_PASSWORD`.
 
 ---
@@ -77,7 +77,7 @@ From the repo root, with the `gh` CLI authenticated (`gh auth status`):
 
 ```bash
 # The base64 cert (paste the clipboard contents, or pipe the .b64 file):
-gh secret set APPLE_CERTIFICATE < reading-gym-cert.p12.b64
+gh secret set APPLE_CERTIFICATE < throughline-cert.p12.b64
 
 # The .p12 export password from step 2:
 gh secret set APPLE_CERTIFICATE_PASSWORD
@@ -114,7 +114,7 @@ You should see all six: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
 Don't leave the exported cert lying around:
 
 ```bash
-rm -f reading-gym-cert.p12 reading-gym-cert.p12.b64
+rm -f throughline-cert.p12 throughline-cert.p12.b64
 ```
 
 The cert is now only in your login keychain (for local builds) and GitHub's
@@ -157,10 +157,10 @@ notarization:
 
 ```bash
 # Signature valid + hardened runtime:
-codesign -dv --verbose=4 "src-tauri/target/release/bundle/macos/ReadingGym.app"
+codesign -dv --verbose=4 "src-tauri/target/release/bundle/macos/Throughline.app"
 
 # Gatekeeper accepts it (the real test):
-spctl -a -t exec -vv "src-tauri/target/release/bundle/macos/ReadingGym.app"
+spctl -a -t exec -vv "src-tauri/target/release/bundle/macos/Throughline.app"
 # Expect: "accepted" + "source=Notarized Developer ID"
 ```
 

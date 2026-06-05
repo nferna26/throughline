@@ -17,7 +17,7 @@
 use std::time::Duration;
 
 use rusqlite::params;
-use reading_gym_lib::{ai_client, ai_stub, db, export, models, settings};
+use throughline_lib::{ai_client, ai_stub, db, export, models, settings};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     // so the "live local endpoint" test branch will look at defaults until the
     // user configures the isolated DB. That's correct — acceptance binaries
     // must not depend on user settings.
-    let _isolated = reading_gym_lib::bin_guardrail::init_isolated_data_dir("ai_acceptance");
+    let _isolated = throughline_lib::bin_guardrail::init_isolated_data_dir("ai_acceptance");
 
     let conn = db::open_and_migrate()?;
 
@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
         ai_stub::StubMode::PrepareNext,
     ] {
         let preview = ai_stub::build_prompt(mode, &ctx);
-        let payload = ai_client::build_request_body("test-model", &preview, true);
+        let payload = ai_client::build_request_body("test-model", &preview, true, Some(90));
         assert_eq!(payload.messages[0].content, preview, "mode {:?}: preview != sent", mode);
         println!("    ✓ mode={:?} preview bytes == messages[0].content bytes", mode);
     }
@@ -122,6 +122,8 @@ async fn main() -> anyhow::Result<()> {
                     prompt: preview_for_demo.clone(),
                     stream: true,
                     timeout: Duration::from_secs(120),
+                    max_tokens: Some(90),
+                    ..Default::default()
                 };
                 match ai_client::run_chat_call(opts).await {
                     Ok(mut rx) => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import NotesBrowser from "./NotesBrowser";
 import type { Book, Note } from "../types";
 
@@ -44,7 +44,7 @@ describe("NotesBrowser", () => {
   it("shows an empty state when the book has no notes", async () => {
     mockInvoke.mockResolvedValueOnce([]);
     render(<NotesBrowser book={book} />);
-    expect(await screen.findByText(/No notes yet for this book/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Nothing captured yet for this book/i)).toBeInTheDocument();
     expect(mockInvoke).toHaveBeenCalledWith("cmd_list_notes", { bookId: "book_1" });
   });
 
@@ -59,5 +59,47 @@ describe("NotesBrowser", () => {
     expect(screen.getByText("Short Quote")).toBeInTheDocument();
     expect(screen.getByText("why does this rot?")).toBeInTheDocument();
     expect(screen.getByText(/2 from this book/i)).toBeInTheDocument();
+  });
+});
+
+describe("NotesBrowser chapter notebook", () => {
+  it("groups notes under their chapter headings", async () => {
+    mockInvoke.mockResolvedValueOnce([
+      note({ id: "a", chapter_label: "Book I", body: "from one" }),
+      note({ id: "b", chapter_label: "Book II", body: "from two" }),
+    ]);
+    const { container } = render(<NotesBrowser book={book} />);
+    expect(await screen.findByText("from one")).toBeInTheDocument();
+    const chapters = Array.from(container.querySelectorAll(".tl-notebook-chapter-h")).map((e) => e.textContent);
+    expect(chapters).toContain("Book I");
+    expect(chapters).toContain("Book II");
+  });
+
+  it("offers category filter chips with counts and filters the list", async () => {
+    mockInvoke.mockResolvedValueOnce([
+      note({ id: "h", note_type: "Highlight", body: "", anchored_text: "a highlighted run" }),
+      note({ id: "q", note_type: "Question", body: "why does he say this?" }),
+      note({ id: "t", note_type: "Takeaway", body: "grace precedes effort" }),
+    ]);
+    render(<NotesBrowser book={book} />);
+    expect(await screen.findByText("grace precedes effort")).toBeInTheDocument();
+
+    // A chip per populated category, each with a count.
+    expect(screen.getByRole("button", { name: /Questions · 1/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Takeaways · 1/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Highlights · 1/ })).toBeInTheDocument();
+
+    // Filtering to Takeaways hides the question.
+    fireEvent.click(screen.getByRole("button", { name: /Takeaways · 1/ }));
+    expect(screen.getByText("grace precedes effort")).toBeInTheDocument();
+    expect(screen.queryByText("why does he say this?")).toBeNull();
+  });
+
+  it("shows a highlight's anchored text when it has no body", async () => {
+    mockInvoke.mockResolvedValueOnce([
+      note({ id: "h", note_type: "Highlight", body: "", anchored_text: "the unjust man is happy" }),
+    ]);
+    render(<NotesBrowser book={book} />);
+    expect(await screen.findByText(/the unjust man is happy/)).toBeInTheDocument();
   });
 });

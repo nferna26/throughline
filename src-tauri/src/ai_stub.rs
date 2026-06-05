@@ -20,6 +20,10 @@ pub enum StubMode {
     Socratic,
     DurableNote,
     PrepareNext,
+    /// Deep Study "Section briefing": a spoiler-safe, five-part orientation for a
+    /// whole section the reader is about to start (vs. the lenses, which work on
+    /// a small selection). Reader-initiated via the Deep Study margin-help mode.
+    SectionBriefing,
 }
 
 impl StubMode {
@@ -31,6 +35,7 @@ impl StubMode {
             StubMode::Socratic => "Socratic questions",
             StubMode::DurableNote => "Extract durable note",
             StubMode::PrepareNext => "Prepare tomorrow's reading",
+            StubMode::SectionBriefing => "Section briefing",
         }
     }
     pub fn from_str(s: &str) -> Option<Self> {
@@ -41,6 +46,34 @@ impl StubMode {
             "socratic" | "Socratic" => Some(StubMode::Socratic),
             "durable_note" | "DurableNote" => Some(StubMode::DurableNote),
             "prepare_next" | "PrepareNext" => Some(StubMode::PrepareNext),
+            "section_briefing" | "SectionBriefing" => Some(StubMode::SectionBriefing),
+            _ => None,
+        }
+    }
+}
+
+/// Answer depth for the reading lenses (Explain / Context / Define / Socratic).
+///
+/// `Brief` is the default: the smallest answer that unblocks the passage and
+/// returns the reader to the text. `Deep` is a reader-pulled escalation that
+/// elaborates at a *different altitude* (the reasoning move / the tradition /
+/// the loaded sense of a word / a sharper question chain) — NOT a longer brief.
+/// Because the backend is single-shot with no conversation memory, each Deep
+/// prompt is written to assume the reader already saw the brief and must not
+/// restate it. The two utility modes (`DurableNote`, `PrepareNext`) ignore
+/// depth. See the brevity rationale in `docs/WEEKEND_RC_LOG.md`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Depth {
+    Brief,
+    Deep,
+}
+
+impl Depth {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "brief" | "Brief" => Some(Depth::Brief),
+            "deep" | "Deep" => Some(Depth::Deep),
             _ => None,
         }
     }
@@ -61,12 +94,29 @@ pub struct PromptContext {
 }
 
 /// Hard ceiling on selection length passed into a preview. Anything larger is
-/// truncated with an ellipsis — the AI surface is for passages, not bulk text.
+/// truncated with an ellipsis — the lens surface is for passages, not bulk text.
 pub const MAX_SELECTION_CHARS: usize = 2_000;
+/// The Section Briefing legitimately works from a whole section (it's preparing
+/// the reader for it), so it gets a larger window than the selection lenses.
+/// Still a hard cap — we never send the entire book.
+pub const MAX_BRIEFING_CHARS: usize = 6_000;
+
+/// Per-mode input cap: the briefing sees more of the section; everything else is
+/// a bounded selection.
+fn selection_cap(mode: StubMode) -> usize {
+    match mode {
+        StubMode::SectionBriefing => MAX_BRIEFING_CHARS,
+        _ => MAX_SELECTION_CHARS,
+    }
+}
 
 pub fn truncate_selection(s: &str) -> String {
-    let mut out: String = s.chars().take(MAX_SELECTION_CHARS).collect();
-    if s.chars().count() > MAX_SELECTION_CHARS {
+    truncate_selection_to(s, MAX_SELECTION_CHARS)
+}
+
+pub fn truncate_selection_to(s: &str, cap: usize) -> String {
+    let mut out: String = s.chars().take(cap).collect();
+    if s.chars().count() > cap {
         out.push_str("\n[… truncated]");
     }
     out
@@ -140,55 +190,140 @@ fn fenced_passage(selection: &str) -> String {
 ///   4. The fenced passage.
 ///   5. The mode-specific instruction.
 pub fn build_prompt(mode: StubMode, ctx: &PromptContext) -> String {
-    let selection = truncate_selection(&ctx.selection);
+    build_prompt_with_depth(mode, Depth::Brief, ctx)
+}
+
+/// Build the prompt for a given mode + depth + context.
+///
+/// `Depth::Brief` (the default) yields the smallest answer that unblocks the
+/// selected passage; `Depth::Deep` elaborates at a different altitude and is
+/// explicitly told the reader already saw the brief, so it must not restate it.
+/// Brevity is shaped here by the directive AND enforced separately by a hard
+/// `max_tokens` ceiling at the call site (`commands::ai`) — the local model has
+/// ignored prose-only length limits, so the token cap is the real backstop.
+///
+/// Every lens keeps the safety preamble + fenced passage (the Shot 5 M2
+/// prompt-injection invariant), so the depth split never weakens the fence.
+pub fn build_prompt_with_depth(mode: StubMode, depth: Depth, ctx: &PromptContext) -> String {
+    let selection = truncate_selection_to(&ctx.selection, selection_cap(mode));
     let fenced = fenced_passage(&selection);
     let attr = attribution(ctx);
     let preamble = safety_preamble();
 
-    match mode {
-        StubMode::Explain => format!(
+    match (mode, depth) {
+        (StubMode::Explain, Depth::Brief) => format!(
+"You are a patient tutor at my elbow. I'm reading {attr}.
+
+{preamble}
+
+In 2-3 sentences (about 55 words, never more), in plain flowing prose, tell me \
+the single main point this passage makes and why it matters for reading these \
+lines. Don't open with a wind-up like \"This passage\" — start with the \
+substance. No headers, no lists, no closing question. At most one **bold** term \
+for the key idea. Stop the instant the point is made.
+
+{fenced}
+"),
+        (StubMode::Explain, Depth::Deep) => format!(
 "You are a patient tutor. I'm reading {attr}.
 
 {preamble}
 
-Don't summarize. Help me understand what the author is arguing and what \
-assumption it rests on. Push back gently if my reading misses something.
+I've already read a 2-3 sentence gist of this passage and asked to go deeper, \
+so do NOT restate it. In at most ~130 words (one or two short paragraphs of \
+plain prose), go down one altitude: unpack the author's reasoning move — the \
+hidden assumption the claim rests on, the tension or counter-position it \
+answers, or how this step sets up what follows. At most one **bold** named \
+distinction. No headers, no numbered or multi-level lists, no closing question. \
+Build past the gist; don't summarize it.
 
 {fenced}
 "),
-        StubMode::Historical => format!(
+        (StubMode::Historical, Depth::Brief) => format!(
 "You are a careful historian. I'm reading {attr}.
 
 {preamble}
 
-What's the historical context I'd need to read this passage well? Names, \
-dates, events, intellectual currents. Brief — only what's load-bearing.
+In 1-2 sentences (about 50 words, never more), give ONLY the one piece of \
+background a modern reader is missing to make sense of this passage — the \
+person, work, debate, or assumption it takes for granted. No biography, no \
+period overview, no date-dumps unless the date IS the point. If no special \
+context is needed, say so in one sentence. No headers, no lists, no closing \
+question.
 
 {fenced}
 "),
-        StubMode::Vocabulary => format!(
-"In the passage below, list any term, name, place, school of thought, or \
-unfamiliar concept I should know more about. One sentence per item. Don't \
-restate the passage.
-
-{attr}
+        (StubMode::Historical, Depth::Deep) => format!(
+"You are a careful historian. I'm reading {attr}.
 
 {preamble}
 
+I've already seen the one anchoring fact and asked to go deeper, so don't \
+repeat it. In at most ~130 words (one or two short paragraphs of plain prose), \
+widen the frame: the intellectual tradition or historical situation this \
+passage responds to, who or what it argues against, and why that mattered then \
+— but only what changes how I read these specific lines. Tie it to a phrase \
+from the passage. No timeline dumps, no encyclopedia tone, no headers, no \
+lists, no closing question.
+
 {fenced}
 "),
-        StubMode::Socratic => format!(
-"You are a Socratic tutor. After I read the passage below, ask me 3 questions \
-a careful tutor would ask. The questions should make me think, not test recall. \
-Vary their depth.
-
-{attr}
+        (StubMode::Vocabulary, Depth::Brief) => format!(
+"I'm reading {attr}.
 
 {preamble}
 
+Gloss ONLY the 1-3 genuinely hard or archaic words or phrases in the passage \
+below, in the sense used here. One per line as \"**term** — gloss\" with the \
+gloss at most ~12 words, hardest first. No intro line, no usage notes, no \
+etymology, no closing remark. If nothing is truly hard, say so in one short \
+sentence.
+
 {fenced}
 "),
-        StubMode::DurableNote => format!(
+        (StubMode::Vocabulary, Depth::Deep) => format!(
+"I'm reading {attr}.
+
+{preamble}
+
+I've already seen short glosses for this passage and asked to go deeper, so \
+don't just re-list. Take the 1-2 most load-bearing terms and unfold each (about \
+130 words total): the sense the author intends versus the modern default, the \
+connotation or period-specific use, and how that meaning shapes the passage's \
+argument. Prose preferred; a 2-item \"**term** — gloss\" list only if two terms \
+each need real unpacking. No headers, no intro paragraph.
+
+{fenced}
+"),
+        (StubMode::Socratic, Depth::Brief) => format!(
+"You are a Socratic tutor. I'm reading {attr}.
+
+{preamble}
+
+Pose exactly ONE short guiding question (about 30 words, a single sentence \
+ending in '?') that points me back into the passage below to work out the \
+meaning myself. The question must be answerable from the passage itself. Don't \
+answer it, don't hint, don't preface — give only the question.
+
+{fenced}
+"),
+        (StubMode::Socratic, Depth::Deep) => format!(
+"You are a Socratic tutor. I'm reading {attr}.
+
+{preamble}
+
+I engaged your first question and asked to go deeper. Pose a short sequence of \
+2-3 linked questions (about 70 words total), each building on the last to walk \
+from the passage's surface claim toward its underlying assumption and then its \
+broader implication. Number them 1-3 (the only place a list is allowed). No \
+answers, no hints, no commentary between them; let the last question open \
+outward.
+
+{fenced}
+"),
+        // The two utility modes are depth-independent: they keep their original
+        // single form regardless of the Brief/Deep flag.
+        (StubMode::DurableNote, _) => format!(
 "Help me write a single durable note (under 80 words) capturing what's worth \
 remembering from this passage. Paraphrase only — no quotations. Lead with the \
 claim, not the source.
@@ -206,7 +341,42 @@ My initial reaction (may be blank — this part is from me, not from the book):
 ",
             ctx.user_note.clone().unwrap_or_default()
         ),
-        StubMode::PrepareNext => format!(
+        (StubMode::SectionBriefing, _) => format!(
+"You are a reading tutor preparing me to read a section I'm about to start. \
+I'm reading {attr}.
+
+{preamble}
+
+Prepare a SHORT briefing using EXACTLY these five labels, each on its own line, \
+in this order. Keep the whole thing tight — a glance before reading, not a \
+summary that replaces it. Be spoiler-safe: orient me, don't reveal where the \
+section ends up or its conclusions.
+
+BEFORE YOU READ
+2-3 sentences orienting me to what this section is about and why it matters.
+
+WATCH FOR
+3-5 short bullets (begin each line with \"- \") naming claims, turns, terms, or \
+tensions to notice as I read. Each should stand alone as a theme I could ask \
+about — concrete and specific, not vague.
+
+
+KEY TERMS
+1-4 names, words, or ideas I'll need, each as \"term — short spoiler-safe gloss\" \
+on its own line. If none are needed, write \"None needed.\"
+
+THE MOVE
+1-2 sentences on what this section seems to be doing in the larger work.
+
+READING QUESTION
+One question to carry while I read. End it with a question mark.
+
+Use plain prose and the simple bullet/term lines described above — no markdown \
+headers (#), no bold. The section to prepare me for:
+
+{fenced}
+"),
+        (StubMode::PrepareNext, _) => format!(
 "I'm about to start the next section of the same book ({attr}).
 
 {preamble}
@@ -249,11 +419,101 @@ mod tests {
         let modes = [
             StubMode::Explain, StubMode::Historical, StubMode::Vocabulary,
             StubMode::Socratic, StubMode::DurableNote, StubMode::PrepareNext,
+            StubMode::SectionBriefing,
         ];
         let mut outputs: Vec<String> = modes.iter().map(|m| build_prompt(*m, &ctx("Sample."))).collect();
         outputs.sort();
         outputs.dedup();
-        assert_eq!(outputs.len(), 6, "each mode should produce distinct prompt text");
+        assert_eq!(outputs.len(), 7, "each mode should produce distinct prompt text");
+    }
+
+    #[test]
+    fn brief_and_deep_differ_for_every_reading_lens() {
+        for mode in [StubMode::Explain, StubMode::Historical, StubMode::Vocabulary, StubMode::Socratic] {
+            let brief = build_prompt_with_depth(mode, Depth::Brief, &ctx("Sample passage."));
+            let deep = build_prompt_with_depth(mode, Depth::Deep, &ctx("Sample passage."));
+            assert_ne!(brief, deep, "mode {:?}: brief and deep must differ", mode);
+        }
+    }
+
+    #[test]
+    fn build_prompt_defaults_to_brief() {
+        let default = build_prompt(StubMode::Explain, &ctx("Sample."));
+        let brief = build_prompt_with_depth(StubMode::Explain, Depth::Brief, &ctx("Sample."));
+        assert_eq!(default, brief, "build_prompt must be the Brief tier");
+    }
+
+    #[test]
+    fn brief_explain_is_concise_and_drops_the_two_part_essay_ask() {
+        let p = build_prompt_with_depth(StubMode::Explain, Depth::Brief, &ctx("Sample."));
+        // The new brief directive caps length and bans structure.
+        assert!(p.contains("2-3 sentences"), "brief Explain must cap sentence count");
+        assert!(p.to_lowercase().contains("no headers"), "brief must forbid headers");
+        // The OLD prompt asked for argument AND its assumption — a two-part essay
+        // task that produced the wall of text. That phrasing must be gone.
+        assert!(
+            !p.contains("what assumption it rests on"),
+            "the old two-part essay directive must be removed from brief:\n{p}"
+        );
+    }
+
+    #[test]
+    fn deep_tier_tells_the_model_not_to_restate_the_brief() {
+        // Single-shot backend has no memory, so deep must be self-contained and
+        // explicitly told the reader already saw the brief.
+        for mode in [StubMode::Explain, StubMode::Historical, StubMode::Vocabulary, StubMode::Socratic] {
+            let deep = build_prompt_with_depth(mode, Depth::Deep, &ctx("Sample."));
+            let lc = deep.to_lowercase();
+            assert!(
+                lc.contains("go deeper") || lc.contains("don't") || lc.contains("do not"),
+                "mode {:?}: deep must reference the already-seen brief / a no-restate rule:\n{deep}",
+                mode
+            );
+        }
+    }
+
+    #[test]
+    fn depth_split_preserves_fence_and_safety_preamble() {
+        // The Brief/Deep split must never weaken the prompt-injection invariant.
+        for mode in [StubMode::Explain, StubMode::Historical, StubMode::Vocabulary, StubMode::Socratic] {
+            for depth in [Depth::Brief, Depth::Deep] {
+                let p = build_prompt_with_depth(mode, depth, &ctx("Network effects compound."));
+                assert!(p.contains(FENCE_OPEN), "mode {:?}/{:?}: missing fence opener", mode, depth);
+                assert!(p.contains(FENCE_CLOSE), "mode {:?}/{:?}: missing fence closer", mode, depth);
+                assert!(p.contains("> Network effects compound."), "mode {:?}/{:?}: selection not fenced", mode, depth);
+                assert!(p.contains("UNTRUSTED_PASSAGE"), "mode {:?}/{:?}: preamble missing", mode, depth);
+            }
+        }
+    }
+
+    #[test]
+    fn section_briefing_has_the_five_labels_and_is_fenced_and_spoiler_safe() {
+        let p = build_prompt(StubMode::SectionBriefing, &ctx("A long section of prose to prepare for."));
+        for label in ["BEFORE YOU READ", "WATCH FOR", "KEY TERMS", "THE MOVE", "READING QUESTION"] {
+            assert!(p.contains(label), "briefing prompt must request the '{label}' part:\n{p}");
+        }
+        assert!(p.to_lowercase().contains("spoiler-safe"), "briefing must instruct spoiler-safety");
+        // The injection invariant still holds for the briefing mode.
+        assert!(p.contains(FENCE_OPEN) && p.contains(FENCE_CLOSE), "briefing must fence the section");
+        assert!(p.contains("UNTRUSTED_PASSAGE"), "briefing must carry the safety preamble");
+    }
+
+    #[test]
+    fn section_briefing_sees_more_text_than_the_selection_lenses() {
+        // 3000 chars: under the briefing cap (6000) but over the lens cap (2000).
+        let long = "word ".repeat(600); // 3000 chars
+        let briefing = build_prompt(StubMode::SectionBriefing, &ctx(&long));
+        let explain = build_prompt(StubMode::Explain, &ctx(&long));
+        assert!(!briefing.contains("[… truncated]"), "3000 chars fits under the briefing cap");
+        assert!(explain.contains("[… truncated]"), "3000 chars is truncated for the lens cap");
+    }
+
+    #[test]
+    fn depth_from_str_parses_and_defaults() {
+        assert_eq!(Depth::from_str("brief"), Some(Depth::Brief));
+        assert_eq!(Depth::from_str("deep"), Some(Depth::Deep));
+        assert_eq!(Depth::from_str("Deep"), Some(Depth::Deep));
+        assert_eq!(Depth::from_str("nonsense"), None);
     }
 
     #[test]

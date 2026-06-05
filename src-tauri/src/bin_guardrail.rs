@@ -2,14 +2,14 @@
 //!
 //! **Why this exists.** Earlier shots wrote acceptance binaries that called
 //! `db::open_and_migrate()` against the user's real Application Support
-//! directory, polluting `~/Library/Application Support/ReadingGym/reading.db`
+//! directory, polluting `~/Library/Application Support/Throughline/reading.db`
 //! with stub rows. The rule "use a temp dir for acceptance" is too easy to
 //! forget — and once forgotten, the user's live data is damaged.
 //!
 //! This module enforces the rule structurally:
 //!
 //! 1. Acceptance / test binaries call `init_isolated_data_dir(label)` at the
-//!    very top of `main()`. That sets `READINGGYM_DATA_DIR` to a fresh
+//!    very top of `main()`. That sets `THROUGHLINE_DATA_DIR` to a fresh
 //!    `std::env::temp_dir()`-rooted path and *panics* if the resolved
 //!    `paths::app_support_dir()` doesn't actually land under the OS temp dir.
 //! 2. The `bin_guardrail_acceptance_binaries_use_isolated_data_dir` test
@@ -31,7 +31,7 @@ use std::path::PathBuf;
 /// Call this as the **first line of `main()`**, before any DB or path lookup.
 pub fn init_isolated_data_dir(label: &str) -> PathBuf {
     let root = std::env::temp_dir()
-        .join("readinggym-isolated")
+        .join("throughline-isolated")
         .join(format!("{}-{}", sanitize_label(label), std::process::id()));
     std::fs::create_dir_all(&root).expect("create isolated data dir");
 
@@ -42,8 +42,8 @@ pub fn init_isolated_data_dir(label: &str) -> PathBuf {
     // at the top of `main()` before any tokio runtime or worker threads spawn.
     // SET_VAR safety contract is met by that caller-side discipline.
     unsafe {
-        std::env::set_var("READINGGYM_DATA_DIR", root.to_string_lossy().to_string());
-        std::env::set_var("READINGGYM_EXPORT_DIR", export.to_string_lossy().to_string());
+        std::env::set_var("THROUGHLINE_DATA_DIR", root.to_string_lossy().to_string());
+        std::env::set_var("THROUGHLINE_EXPORT_DIR", export.to_string_lossy().to_string());
     }
 
     // Re-resolve through the same functions the rest of the code uses, and

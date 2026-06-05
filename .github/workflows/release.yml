@@ -53,7 +53,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "ReadingGym ${{ github.ref_name }}"
+          releaseName: "Throughline ${{ github.ref_name }}"
           releaseBody: "See CHANGELOG.md for what's in this release."
           releaseDraft: true
           prerelease: false

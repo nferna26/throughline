@@ -1,9 +1,9 @@
-# ReadingGym — UI overhaul brief (for Claude Design)
+# Throughline — UI overhaul brief (for Claude Design)
 
 Paste this into claude.ai/design as the starting prompt, then refine on the canvas.
 
 ## What it is
-ReadingGym — a **local-first macOS desktop reading app** (Tauri v2 + React 19 + TypeScript).
+Throughline — a **local-first macOS desktop reading app** (Tauri v2 + React 19 + TypeScript).
 One serious reader, one book at a time. Loop: import a book → see today's section →
 read → capture one note → export Markdown. It is a focused **desktop app window**, not a
 responsive marketing site or analytics dashboard.
@@ -36,7 +36,7 @@ chrome. The app opens to **Today** with one clear next action.
   Georgia / Charter). Radius ~8–14px, soft 1px borders, near-flat (very subtle shadow).
 
 ## Screens to redesign (full inventory)
-1. **Topbar** — brand "ReadingGym", settings (⚙), theme toggle (☾/☼).
+1. **Topbar** — brand "Throughline", settings (⚙), theme toggle (☾/☼).
 2. **Today (home)** — a slim "book header" band: a book-switcher **chip** (📖 title ▾) left, a
    **Today / Notes** segmented tab right. Below, the **Today card**: kicker ("Today — day X of
    N"), book title, author, today's section label, a meta row (≈ minutes · % complete · pace

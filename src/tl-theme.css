@@ -1,0 +1,869 @@
+/* ──────────────────────────────────────────────────────────────────
+   Throughline — design system (Shot 13 overhaul, from Claude Design handoff)
+   Two themes via [data-theme]. Serif = books & content. Sans = app chrome.
+   Ported from the handoff's tokens.css + app.css. The Google-Fonts @import was
+   dropped (local-first: no network calls) — the serif stack keeps "Newsreader"
+   as a preferred name but falls back to the macOS system serif (Iowan Old Style).
+   ────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Surfaces & ink (LIGHT) ── */
+  --tl-bg:         #f7f5ef;
+  --tl-panel:      #fffefb;
+  --tl-ink:        #1c1b18;
+  --tl-muted:      #6b6660;
+  --tl-line:       #e8e3d8;
+
+  /* ── Brand & status (LIGHT) ── */
+  --tl-accent:     #2f4e3a;
+  --tl-accent-ink: #fffefb;
+  --tl-warn:       #a04a00;
+  --tl-alert:      #8a1d1d;
+  --tl-ok:         #2f4e3a;
+
+  /* ── Derived via color-mix ── */
+  --tl-accent-soft: color-mix(in oklab, var(--tl-accent) 12%, transparent);
+  --tl-accent-line: color-mix(in oklab, var(--tl-accent) 28%, transparent);
+  --tl-ink-04:      color-mix(in oklab, var(--tl-ink) 4%, transparent);
+  --tl-ink-06:      color-mix(in oklab, var(--tl-ink) 6%, transparent);
+  --tl-ink-10:      color-mix(in oklab, var(--tl-ink) 10%, transparent);
+  --tl-warn-soft:   color-mix(in oklab, var(--tl-warn) 13%, transparent);
+  --tl-alert-soft:  color-mix(in oklab, var(--tl-alert) 13%, transparent);
+  --tl-paper:       color-mix(in oklab, var(--tl-panel) 60%, var(--tl-bg));
+
+  /* ── Type families ── */
+  --tl-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+             system-ui, sans-serif;
+  --tl-serif: "Newsreader", "Iowan Old Style", Georgia, Charter, "Times New Roman", serif;
+
+  /* ── Radii ── */
+  --tl-r-sm: 8px; --tl-r-md: 11px; --tl-r-lg: 14px; --tl-r-win: 12px; --tl-r-pill: 9999px;
+
+  /* ── Spacing (4px base) ── */
+  --tl-1: 4px;  --tl-2: 8px;  --tl-3: 12px; --tl-4: 16px;
+  --tl-5: 20px; --tl-6: 24px; --tl-7: 32px; --tl-8: 40px;
+  --tl-9: 56px; --tl-10: 72px;
+  --tl-density: 1;
+
+  /* ── Shadows (near-flat; borders do the work) ── */
+  --tl-shadow-sm: 0 1px 2px rgba(28,27,24,0.05);
+  --tl-shadow-md: 0 1px 2px rgba(28,27,24,0.05), 0 10px 24px -14px rgba(28,27,24,0.22);
+  --tl-shadow-pop: 0 4px 10px rgba(28,27,24,0.08), 0 18px 44px -18px rgba(28,27,24,0.30);
+
+  /* ── Focus ── */
+  --tl-focus: color-mix(in oklab, var(--tl-accent) 65%, white);
+  --tl-focus-ring: 0 0 0 2px var(--tl-bg), 0 0 0 4px var(--tl-focus);
+}
+
+[data-theme="dark"] {
+  --tl-bg:         #14161a;
+  --tl-panel:      #1a1d22;
+  --tl-ink:        #e8e6e1;
+  --tl-muted:      #8d8a82;
+  --tl-line:       #2a2e34;
+
+  --tl-accent:     #a7c5b1;
+  --tl-accent-ink: #14161a;
+  --tl-warn:       #d99a55;
+  --tl-alert:      #d97a7a;
+  --tl-ok:         #a7c5b1;
+
+  --tl-accent-soft: color-mix(in oklab, var(--tl-accent) 16%, transparent);
+  --tl-accent-line: color-mix(in oklab, var(--tl-accent) 34%, transparent);
+  --tl-ink-04:      color-mix(in oklab, var(--tl-ink) 5%, transparent);
+  --tl-ink-06:      color-mix(in oklab, var(--tl-ink) 8%, transparent);
+  --tl-ink-10:      color-mix(in oklab, var(--tl-ink) 14%, transparent);
+  --tl-warn-soft:   color-mix(in oklab, var(--tl-warn) 18%, transparent);
+  --tl-alert-soft:  color-mix(in oklab, var(--tl-alert) 18%, transparent);
+  --tl-paper:       color-mix(in oklab, var(--tl-panel) 70%, var(--tl-bg));
+
+  --tl-shadow-sm: 0 1px 2px rgba(0,0,0,0.30);
+  --tl-shadow-md: 0 1px 2px rgba(0,0,0,0.30), 0 12px 28px -14px rgba(0,0,0,0.6);
+  --tl-shadow-pop: 0 6px 14px rgba(0,0,0,0.4), 0 22px 50px -18px rgba(0,0,0,0.7);
+  --tl-focus: color-mix(in oklab, var(--tl-accent) 80%, white);
+}
+
+/* ════════ root / type / focus ════════ */
+.tl-root {
+  font-family: var(--tl-sans);
+  color: var(--tl-ink);
+  background: var(--tl-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+.tl-root :focus-visible {
+  outline: none;
+  box-shadow: var(--tl-focus-ring);
+  border-radius: var(--tl-r-sm);
+}
+
+/* ── Instant theme flip (brand rule: no crossfade) ──
+   App.tsx adds `.tl-no-transition` to <html> for one frame around a data-theme
+   change. Without this, properties in a base `transition` (e.g. .tl-btn color)
+   fail to re-resolve their var(--token) values when the ancestor theme attribute
+   flips at runtime in WKWebView — buttons keep the previous theme's colors. */
+.tl-no-transition,
+.tl-no-transition *,
+.tl-no-transition *::before,
+.tl-no-transition *::after {
+  transition: none !important;
+}
+
+/* ════════ titlebar (in-app top bar; native window provides traffic lights) ════════ */
+.tl-titlebar {
+  flex-shrink: 0;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  gap: var(--tl-3);
+  /* Left padding clears the native macOS traffic lights, which the Overlay
+     titleBarStyle keeps overlaid at top-left. */
+  padding: 0 var(--tl-4) 0 80px;
+  background: var(--tl-panel);
+  border-bottom: 1px solid var(--tl-line);
+  user-select: none;
+}
+.tl-brand {
+  font-size: 14px; font-weight: 650; letter-spacing: -0.01em;
+  color: var(--tl-ink); background: none; border: none; padding: 0; cursor: pointer;
+}
+.tl-brand b { font-weight: 750; }
+.tl-titlebar-spacer { flex: 1; }
+
+.tl-iconbtn {
+  width: 30px; height: 30px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--tl-muted);
+  border-radius: var(--tl-r-pill); cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+.tl-iconbtn:hover { background: var(--tl-ink-06); color: var(--tl-ink); }
+.tl-iconbtn[aria-pressed="true"], .tl-iconbtn.active { color: var(--tl-ink); background: var(--tl-ink-06); }
+
+/* ════════ window body / scroll region ════════ */
+.tl-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.tl-body::-webkit-scrollbar { width: 11px; }
+.tl-body::-webkit-scrollbar-thumb {
+  background: var(--tl-ink-10); border-radius: 99px;
+  border: 3px solid transparent; background-clip: padding-box;
+}
+.tl-col { width: 100%; max-width: 640px; margin: 0 auto; padding: 0 var(--tl-7); }
+
+/* ════════ book-header band ════════ */
+.tl-bookhead {
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: calc(var(--tl-3) * var(--tl-density)) var(--tl-7);
+  border-bottom: 1px solid var(--tl-line);
+  background: color-mix(in oklab, var(--tl-panel) 50%, var(--tl-bg));
+}
+.tl-bookhead-inner {
+  width: 100%; max-width: 640px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.tl-chip {
+  display: inline-flex; align-items: center; gap: var(--tl-2);
+  height: 32px; padding: 0 var(--tl-2) 0 var(--tl-3);
+  background: var(--tl-panel); border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-pill); color: var(--tl-ink);
+  font-family: var(--tl-sans); font-size: 13px; font-weight: 550;
+  cursor: pointer; max-width: 320px;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+.tl-chip:hover { border-color: var(--tl-ink-10); }
+.tl-chip .ttl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-chip svg { color: var(--tl-muted); flex-shrink: 0; }
+
+.tl-seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--tl-ink-06); border-radius: var(--tl-r-pill); }
+.tl-seg button {
+  appearance: none; border: none; background: transparent;
+  font-family: var(--tl-sans); font-size: 13px; font-weight: 550; color: var(--tl-muted);
+  padding: 5px 14px; border-radius: var(--tl-r-pill); cursor: pointer;
+  transition: color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+.tl-seg button[aria-selected="true"] { color: var(--tl-ink); background: var(--tl-panel); box-shadow: var(--tl-shadow-sm); }
+
+/* ════════ Today ════════ */
+.tl-today { padding-top: calc(var(--tl-9) * var(--tl-density)); padding-bottom: var(--tl-9); }
+.tl-kicker {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--tl-muted); display: flex; align-items: center; gap: var(--tl-2);
+}
+.tl-kicker .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--tl-accent); }
+
+.tl-card { background: var(--tl-panel); border: 1px solid var(--tl-line); border-radius: var(--tl-r-lg); box-shadow: var(--tl-shadow-sm); }
+
+.tl-today-title {
+  font-family: var(--tl-serif); font-weight: 500;
+  /* Sized to keep typical titles on one line in the 640px column; long titles
+     still wrap, but text-wrap: balance keeps the wrap even rather than orphaning
+     a trailing word. */
+  font-size: clamp(26px, 3.4vw, 32px); line-height: 1.14; letter-spacing: -0.012em;
+  text-wrap: balance;
+  color: var(--tl-ink); margin: calc(var(--tl-4) * var(--tl-density)) 0 var(--tl-2);
+}
+.tl-today-author { font-size: 15px; color: var(--tl-muted); font-weight: 450; }
+.tl-today-author em { font-style: italic; }
+.tl-section-label {
+  margin-top: calc(var(--tl-6) * var(--tl-density));
+  font-family: var(--tl-serif); font-size: 20px; font-weight: 500; font-style: italic; color: var(--tl-ink);
+}
+
+.tl-meta { margin-top: var(--tl-3); display: flex; align-items: center; flex-wrap: wrap; gap: var(--tl-3); font-size: 13.5px; color: var(--tl-muted); }
+.tl-meta .item { display: inline-flex; align-items: center; gap: 6px; }
+.tl-meta .sep { width: 3px; height: 3px; border-radius: 50%; background: var(--tl-muted); opacity: 0.5; }
+.tl-pace { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.tl-pace.on, .tl-pace.ahead { color: var(--tl-ok); }
+.tl-pace.behind { color: var(--tl-warn); }
+
+/* Calm reassurance for a freshly imported, not-yet-started plan. No alarm color,
+   no urgency — it exists to defuse the "am I already behind?" reflex. */
+.tl-planready-note {
+  margin-top: var(--tl-3); margin-bottom: 0;
+  font-size: 14px; line-height: 1.5; color: var(--tl-muted);
+}
+/* Honest forecast caption (e.g. "slightly off pace") — informational, not a
+   scolding. Same muted weight as the plan-ready note. */
+.tl-forecast-note {
+  margin-top: var(--tl-2); margin-bottom: 0;
+  font-size: 14px; line-height: 1.5; color: var(--tl-muted);
+}
+/* "Continue where you left off" — sits just above the primary action, warm and
+   calm: re-entry should feel like resuming a thought, not restarting. */
+.tl-resume-note {
+  display: flex; align-items: center; gap: 7px;
+  margin: var(--tl-4) 0 var(--tl-2);
+  font-size: 13.5px; line-height: 1.5; color: var(--tl-muted);
+}
+.tl-resume-note svg { color: var(--tl-accent); flex-shrink: 0; }
+
+/* The "I only have 10 minutes" action — full width, quieter than the primary,
+   sits directly under it. Never competes for attention. */
+.tl-rescue-btn {
+  width: 100%; margin-top: var(--tl-2);
+  font-weight: 550; color: var(--tl-muted);
+}
+.tl-rescue-btn:hover:not(:disabled) { color: var(--tl-ink); }
+
+/* In-reader rescue banner: a single calm line at the top of the column telling
+   the reader the only goal is to stay connected. Soft, no alarm color. */
+.tl-rescue-banner {
+  margin: var(--tl-4) auto 0; padding: 10px 14px;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; line-height: 1.45; color: var(--tl-muted);
+  background: var(--tl-ink-04); border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-sm);
+}
+
+.tl-btn {
+  appearance: none; cursor: pointer;
+  font-family: var(--tl-sans); font-size: 15px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--tl-2);
+  border-radius: var(--tl-r-sm); border: 1px solid transparent;
+  transition: background 150ms ease, border-color 150ms ease, opacity 120ms ease, color 150ms ease;
+}
+.tl-btn:active { opacity: 0.92; }
+.tl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.tl-btn-primary { background: var(--tl-accent); color: var(--tl-accent-ink); padding: 13px 22px; }
+.tl-btn-primary:hover { background: color-mix(in oklab, var(--tl-accent) 88%, black); }
+[data-theme="dark"] .tl-btn-primary:hover { background: color-mix(in oklab, var(--tl-accent) 88%, white); }
+.tl-btn-primary.block { width: 100%; padding: 15px; font-size: 16px; margin-top: calc(var(--tl-6) * var(--tl-density)); }
+.tl-btn-ghost { background: transparent; color: var(--tl-ink); border-color: var(--tl-line); padding: 11px 18px; }
+.tl-btn-ghost:hover { border-color: var(--tl-ink-10); background: var(--tl-ink-04); }
+.tl-btn-quiet {
+  background: transparent; border: none; color: var(--tl-muted);
+  font-family: var(--tl-sans); font-size: 13.5px; font-weight: 550; padding: 8px 6px;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px; border-radius: var(--tl-r-sm);
+  transition: color 150ms ease;
+}
+.tl-btn-quiet:hover { color: var(--tl-ink); }
+
+.tl-streak { margin-top: calc(var(--tl-6) * var(--tl-density)); display: flex; align-items: center; gap: var(--tl-3); color: var(--tl-muted); font-size: 13.5px; }
+
+/* "Last time" re-entry surface — quiet, calm, never a dashboard. */
+.tl-lasttime { margin-top: var(--tl-4); padding: var(--tl-3) var(--tl-4); background: var(--tl-panel); border: 1px solid var(--tl-line); border-radius: var(--tl-r-md); }
+.tl-lasttime.quiet { background: transparent; border: none; padding: var(--tl-2) 0 0; color: var(--tl-muted); font-size: 13px; }
+.tl-lasttime-head { display: flex; align-items: center; justify-content: space-between; gap: var(--tl-2); margin-bottom: 5px; }
+.tl-lasttime-kicker { display: inline-flex; align-items: center; gap: 5px; font-family: var(--tl-sans); font-size: 10.5px; font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--tl-accent); }
+.tl-lasttime-loc { font-family: var(--tl-sans); font-size: 11.5px; color: var(--tl-muted); }
+.tl-lasttime-body { margin: 0; font-family: var(--tl-sans); font-size: 13.5px; line-height: 1.5; color: var(--tl-muted); }
+.tl-lasttime-quote { font-family: var(--tl-serif); font-style: italic; color: var(--tl-ink); }
+.tl-lasttime-counts { margin: 6px 0 0; font-family: var(--tl-sans); font-size: 11.5px; color: var(--tl-muted); }
+.tl-dots { display: flex; gap: 5px; }
+.tl-dots .d { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--tl-line); }
+.tl-dots .d.read { background: var(--tl-accent); border-color: var(--tl-accent); }
+.tl-divline { height: 1px; background: var(--tl-line); border: none; margin: 0; }
+
+.tl-recovery {
+  margin-top: calc(var(--tl-6) * var(--tl-density)); padding: var(--tl-5);
+  background: var(--tl-warn-soft); border: 1px solid color-mix(in oklab, var(--tl-warn) 30%, transparent);
+  border-radius: var(--tl-r-lg);
+}
+.tl-recovery .head { display: flex; align-items: center; gap: var(--tl-2); color: var(--tl-warn); font-weight: 650; font-size: 13.5px; }
+.tl-recovery .lead { margin: var(--tl-2) 0 var(--tl-4); color: var(--tl-ink); font-size: 14.5px; line-height: 1.5; }
+.tl-recovery .opts { display: flex; flex-direction: column; gap: var(--tl-2); }
+.tl-opt {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--tl-3);
+  text-align: left; cursor: pointer; background: var(--tl-panel); border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-md); padding: 12px var(--tl-4);
+  transition: border-color 150ms ease, background 150ms ease;
+}
+.tl-opt:hover { border-color: var(--tl-accent-line); }
+.tl-opt .t { font-size: 14px; font-weight: 600; color: var(--tl-ink); display: block; }
+.tl-opt .s { font-size: 12.5px; color: var(--tl-muted); margin-top: 2px; line-height: 1.4; display: block; }
+.tl-opt svg { color: var(--tl-muted); flex-shrink: 0; }
+
+/* ════════ Notes ════════ */
+.tl-notes { padding-top: calc(var(--tl-7) * var(--tl-density)); padding-bottom: var(--tl-9); }
+.tl-notes-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: var(--tl-5); }
+.tl-notes-head h2 { font-family: var(--tl-serif); font-weight: 500; font-size: 24px; margin: 0; color: var(--tl-ink); }
+.tl-notes-head .count { font-size: 13px; color: var(--tl-muted); }
+.tl-note { padding: var(--tl-5) 0; border-top: 1px solid var(--tl-line); }
+.tl-note:first-child { border-top: none; }
+.tl-note-top { display: flex; align-items: center; gap: var(--tl-2); margin-bottom: var(--tl-3); flex-wrap: wrap; }
+.tl-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 650; letter-spacing: 0.03em;
+  padding: 3px 9px; border-radius: var(--tl-r-pill);
+  border: 1px solid var(--tl-line); color: var(--tl-muted); text-transform: uppercase;
+}
+.tl-badge.note { color: var(--tl-accent); border-color: var(--tl-accent-line); background: var(--tl-accent-soft); }
+.tl-badge.quote { color: var(--tl-ink); }
+.tl-badge.question { color: var(--tl-warn); border-color: color-mix(in oklab, var(--tl-warn) 30%, transparent); background: var(--tl-warn-soft); }
+.tl-note-meta { font-size: 12.5px; color: var(--tl-muted); }
+.tl-note-meta .sep { opacity: 0.5; padding: 0 6px; }
+.tl-note-body { font-family: var(--tl-serif); font-size: 17px; line-height: 1.55; color: var(--tl-ink); white-space: pre-wrap; }
+
+/* Notes browser — type filters, chapter grouping, anchored-passage quote.
+   (These five classes lost their CSS in the design-system rename.) */
+.tl-notebook-filters { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--tl-4); }
+.tl-typetag {
+  appearance: none; cursor: pointer;
+  font-family: var(--tl-sans); font-size: 12.5px; font-weight: 600; color: var(--tl-muted);
+  background: transparent; border: 1px solid var(--tl-line); border-radius: var(--tl-r-pill);
+  padding: 5px 12px; transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
+}
+.tl-typetag:hover { border-color: var(--tl-ink-10); color: var(--tl-ink); }
+.tl-typetag.is-active { background: var(--tl-accent-soft); border-color: var(--tl-accent-line); color: var(--tl-accent); }
+.tl-notebook-chapter { margin-top: var(--tl-6); }
+.tl-notebook-chapter-h {
+  font-family: var(--tl-sans); font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--tl-muted);
+  margin: 0; padding-bottom: var(--tl-2); border-bottom: 1px solid var(--tl-line);
+}
+.tl-note-anchored {
+  margin: 0; padding-left: var(--tl-3); border-left: 2px solid var(--tl-accent-line);
+  font-family: var(--tl-serif); font-style: italic; font-size: 14.5px; line-height: 1.5; color: var(--tl-muted);
+}
+.tl-note blockquote {
+  margin: var(--tl-3) 0 0; padding-left: var(--tl-4);
+  border-left: 2px solid var(--tl-accent-line);
+  font-family: var(--tl-serif); font-style: italic; font-size: 16px; line-height: 1.5; color: var(--tl-muted);
+}
+
+/* ════════ dropdown (book switcher) ════════ */
+.tl-menu {
+  position: absolute; z-index: 40;
+  background: var(--tl-panel); border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-md); box-shadow: var(--tl-shadow-pop);
+  padding: var(--tl-2); min-width: 280px; max-width: 360px;
+}
+.tl-menu-item {
+  display: flex; align-items: center; gap: var(--tl-3); width: 100%;
+  padding: 9px var(--tl-3); border-radius: var(--tl-r-sm);
+  background: transparent; border: none; cursor: pointer; text-align: left;
+  transition: background 120ms ease;
+}
+.tl-menu-item:hover { background: var(--tl-ink-06); }
+.tl-menu-item .bk-t { font-size: 13.5px; font-weight: 600; color: var(--tl-ink); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-menu-item .bk-a { font-size: 12px; color: var(--tl-muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-menu-item .bk-p { margin-left: auto; font-size: 11.5px; color: var(--tl-muted); flex-shrink: 0; }
+.tl-menu-item .check { color: var(--tl-accent); margin-left: auto; flex-shrink: 0; }
+.tl-menu-sep { height: 1px; background: var(--tl-line); margin: var(--tl-2) 0; }
+.tl-menu-add { color: var(--tl-muted); font-weight: 550; font-size: 13px; }
+.tl-menu-add:hover { color: var(--tl-ink); }
+.tl-menu-status { padding: 9px var(--tl-3); font-size: 12px; color: var(--tl-muted); }
+
+/* ════════ Welcome ════════ */
+.tl-welcome { flex: 1; display: flex; align-items: center; justify-content: center; padding: var(--tl-8) var(--tl-7); }
+.tl-welcome-card {
+  max-width: 440px; width: 100%; text-align: center;
+  background: var(--tl-panel); border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-lg); box-shadow: var(--tl-shadow-md); padding: var(--tl-9) var(--tl-8);
+}
+.tl-welcome .mark {
+  width: 52px; height: 52px; margin: 0 auto var(--tl-5);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--tl-r-md); border: 1px solid var(--tl-line);
+  color: var(--tl-accent); background: var(--tl-accent-soft);
+}
+.tl-welcome h1 { font-family: var(--tl-serif); font-weight: 500; font-size: 30px; margin: 0 0 var(--tl-3); letter-spacing: -0.01em; }
+.tl-welcome p { font-size: 15px; line-height: 1.6; color: var(--tl-muted); margin: 0 auto var(--tl-7); max-width: 320px; }
+.tl-welcome .hint { margin-top: var(--tl-4); font-size: 12.5px; color: var(--tl-muted); }
+
+/* ── Book Setup Sheet ─────────────────────────────────────────────────── */
+.tl-setup { flex: 1; display: flex; justify-content: center; padding: var(--tl-7) var(--tl-7) var(--tl-8); overflow-y: auto; }
+.tl-setup-card { width: 100%; max-width: 560px; }
+.tl-setup-title {
+  font-family: var(--tl-serif); font-weight: 500; font-size: clamp(24px, 4vw, 30px);
+  line-height: 1.15; letter-spacing: -0.01em; text-wrap: balance;
+  color: var(--tl-ink); margin: calc(var(--tl-3) * var(--tl-density)) 0 var(--tl-2);
+}
+.tl-setup-group {
+  margin-top: calc(var(--tl-6) * var(--tl-density)); padding: 0; border: 0;
+  border-top: 1px solid var(--tl-line); padding-top: var(--tl-5);
+}
+.tl-setup-group legend {
+  font-family: var(--tl-sans); font-size: 12px; font-weight: 650; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--tl-muted); padding: 0; margin-bottom: var(--tl-3);
+}
+.tl-chips { display: flex; flex-wrap: wrap; gap: var(--tl-2); }
+/* Selected state for a chip acting as a radio option. */
+.tl-chip.on {
+  background: var(--tl-accent); color: var(--tl-accent-ink); border-color: var(--tl-accent);
+}
+.tl-chip.on:hover { border-color: var(--tl-accent); }
+.tl-setup-row { display: flex; align-items: center; gap: var(--tl-3); margin-bottom: var(--tl-3); flex-wrap: wrap; }
+.tl-setup-label { min-width: 110px; font-size: 13.5px; color: var(--tl-muted); font-weight: 550; }
+.tl-setup-hint { margin: var(--tl-2) 0 0; font-size: 13px; color: var(--tl-muted); line-height: 1.5; }
+.tl-setup-estimate {
+  margin-top: calc(var(--tl-6) * var(--tl-density)); padding: 12px 14px;
+  display: flex; align-items: flex-start; gap: 9px;
+  font-size: 14px; line-height: 1.5; color: var(--tl-ink);
+  background: var(--tl-ink-04); border: 1px solid var(--tl-line); border-radius: var(--tl-r-sm);
+}
+.tl-setup-estimate svg { color: var(--tl-ok); margin-top: 2px; flex-shrink: 0; }
+.tl-setup-estimate.tight { background: var(--tl-warn-soft, var(--tl-ink-04)); }
+.tl-setup-estimate.tight svg { color: var(--tl-warn); }
+.tl-setup-actions {
+  margin-top: calc(var(--tl-7) * var(--tl-density));
+  display: flex; gap: var(--tl-2); justify-content: flex-end;
+}
+
+/* ════════ form controls (shared) ════════ */
+.tl-field-label { font-size: 12px; font-weight: 600; color: var(--tl-muted); margin-bottom: 6px; display: block; }
+.tl-input, .tl-select, .tl-textarea {
+  width: 100%; font-family: var(--tl-sans); font-size: 14px; color: var(--tl-ink);
+  background: var(--tl-bg); border: 1px solid var(--tl-line); border-radius: var(--tl-r-sm);
+  padding: 10px 12px;
+}
+.tl-textarea { font-family: var(--tl-serif); font-size: 16px; line-height: 1.5; min-height: 120px; resize: vertical; }
+
+/* ════════ Settings ════════ */
+.tl-settings { padding-top: calc(var(--tl-7) * var(--tl-density)); padding-bottom: var(--tl-9); }
+.tl-settings h2 { font-family: var(--tl-serif); font-weight: 500; font-size: 24px; margin: 0 0 var(--tl-6); color: var(--tl-ink); }
+.tl-set-group { margin-bottom: var(--tl-7); }
+.tl-set-group > .glabel {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--tl-muted); margin-bottom: var(--tl-3); display: block;
+}
+.tl-set-card { background: var(--tl-panel); border: 1px solid var(--tl-line); border-radius: var(--tl-r-lg); overflow: hidden; }
+/* "Your data" trust summary — calm, plain, never alarmist. */
+.tl-trust-card { padding: var(--tl-4) var(--tl-5); }
+.tl-trust-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--tl-3); }
+.tl-trust-list li { display: flex; align-items: flex-start; gap: 9px; font-size: 13.5px; line-height: 1.5; color: var(--tl-ink); }
+.tl-trust-list li svg { color: var(--tl-accent); flex-shrink: 0; margin-top: 2px; }
+.tl-trust-warn { display: flex; align-items: flex-start; gap: 8px; margin: var(--tl-4) 0 0; padding-top: var(--tl-3); border-top: 1px solid var(--tl-line); font-size: 13px; line-height: 1.5; color: var(--tl-warn); }
+.tl-trust-warn svg { color: var(--tl-warn); flex-shrink: 0; margin-top: 2px; }
+.tl-set-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--tl-4);
+  padding: var(--tl-4) var(--tl-5); border-top: 1px solid var(--tl-line);
+}
+.tl-set-row:first-child { border-top: none; }
+.tl-set-row.col { flex-direction: column; align-items: stretch; gap: var(--tl-3); }
+.tl-set-row .lhs { min-width: 0; }
+.tl-set-row .name { font-size: 14px; font-weight: 600; color: var(--tl-ink); }
+.tl-set-row .desc { font-size: 12.5px; color: var(--tl-muted); margin-top: 3px; line-height: 1.45; }
+.tl-set-row .val { font-size: 13px; color: var(--tl-muted); font-family: var(--tl-sans); }
+.tl-path {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
+  color: var(--tl-muted); background: var(--tl-bg); border: 1px solid var(--tl-line);
+  padding: 4px 8px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px;
+}
+.tl-set-msg { font-size: 12.5px; margin: 0; }
+.tl-set-msg.ok { color: var(--tl-ok); }
+.tl-set-msg.err { color: var(--tl-alert); }
+
+/* toggle switch */
+.tl-switch {
+  width: 42px; height: 25px; border-radius: 99px; border: none; cursor: pointer; flex-shrink: 0;
+  background: var(--tl-ink-10); position: relative; transition: background 180ms ease;
+}
+.tl-switch::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 19px; height: 19px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+  transition: transform 180ms cubic-bezier(0.32,0.72,0,1);
+}
+.tl-switch[aria-checked="true"] { background: var(--tl-accent); }
+.tl-switch[aria-checked="true"]::after { transform: translateX(17px); }
+
+/* AI posture banner (local-only OFF warning) */
+.tl-posture-off {
+  margin-top: var(--tl-3); padding: var(--tl-3) var(--tl-4);
+  background: var(--tl-warn-soft); border: 1px solid color-mix(in oklab, var(--tl-warn) 30%, transparent);
+  border-radius: var(--tl-r-md); color: var(--tl-ink); font-size: 13px; line-height: 1.5;
+}
+
+/* audit list (AI request history) */
+.tl-audit-row {
+  display: flex; align-items: center; gap: var(--tl-3);
+  padding: 12px var(--tl-5); border-top: 1px solid var(--tl-line); font-size: 13px;
+}
+.tl-audit-row:first-child { border-top: none; }
+.tl-audit-row .when { color: var(--tl-muted); font-size: 12px; width: 92px; flex-shrink: 0; }
+.tl-audit-row .what { flex: 1; color: var(--tl-ink); min-width: 0; }
+.tl-audit-row .what .sub { color: var(--tl-muted); }
+.tl-audit-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; flex-shrink: 0; }
+.tl-audit-tag.local { color: var(--tl-ok); }
+.tl-audit-tag.sent  { color: var(--tl-warn); }
+.tl-audit-empty { padding: 12px var(--tl-5); font-size: 13px; color: var(--tl-muted); }
+
+/* ════════ Reader ════════ */
+.tl-reader { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
+.tl-readtoolbar {
+  flex-shrink: 0; display: flex; align-items: center; gap: var(--tl-2);
+  padding: var(--tl-2) var(--tl-4); border-bottom: 1px solid var(--tl-line);
+  background: color-mix(in oklab, var(--tl-panel) 55%, var(--tl-bg));
+}
+.tl-readtoolbar .grp { display: flex; align-items: center; gap: 2px; }
+.tl-readtoolbar .grp.bordered { border: 1px solid var(--tl-line); border-radius: var(--tl-r-pill); padding: 2px; }
+.tl-readtoolbar .spacer { flex: 1; }
+.tl-tb-div { width: 1px; height: 20px; background: var(--tl-line); margin: 0 4px; flex-shrink: 0; }
+.tl-tb-label { font-size: 12px; color: var(--tl-muted); padding: 0 4px; display: inline-flex; align-items: center; }
+.tl-tb-title { font-size: 13px; color: var(--tl-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+.tl-back {
+  display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; cursor: pointer;
+  color: var(--tl-ink); font-family: var(--tl-sans); font-size: 13px; font-weight: 550;
+  padding: 6px 8px 6px 4px; border-radius: var(--tl-r-sm); transition: background 150ms ease; flex-shrink: 0;
+}
+.tl-back:hover { background: var(--tl-ink-06); }
+.tl-readscroll { flex: 1; min-height: 0; overflow-y: auto; background: var(--tl-paper); display: flex; flex-direction: column; }
+.tl-readscroll::-webkit-scrollbar { width: 11px; }
+.tl-readscroll::-webkit-scrollbar-thumb { background: var(--tl-ink-10); border-radius: 99px; border: 3px solid transparent; background-clip: padding-box; }
+.tl-readcol { margin: 0 auto; padding: var(--tl-10) var(--tl-7); font-family: var(--tl-serif); line-height: 1.66; color: var(--tl-ink); }
+.tl-readcol p { margin: 0 0 1.1em; text-wrap: pretty; white-space: pre-wrap; }
+/* Structured (EPUB-derived) text: heading + blockquote roles are applied to the
+   <p> itself — never a heading tag — so each block stays a `p[data-offset]` and
+   the reader's selection anchoring keeps working. Offsets are never mutated. */
+.tl-readcol p.tl-h1, .tl-readcol p.tl-h2, .tl-readcol p.tl-h3,
+.tl-readcol p.tl-h4, .tl-readcol p.tl-h5, .tl-readcol p.tl-h6 {
+  font-weight: 700; line-height: 1.25; margin: 1.7em 0 0.55em;
+  color: var(--tl-ink); text-wrap: balance;
+}
+.tl-readcol p.tl-h1 { font-size: 1.6em; }
+.tl-readcol p.tl-h2 { font-size: 1.36em; }
+.tl-readcol p.tl-h3 { font-size: 1.18em; }
+.tl-readcol p.tl-h4 { font-size: 1.07em; }
+.tl-readcol p.tl-h5, .tl-readcol p.tl-h6 {
+  font-size: 0.92em; letter-spacing: 0.04em; text-transform: uppercase;
+  opacity: 0.8; font-weight: 600;
+}
+.tl-readcol p.tl-h1:first-child, .tl-readcol p.tl-h2:first-child,
+.tl-readcol p.tl-h3:first-child { margin-top: 0; }
+.tl-readcol p.tl-blockquote {
+  margin: 1.1em 0; padding: 0.15em 0 0.15em 1em; font-style: italic;
+  border-left: 3px solid color-mix(in oklab, var(--tl-accent) 45%, transparent);
+  color: color-mix(in oklab, var(--tl-ink) 85%, transparent);
+}
+/* Code listings (EPUB <pre> or class-based code tables): monospace, newlines
+   preserved (white-space: pre-wrap), wrapped in a calm panel. Long lines wrap
+   rather than scroll so the reading column never overflows. */
+.tl-readcol p.tl-pre {
+  white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86em; line-height: 1.5; margin: 1.2em 0;
+  padding: 0.7em 0.9em; border-radius: 6px;
+  background: color-mix(in oklab, var(--tl-ink) 5%, transparent);
+  border: 1px solid color-mix(in oklab, var(--tl-ink) 12%, transparent);
+}
+
+/* ════════ Companion side panel (notes / highlights / tutor cards) ════════ */
+/* The reader body is a horizontal flex row: the scroll-region (with a centered,
+   window-responsive reading column) grows to fill, and the side panel is an
+   IN-FLOW sibling that only takes space when shown. No absolute rail, no
+   reserved gutter — so an empty book centers in the full window, and a spawned
+   tutor card is always visible because cards flow in document order. */
+.tl-reader-body { display: flex; align-items: stretch; flex: 1; min-height: 0; }
+.tl-reader-main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow-y: auto; background: var(--tl-paper); display: flex; flex-direction: column; }
+.tl-reader-main::-webkit-scrollbar { width: 11px; }
+.tl-reader-main::-webkit-scrollbar-thumb { background: var(--tl-ink-10); border-radius: 99px; border: 3px solid transparent; background-clip: padding-box; }
+/* The reading column centers within the scroll-region's ACTUAL width (which
+   shrinks when the panel opens), capped at the reader's chosen line width. */
+.tl-reader-main .tl-readcol { margin: 0 auto; width: 100%; box-sizing: border-box; }
+
+/* Drag-to-resize handle between text and panel. */
+.tl-panel-resizer {
+  flex: 0 0 6px; cursor: col-resize; background: transparent;
+  border-left: 1px solid var(--tl-line);
+  transition: background 150ms ease;
+}
+.tl-panel-resizer:hover, .tl-panel-resizer.dragging { background: var(--tl-accent-soft); }
+
+/* The side panel itself: in-flow, fixed (resizable) width, own scroll. */
+.tl-sidepanel {
+  flex: 0 0 auto; min-height: 0; overflow-y: auto;
+  background: var(--tl-panel); border-left: 1px solid var(--tl-line);
+  display: flex; flex-direction: column; gap: var(--tl-3);
+  padding: var(--tl-4) var(--tl-4) var(--tl-7);
+}
+.tl-sidepanel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-family: var(--tl-sans); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--tl-muted);
+}
+.tl-sidepanel-empty { font-size: 13px; color: var(--tl-muted); line-height: 1.5; font-family: var(--tl-sans); }
+@media (max-width: 880px) {
+  /* Too narrow for a side-by-side panel — stack it under the text. */
+  .tl-reader-body { flex-direction: column; }
+  .tl-panel-resizer { display: none; }
+  .tl-sidepanel { flex: none; width: auto !important; border-left: none; border-top: 1px solid var(--tl-line); }
+}
+
+/* Inline highlight on the page. Soft, summon-able, never alarming. */
+.tl-hl { background: color-mix(in oklab, var(--tl-accent) 20%, transparent); border-radius: 2px; cursor: pointer; padding: 0 1px; }
+.tl-hl.active { background: color-mix(in oklab, var(--tl-accent) 38%, transparent); }
+
+.tl-card {
+  width: 100%; box-sizing: border-box;
+  background: var(--tl-panel); border: 1px solid var(--tl-line); border-radius: var(--tl-r-sm);
+  padding: 10px 12px; font-family: var(--tl-sans); cursor: pointer;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.tl-card:hover { border-color: var(--tl-ink-10); }
+.tl-card.active { border-color: var(--tl-accent); box-shadow: 0 0 0 1px var(--tl-accent); }
+/* AI cards read distinctly from the reader's own notes (left accent + tint). */
+.tl-card.ai { border-left: 3px solid var(--tl-accent); background: color-mix(in oklab, var(--tl-accent) 5%, var(--tl-panel)); }
+.tl-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--tl-2); margin-bottom: 6px; }
+.tl-card-type { font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--tl-muted); }
+.tl-card-quote { margin: 0 0 6px; padding-left: 8px; border-left: 2px solid var(--tl-line); font-family: var(--tl-serif); font-style: italic; font-size: 13px; line-height: 1.45; color: var(--tl-muted); }
+.tl-card-body { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--tl-ink); white-space: pre-wrap; }
+.tl-card-hint { margin: 0; font-size: 13px; color: var(--tl-muted); }
+.tl-card-input {
+  width: 100%; box-sizing: border-box; min-height: 54px; resize: vertical;
+  border: none; background: transparent; color: var(--tl-ink);
+  font-family: var(--tl-sans); font-size: 13.5px; line-height: 1.5; padding: 0;
+}
+.tl-card-input:focus { outline: none; }
+.tl-card-saving { display: block; margin-top: 4px; font-size: 11px; color: var(--tl-muted); }
+
+/* Selection toolbar divider (separates note actions from tutor actions). */
+.tl-seltoolbar-div { display: inline-block; width: 1px; align-self: stretch; margin: 2px 3px; background: rgba(255,255,255,0.18); }
+/* When there's no room above the selection (top line), the toolbar flips below
+   it: drop the upward translate so it sits under the line instead of clipping. */
+.tl-seltoolbar.below { transform: translate(-50%, 8px); }
+
+/* ---------- Companion Margin: tutor cards (draft + saved) ---------- */
+/* Distinct from a plain note card: accent-tinted with a left accent edge. */
+.tl-card.tutor {
+  border-color: var(--tl-accent-line);
+  background: var(--tl-paper);
+  border-left: 3px solid var(--tl-accent);
+}
+.tl-card.tutor.active { box-shadow: var(--tl-shadow-md); }
+.tl-card-type.tutor { display: inline-flex; align-items: center; gap: 4px; color: var(--tl-accent); }
+.tl-tutor-modes { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.tl-tutorchip {
+  border: 1px solid var(--tl-line); background: var(--tl-panel);
+  color: var(--tl-muted); font-size: 11px; padding: 3px 9px;
+  border-radius: var(--tl-r-pill); cursor: pointer; white-space: nowrap;
+}
+.tl-tutorchip:hover { border-color: var(--tl-accent-line); color: var(--tl-ink); }
+.tl-tutorchip.active { background: var(--tl-accent); border-color: var(--tl-accent); color: var(--tl-accent-ink); }
+.tl-tutor-preview { margin: 4px 0 8px; }
+.tl-tutor-prevlabel { font-size: 10px; color: var(--tl-muted); font-style: italic; margin-bottom: 3px; }
+.tl-tutor-prompt {
+  margin: 0; max-height: 132px; overflow: auto;
+  background: var(--tl-bg); border: 1px solid var(--tl-line); border-radius: var(--tl-r-sm);
+  padding: 7px 8px; font-family: var(--tl-sans); font-size: 11px; line-height: 1.4;
+  color: var(--tl-muted); white-space: pre-wrap; word-break: break-word;
+}
+.tl-tutor-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.tl-tutor-actions .tl-btn { padding: 5px 11px; font-size: 12px; }
+
+/* Toolbar toggle for the side panel: shows a small count badge when collapsed
+   while notes exist, so the reader knows there's something parked over there. */
+.tl-paneltoggle { position: relative; }
+.tl-paneltoggle .tl-panelcount {
+  position: absolute; top: -2px; right: -2px; min-width: 15px; height: 15px;
+  padding: 0 3px; border-radius: 99px; background: var(--tl-accent); color: var(--tl-accent-ink);
+  font-size: 9px; font-weight: 700; line-height: 15px; text-align: center;
+}
+
+/* ---------- Session recap (close screen) ---------- */
+.tl-recap { max-width: 460px; }
+.tl-recap-stats { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
+.tl-recap-stat {
+  display: flex; flex-direction: column; align-items: center; min-width: 60px;
+  padding: 8px 10px; background: var(--tl-bg); border: 1px solid var(--tl-line); border-radius: var(--tl-r-sm);
+}
+.tl-recap-stat .n { font-size: 20px; font-weight: 700; color: var(--tl-ink); line-height: 1; }
+.tl-recap-stat .l { font-size: 11px; color: var(--tl-muted); margin-top: 3px; text-align: center; }
+.tl-recap-sections { font-size: 13px; color: var(--tl-muted); margin: 0 0 8px; }
+.tl-recap-takeaway { margin: 6px 0; }
+.tl-recap-saved {
+  font-family: var(--tl-serif); font-size: 14px; color: var(--tl-ink);
+  background: var(--tl-bg); border-left: 3px solid var(--tl-accent-line);
+  padding: 8px 10px; border-radius: var(--tl-r-sm);
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.tl-linkbtn { background: none; border: none; color: var(--tl-accent); font-size: 12px; cursor: pointer; padding: 0; text-decoration: underline; }
+.tl-recap-next { font-size: 13px; color: var(--tl-muted); margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--tl-line); }
+
+/* EPUB margin: a flex ROW holds the scroll-host (left) and a notes panel
+   (right) as SIBLINGS, so .epub-host > .epub-viewer keeps the exact structure
+   and sizing epub.js's renderTo expects — the viewer is never re-nested.
+   Cards are in document order (CFI→pixel alignment over an iframe is
+   deliberately avoided); clicking a card jumps to its highlight. */
+.tl-epub-stage { display: flex; flex: 1; min-height: 0; }
+.tl-epub-stage .epub-host { flex: 1 1 0; min-width: 0; overflow-x: hidden; }
+.tl-margin.flow {
+  /* Override the absolute positioning the base .tl-margin uses for the text
+     reader's pixel-aligned cards — here the panel is an in-flow flex sibling
+     that RESERVES space so the viewer can never render under it. */
+  position: static; flex: 0 0 300px; width: 300px; overflow-y: auto;
+  border-left: 1px solid var(--tl-line); background: var(--tl-paper);
+  padding: var(--tl-6) var(--tl-5);
+}
+.tl-margin.flow .tl-card { position: static; right: auto; margin-bottom: var(--tl-3); }
+@media (max-width: 880px) {
+  /* Too narrow for a side panel — stack notes under the reader. */
+  .tl-epub-stage { flex-direction: column; }
+  .tl-margin.flow { flex: none; width: auto; border-left: none; border-top: 1px solid var(--tl-line); }
+}
+/* Selection action card at the top of the EPUB margin. */
+.tl-selcard { background: var(--tl-panel); border: 1px solid var(--tl-accent); border-radius: var(--tl-r-sm); padding: 10px 12px; margin-bottom: var(--tl-3); }
+.tl-selcard-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tl-2); margin-top: 8px; }
+.tl-selcard-actions .tl-chip { height: 30px; }
+.tl-selcard-div { display: inline-block; width: 1px; align-self: stretch; min-height: 20px; margin: 0 2px; background: var(--tl-line); }
+
+/* Floating selection toolbar — sits just above the selected text. */
+.tl-seltoolbar {
+  position: absolute; transform: translate(-50%, calc(-100% - 8px)); z-index: 30;
+  display: flex; gap: 2px; padding: 4px;
+  background: var(--tl-ink); border-radius: var(--tl-r-sm); box-shadow: var(--tl-shadow, 0 6px 20px rgba(0,0,0,0.22));
+}
+.tl-seltoolbar-btn {
+  display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px;
+  background: transparent; border: none; border-radius: 5px; cursor: pointer;
+  color: var(--tl-paper); font-family: var(--tl-sans); font-size: 12.5px; font-weight: 600;
+}
+.tl-seltoolbar-btn:hover { background: rgba(255,255,255,0.14); }
+/* Keyboard focus on the dark toolbar: a light ring (the accent ring is too low
+   contrast on the ink background) + the hover fill so the focused action reads. */
+.tl-seltoolbar-btn:focus-visible {
+  outline: none;
+  background: rgba(255,255,255,0.14);
+  box-shadow: 0 0 0 2px var(--tl-ink), 0 0 0 4px rgba(255,255,255,0.85);
+}
+
+/* ════════ Modal (note / ending / AI tutor) ════════ */
+.tl-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+  display: flex; align-items: center; justify-content: center; z-index: 50; padding: 24px;
+}
+.tl-modal {
+  background: var(--tl-panel); border: 1px solid var(--tl-line); border-radius: var(--tl-r-lg);
+  box-shadow: var(--tl-shadow-pop); width: 92%; max-width: 520px; max-height: 88vh; overflow: auto;
+  padding: var(--tl-5); display: flex; flex-direction: column; gap: var(--tl-3);
+}
+.tl-modal.wide { max-width: 580px; }
+.tl-modal-head { display: flex; align-items: center; justify-content: space-between; }
+.tl-modal-head .t { margin: 0; font-family: var(--tl-serif); font-weight: 500; font-size: 20px; color: var(--tl-ink); display: flex; align-items: center; gap: 8px; }
+.tl-modal label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; color: var(--tl-muted); }
+.tl-modal .row { display: flex; gap: var(--tl-4); font-size: 12.5px; color: var(--tl-muted); flex-wrap: wrap; }
+.tl-modal .prompt { font-size: 15px; color: var(--tl-ink); margin: 0; line-height: 1.5; }
+.tl-warn-text { color: var(--tl-warn); font-size: 12.5px; line-height: 1.5; margin: 0; }
+
+/* AI tutor pieces */
+.tl-localtag {
+  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+  font-size: 11px; font-weight: 600; color: var(--tl-ok);
+  padding: 4px 9px; border-radius: var(--tl-r-pill);
+  background: var(--tl-accent-soft); border: 1px solid var(--tl-accent-line);
+}
+.tl-localtag.off { color: var(--tl-warn); background: var(--tl-warn-soft); border-color: color-mix(in oklab, var(--tl-warn) 30%, transparent); }
+.tl-quoted {
+  font-family: var(--tl-serif); font-style: italic; font-size: 15px; line-height: 1.5; color: var(--tl-ink);
+  padding: var(--tl-3) var(--tl-4); border-left: 2px solid var(--tl-accent-line);
+  background: var(--tl-accent-soft); border-radius: 0 var(--tl-r-sm) var(--tl-r-sm) 0;
+  max-height: 180px; overflow: auto; white-space: pre-wrap;
+}
+.tl-ai-answer {
+  font-size: 14px; line-height: 1.6; color: var(--tl-ink); white-space: pre-wrap;
+  background: var(--tl-bg); border: 1px solid var(--tl-line); border-radius: var(--tl-r-sm);
+  padding: var(--tl-3) var(--tl-4); max-height: 320px; overflow: auto; min-height: 80px; margin: 0;
+}
+.tl-section-h { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--tl-muted); font-weight: 600; margin: var(--tl-2) 0 0; }
+
+/* ── AI provider onboarding (forced first-run chooser) ── */
+.tl-onboard { display: flex; justify-content: center; padding: var(--tl-9) var(--tl-7); }
+.tl-onboard-card { max-width: 620px; width: 100%; padding: var(--tl-9); }
+.tl-onboard-title { font-family: var(--tl-serif); font-size: 1.5em; margin: 0 0 0.3em; color: var(--tl-ink); }
+.tl-onboard-sub { color: var(--tl-muted); margin: 0 0 1.2em; line-height: 1.55; }
+.tl-onboard-opts { display: flex; flex-direction: column; gap: 8px; }
+.tl-onboard-opt { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid color-mix(in oklab, var(--tl-ink) 12%, transparent); border-radius: 8px; cursor: pointer; transition: border-color .12s, background .12s; }
+.tl-onboard-opt:hover { border-color: color-mix(in oklab, var(--tl-accent) 40%, transparent); }
+.tl-onboard-opt.is-active { border-color: var(--tl-accent); background: color-mix(in oklab, var(--tl-accent) 7%, transparent); }
+.tl-onboard-opt input { margin-top: 3px; }
+.tl-onboard-opt-body { display: flex; flex-direction: column; gap: 3px; }
+.tl-onboard-opt-label { font-weight: 600; color: var(--tl-ink); display: flex; align-items: center; gap: 8px; }
+.tl-onboard-opt-desc { font-size: 0.88em; color: var(--tl-muted); line-height: 1.45; }
+.tl-onboard-tag { font-size: 0.7em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 999px; background: color-mix(in oklab, var(--tl-accent) 18%, transparent); color: color-mix(in oklab, var(--tl-accent) 80%, var(--tl-ink)); }
+.tl-onboard-tag.on-device { background: color-mix(in oklab, var(--tl-ink) 10%, transparent); color: var(--tl-muted); }
+.tl-onboard-config { margin: 12px 0 0; padding: 12px; border-radius: 8px; background: color-mix(in oklab, var(--tl-ink) 4%, transparent); }
+.tl-onboard-hint { font-size: 0.85em; color: var(--tl-muted); margin: 6px 0 0; line-height: 1.45; }
+.tl-onboard-test { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+.tl-onboard-ok { display: inline-flex; align-items: center; gap: 5px; font-size: 0.88em; color: color-mix(in oklab, #2ea043 80%, var(--tl-ink)); }
+.tl-onboard-bad { display: inline-flex; align-items: center; gap: 5px; font-size: 0.88em; color: #c0392b; }
+.tl-onboard-actions { display: flex; justify-content: flex-end; margin-top: 18px; }
+.tl-field { display: flex; flex-direction: column; gap: 5px; font-size: 0.9em; color: var(--tl-muted); }
+.tl-field input { padding: 8px 10px; border: 1px solid color-mix(in oklab, var(--tl-ink) 18%, transparent); border-radius: 6px; background: var(--tl-paper, #fff); color: var(--tl-ink); font: inherit; }
+
+/* ── Codex (ChatGPT) device-code login ── */
+.tl-codexlogin { margin-top: 8px; }
+.tl-codex-wait { margin-top: 6px; }
+.tl-codex-url { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; color: var(--tl-ink); background: color-mix(in oklab, var(--tl-ink) 6%, transparent); padding: 1px 6px; border-radius: 4px; }
+.tl-codex-code-row { display: flex; align-items: center; gap: 10px; margin: 4px 0; }
+.tl-codex-code { font-family: ui-monospace, Menlo, monospace; font-size: 1.5em; font-weight: 700; letter-spacing: 0.12em; color: var(--tl-ink); background: color-mix(in oklab, var(--tl-accent) 12%, transparent); padding: 6px 14px; border-radius: 8px; }
+
+/* ════════ Plan setup (new-book rhythm) — design handoff .tl-plan-screen ════════ */
+.tl-plan-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tl-plan-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.tl-plan { width: 100%; max-width: 640px; margin: 0 auto; padding: calc(var(--tl-7) * var(--tl-density)) var(--tl-7) var(--tl-7); }
+.tl-plan-title { font-family: var(--tl-serif); font-weight: 500; font-size: clamp(28px, 4.2vw, 34px); line-height: 1.14; letter-spacing: -0.012em; color: var(--tl-ink); margin: 0; }
+.tl-plan-author { font-size: 15px; color: var(--tl-muted); margin-top: 4px; }
+.tl-plan-lead { font-size: 14.5px; color: var(--tl-muted); line-height: 1.6; margin: var(--tl-4) 0 0; max-width: 52ch; }
+.tl-plan-card { margin-top: calc(var(--tl-6) * var(--tl-density)); border: 1px solid var(--tl-line); border-radius: var(--tl-r-lg); background: var(--tl-panel); overflow: hidden; }
+.tl-plan-row { display: flex; align-items: center; gap: var(--tl-4); padding: var(--tl-4) var(--tl-5); }
+.tl-plan-row + .tl-plan-row { border-top: 1px solid var(--tl-line); }
+.tl-plan-rowlabel { flex: 0 0 124px; font-size: 13.5px; font-weight: 600; color: var(--tl-ink); }
+
+/* Unified segmented-pill choice control (every group uses this one) */
+.tl-choice { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.tl-choice button { appearance: none; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-family: var(--tl-sans); font-size: 13.5px; font-weight: 600; color: var(--tl-muted); background: transparent; border: 1px solid var(--tl-line); border-radius: var(--tl-r-pill); padding: 7px 15px; transition: border-color 150ms ease, background 150ms ease, color 150ms ease; }
+.tl-choice button:hover { border-color: var(--tl-ink-10); color: var(--tl-ink); }
+.tl-choice button[aria-pressed="true"], .tl-choice button[aria-checked="true"] { background: var(--tl-accent-soft); border-color: var(--tl-accent-line); color: var(--tl-accent); }
+.tl-choice.compact button { padding: 7px 0; width: 40px; text-align: center; }
+
+/* Estimate — a single quiet muted line, never a colored alert box */
+.tl-estimate { display: flex; gap: var(--tl-3); align-items: flex-start; margin-top: calc(var(--tl-5) * var(--tl-density)); font-size: 14px; color: var(--tl-muted); line-height: 1.55; }
+.tl-estimate > svg { color: var(--tl-muted); margin-top: 2px; flex-shrink: 0; }
+.tl-estimate .num { color: var(--tl-ink); font-weight: 600; }
+.tl-estimate .soft-note { display: flex; align-items: flex-start; gap: 7px; margin-top: 6px; color: var(--tl-warn); font-size: 13px; }
+.tl-estimate .soft-note svg { color: var(--tl-warn); margin-top: 1px; }
+
+/* Pinned action bar (always visible regardless of scroll) */
+.tl-actionbar { flex-shrink: 0; padding: var(--tl-3) var(--tl-7); border-top: 1px solid var(--tl-line); background: color-mix(in oklab, var(--tl-panel) 50%, var(--tl-bg)); }
+.tl-actionbar-inner { width: 100%; max-width: 640px; margin: 0 auto; display: flex; align-items: center; gap: var(--tl-4); }
+.tl-actionbar .reassure { font-size: 13px; color: var(--tl-muted); }
+.tl-actionbar .right { display: flex; gap: var(--tl-2); margin-left: auto; flex-shrink: 0; }
+
+/* ════════ Software updates (Settings) ════════ */
+.tl-update { display: flex; flex-direction: column; gap: var(--tl-2); align-items: flex-end; }
+.tl-update-row { display: flex; align-items: center; gap: var(--tl-3); }
+.tl-update-ver { font-size: 13px; color: var(--tl-muted); font-variant-numeric: tabular-nums; }
+.tl-update-avail { display: flex; flex-direction: column; gap: var(--tl-2); align-items: flex-end; text-align: right; }

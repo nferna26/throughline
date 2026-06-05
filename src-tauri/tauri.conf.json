@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ReadingGym",
+  "productName": "Throughline",
   "version": "0.1.0",
-  "identifier": "com.readinggym.app",
+  "identifier": "com.throughline.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "ReadingGym",
+        "title": "Throughline",
         "width": 960,
         "height": 720,
         "titleBarStyle": "Overlay",
@@ -23,9 +23,18 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/nferna26/throughline/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQxNkEyMERCQjI5NTA3RTQKUldUa0I1V3kyeUJxUVk1c0NRY1RmajFvTHJyanROb2dVZ3RSMW9DQ0l3Zy9QRjhNN1pNMDZXQTcK"
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

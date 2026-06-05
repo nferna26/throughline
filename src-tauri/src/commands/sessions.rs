@@ -180,7 +180,7 @@ pub fn cmd_end_session(
         let mut rows = s.query(params![session.book_id])?;
         if let Some(row) = rows.next()? { Ok(Some(book_from_row(row)?)) } else { Ok(None) }
     })() {
-        if let Ok(p) = export::export_session(&book, &session, summary_sentence.as_deref()) {
+        if let Ok(p) = export::export_session(&export::root_for(&conn), &book, &session, summary_sentence.as_deref()) {
             log::log_export("session", &p.to_string_lossy());
         }
     }

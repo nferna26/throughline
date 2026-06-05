@@ -1,6 +1,6 @@
-# ReadingGym
+# Throughline
 
-[![CI](https://github.com/nferna26/ReadingGym/actions/workflows/ci.yml/badge.svg)](https://github.com/nferna26/ReadingGym/actions/workflows/ci.yml)
+[![CI](https://github.com/nferna26/Throughline/actions/workflows/ci.yml/badge.svg)](https://github.com/nferna26/Throughline/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS-black)
 
@@ -21,7 +21,7 @@ The binding contract is [CLAUDE.md](./CLAUDE.md). The full spec is [docs/PRD.md]
 
 ## Platform support
 
-**macOS only.** Data paths are macOS-specific (`~/Library/Application Support/ReadingGym/`). Tauri can compile for Linux and Windows, but those paths would need to move to `dirs::data_dir()` first — see [issue tracker](https://github.com/nferna26/ReadingGym/issues) if you want to help.
+**macOS only.** Data paths are macOS-specific (`~/Library/Application Support/Throughline/`). Tauri can compile for Linux and Windows, but those paths would need to move to `dirs::data_dir()` first — see [issue tracker](https://github.com/nferna26/Throughline/issues) if you want to help.
 
 ## Scope
 
@@ -35,7 +35,7 @@ The whole loop end to end, every part offline:
 6. Optional: AI **tutor prompt-preview** stubs against a text selection. **No remote call ever.**
 7. Export safe Markdown to `~/GBrain/Reading/`.
 
-If you fall behind, the Today screen surfaces shame-free recovery options (resume today, gentle catch-up, weekend window, extend finish date, restart current chapter).
+If you fall behind, the Today screen surfaces shame-free recovery options (resume today, gentle catch-up, weekend window, extend finish date). There is deliberately no "restart current chapter" — throwing away read progress is a punishment, not a recovery.
 
 ## Non-goals (still hard)
 
@@ -59,9 +59,9 @@ See [CLAUDE.md](./CLAUDE.md) for the full list.
 
 | What | Where |
 | --- | --- |
-| Operational DB | `~/Library/Application Support/ReadingGym/reading.db` |
-| Imported book sources | `~/Library/Application Support/ReadingGym/books/{book_id}/source.txt` or `source.epub` (chmod 444) |
-| Manifests | `~/Library/Application Support/ReadingGym/books/{book_id}/manifest.json` |
+| Operational DB | `~/Library/Application Support/Throughline/reading.db` |
+| Imported book sources | `~/Library/Application Support/Throughline/books/{book_id}/source.txt` or `source.epub` (chmod 444) |
+| Manifests | `~/Library/Application Support/Throughline/books/{book_id}/manifest.json` |
 | Markdown exports | `~/GBrain/Reading/{Books,Sessions,Notes,Reviews,_indexes}/` (path overridable in Settings) |
 
 Raw source files stay local. Exports contain locators, paraphrases, reflections, and short quotes only — never raw book text.
@@ -73,8 +73,8 @@ Prereqs: Node 20+, Rust + Cargo, Xcode Command Line Tools, macOS.
 **Run from source (dev):**
 
 ```bash
-git clone https://github.com/nferna26/ReadingGym
-cd ReadingGym
+git clone https://github.com/nferna26/Throughline
+cd Throughline
 npm install
 npm run tauri dev
 ```
@@ -98,16 +98,16 @@ exports in `~/GBrain/Reading/` are kept by default; remove them separately if
 you want a clean slate.
 
 ```bash
-# 1. Quit ReadingGym first (Cmd-Q in the app window).
+# 1. Quit Throughline first (Cmd-Q in the app window).
 
 # 2. Remove operational state + imported sources.
-rm -rf "$HOME/Library/Application Support/ReadingGym"
+rm -rf "$HOME/Library/Application Support/Throughline"
 
 # 3. (Optional) Remove exported Markdown.
 rm -rf "$HOME/GBrain/Reading"
 
 # 4. (Optional) Remove the repo itself.
-rm -rf "$HOME/code/reading-gym"
+rm -rf "$HOME/code/throughline"
 ```
 
 The export path is configurable. If you've changed it in Settings, swap that location into step 3.

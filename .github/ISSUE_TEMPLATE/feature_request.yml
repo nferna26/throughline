@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Before filing: please read the **non-goals** in
-        [CLAUDE.md](../blob/main/CLAUDE.md). ReadingGym deliberately omits cloud
+        [CLAUDE.md](../blob/main/CLAUDE.md). Throughline deliberately omits cloud
         sync, accounts, telemetry, gamification, quizzes/SRS, a library-first or
         dashboard-first UI, and remote-AI-by-default. Requests for those will be
         declined — the product's value is in what it refuses to do.

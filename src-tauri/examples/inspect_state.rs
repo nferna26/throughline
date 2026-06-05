@@ -4,7 +4,7 @@
 // trigger a lazy reclassify in place; this binary will reflect the new state on
 // a second run.
 use rusqlite::params;
-use reading_gym_lib::*;
+use throughline_lib::*;
 
 fn main() -> anyhow::Result<()> {
     let conn = db::open_and_migrate()?;

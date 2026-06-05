@@ -1,13 +1,13 @@
-# Contributing to ReadingGym
+# Contributing to Throughline
 
-ReadingGym is a local-first macOS reading app. Before contributing, read
+Throughline is a local-first macOS reading app. Before contributing, read
 [`CLAUDE.md`](./CLAUDE.md) — it's the binding product contract. When there's
 tension between "what would be cool to build" and "what we agreed to build,"
 CLAUDE.md wins.
 
 ## The non-goals are load-bearing
 
-ReadingGym deliberately does **not** have: cloud sync, accounts, telemetry,
+Throughline deliberately does **not** have: cloud sync, accounts, telemetry,
 background agents, gamification (XP / badges / punitive streaks), quizzes /
 spaced repetition, a library-first or dashboard-first UI, or remote AI by
 default. PRs that add these will be declined, however well-built. The product's
@@ -18,8 +18,8 @@ value is in what it refuses to do. See the full list in `CLAUDE.md`.
 Prereqs: Node 20+, Rust + Cargo, Xcode Command Line Tools, macOS.
 
 ```bash
-git clone https://github.com/nferna26/ReadingGym
-cd ReadingGym
+git clone https://github.com/nferna26/Throughline
+cd Throughline
 npm install
 npm run tauri dev
 ```
@@ -73,5 +73,5 @@ All three must pass. CI will reject a red build.
 
 Use the issue templates. Include macOS version, what you did, what you expected,
 and what happened. If the app misbehaved, the local log at
-`~/Library/Application Support/ReadingGym/logs/app.log` often has the answer —
+`~/Library/Application Support/Throughline/logs/app.log` often has the answer —
 attach the relevant lines (it contains no secrets, but skim before pasting).

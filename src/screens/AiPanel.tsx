@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Channel } from "@tauri-apps/api/core";
-import RGIcon from "../components/RGIcon";
+import TLIcon from "../components/TLIcon";
 import { useDialog } from "../hooks/useDialog";
 import {
   AI_STUB_MODES,
@@ -131,28 +131,28 @@ export default function AiPanel({ bookId, chapter, locator, selection, onClose }
   const model = settings?.ai_model ?? "";
 
   return (
-    <div className="rg-modal-backdrop">
-      <div ref={panelRef} className="rg-modal wide" role="dialog" aria-modal="true" aria-labelledby="ai-panel-title">
-        <div className="rg-modal-head">
-          <span className="t" id="ai-panel-title"><RGIcon name="sparkle" size={16} /> AI tutor</span>
-          <button className="rg-iconbtn" onClick={onClose} aria-label="Close AI tutor"><RGIcon name="x" size={16} /></button>
+    <div className="tl-modal-backdrop">
+      <div ref={panelRef} className="tl-modal wide" role="dialog" aria-modal="true" aria-labelledby="ai-panel-title">
+        <div className="tl-modal-head">
+          <span className="t" id="ai-panel-title"><TLIcon name="sparkle" size={16} /> AI tutor</span>
+          <button className="tl-iconbtn" onClick={onClose} aria-label="Close AI tutor"><TLIcon name="x" size={16} /></button>
         </div>
 
         {localOnly ? (
-          <span className="rg-localtag"><RGIcon name="shield" size={13} /> Local-only · never leaves this Mac · {baseUrl}</span>
+          <span className="tl-localtag"><TLIcon name="shield" size={13} /> Local-only · never leaves this Mac · {baseUrl}</span>
         ) : (
-          <span className="rg-localtag off"><RGIcon name="arrowRight" size={13} /> Local-only OFF · sends your passage to {baseUrl}</span>
+          <span className="tl-localtag off"><TLIcon name="arrowRight" size={13} /> Local-only OFF · sends your passage to {baseUrl}</span>
         )}
         {!model.trim() && (
-          <p className="rg-warn-text">No model id set. Open Settings → AI and type the model id loaded in your local server.</p>
+          <p className="tl-warn-text">No model id set. Open Settings → AI and type the model id loaded in your local server.</p>
         )}
 
         {!hasSelection ? (
-          <p className="rg-warn-text">Select some text in the reader first — AI calls need a non-trivial passage to work from.</p>
+          <p className="tl-warn-text">Select some text in the reader first — AI calls need a non-trivial passage to work from.</p>
         ) : (
           <>
             <label>Mode
-              <select className="rg-select" value={mode} onChange={(e) => setMode(e.target.value as AiStubMode)}>
+              <select className="tl-select" value={mode} onChange={(e) => setMode(e.target.value as AiStubMode)}>
                 {AI_STUB_MODES.map((m) => (
                   <option key={m.value} value={m.value}>{m.label}</option>
                 ))}
@@ -160,54 +160,54 @@ export default function AiPanel({ bookId, chapter, locator, selection, onClose }
             </label>
 
             <div>
-              <span className="rg-field-label">Selected passage ({selection.length} chars)</span>
-              <div className="rg-quoted">{selection.length > 600 ? selection.slice(0, 600) + "…" : selection}</div>
+              <span className="tl-field-label">Selected passage ({selection.length} chars)</span>
+              <div className="tl-quoted">{selection.length > 600 ? selection.slice(0, 600) + "…" : selection}</div>
             </div>
 
             <div className="panel-actions">
-              <button className="rg-btn rg-btn-ghost" onClick={onClose}>Cancel</button>
-              <button className="rg-btn rg-btn-primary" disabled={streaming || !model.trim()} onClick={ask}>
+              <button className="tl-btn tl-btn-ghost" onClick={onClose}>Cancel</button>
+              <button className="tl-btn tl-btn-primary" disabled={streaming || !model.trim()} onClick={ask}>
                 {streaming ? "Asking…" : (handle ? "Ask again" : "Ask")}
               </button>
             </div>
           </>
         )}
 
-        {error && <p className="rg-warn-text">{error}</p>}
+        {error && <p className="tl-warn-text">{error}</p>}
 
         {(handle || response) && (
           <>
-            <span className="rg-section-h">Response (ephemeral)</span>
-            <pre className="rg-ai-answer">{response || (streaming ? "…" : "(no content yet)")}</pre>
-            <p className="rg-field-label" style={{ fontWeight: 400 }}>
+            <span className="tl-section-h">Response (ephemeral)</span>
+            <pre className="tl-ai-answer">{response || (streaming ? "…" : "(no content yet)")}</pre>
+            <p className="tl-field-label" style={{ fontWeight: 400 }}>
               Provider: {handle?.provider_host ?? "(unknown)"} · {streaming ? "streaming…" : "complete"}
             </p>
 
             <div className="panel-actions">
-              <button className="rg-btn rg-btn-ghost" disabled={!response} onClick={copyResponse}>Copy</button>
-              <button className="rg-btn rg-btn-ghost" onClick={onClose}>Discard</button>
+              <button className="tl-btn tl-btn-ghost" disabled={!response} onClick={copyResponse}>Copy</button>
+              <button className="tl-btn tl-btn-ghost" onClick={onClose}>Discard</button>
             </div>
 
-            <span className="rg-section-h">Save as note (opt-in)</span>
-            <p className="rg-field-label" style={{ fontWeight: 400, lineHeight: 1.5 }}>
+            <span className="tl-section-h">Save as note (opt-in)</span>
+            <p className="tl-field-label" style={{ fontWeight: 400, lineHeight: 1.5 }}>
               Ephemeral until you approve. Paste/edit what's worth keeping; saving writes a Note + Markdown and flips
               <code> ai_requests.wrote_to_memory</code> to 1.
             </p>
             <label>Note type
-              <select className="rg-select" value={noteType} onChange={(e) => setNoteType(e.target.value)}>
+              <select className="tl-select" value={noteType} onChange={(e) => setNoteType(e.target.value)}>
                 {NOTE_TYPES.map((t) => <option key={t}>{t}</option>)}
               </select>
             </label>
             <label>Body
               <textarea
-                className="rg-textarea"
+                className="tl-textarea"
                 value={noteBody}
                 onChange={(e) => setNoteBody(e.target.value)}
                 placeholder="Paste / edit the parts of the response worth keeping…"
               />
             </label>
             <div className="panel-actions">
-              <button className="rg-btn rg-btn-primary" disabled={approving || !handle || !noteBody.trim()} onClick={approveAsNote}>
+              <button className="tl-btn tl-btn-primary" disabled={approving || !handle || !noteBody.trim()} onClick={approveAsNote}>
                 {approving ? "Saving…" : "Save as note"}
               </button>
             </div>

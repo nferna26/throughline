@@ -1,4 +1,4 @@
-//! AI request audit retention — cto-kb `adr-001-reading-gym-ai-requests-retention`.
+//! AI request audit retention — cto-kb `adr-001-throughline-ai-requests-retention`.
 //!
 //! Every prompt preview and Ask call is logged to `ai_requests` so the user can
 //! audit what the local-only AI surface was asked. Without a bound, that audit

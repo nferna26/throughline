@@ -1,0 +1,127 @@
+/* ════════════════════════════════════════════════════════════════════
+   Throughline — Discover (public-domain library browse/search)
+   Card-catalog view: shared header + search, ranked rows, Get states.
+   Ported from the design handoff's discover.css. The clothbound-gallery
+   variant was dropped per the brief; only the card catalog ships.
+   ════════════════════════════════════════════════════════════════════ */
+
+.tl-discover { padding-top: calc(var(--tl-6) * var(--tl-density)); padding-bottom: var(--tl-9); }
+
+.tl-disc-back {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: none; background: transparent; cursor: pointer;
+  color: var(--tl-muted); font-family: var(--tl-sans); font-size: 13px; font-weight: 550;
+  padding: 6px 8px 6px 4px; margin-bottom: var(--tl-3); border-radius: var(--tl-r-sm);
+  transition: color 150ms ease, background 150ms ease;
+}
+.tl-disc-back:hover { color: var(--tl-ink); background: var(--tl-ink-06); }
+
+.tl-disc-title {
+  font-family: var(--tl-serif); font-weight: 500;
+  font-size: clamp(26px, 3.6vw, 30px); line-height: 1.14;
+  letter-spacing: -0.012em; color: var(--tl-ink); margin: var(--tl-2) 0 0;
+}
+.tl-disc-sub { font-size: 13.5px; color: var(--tl-muted); margin-top: 6px; }
+
+.tl-search { position: relative; margin-top: var(--tl-5); }
+.tl-search > svg { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--tl-muted); pointer-events: none; }
+.tl-search input {
+  width: 100%; height: 46px;
+  font-family: var(--tl-sans); font-size: 15px; color: var(--tl-ink);
+  background: var(--tl-panel); border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-md); padding: 0 16px 0 44px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.tl-search input::placeholder { color: var(--tl-muted); }
+.tl-search input:focus { outline: none; border-color: var(--tl-accent-line); box-shadow: 0 0 0 3px var(--tl-accent-soft); }
+
+.tl-disc-meta {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--tl-3);
+  margin-top: var(--tl-4); flex-wrap: wrap;
+}
+.tl-disc-count { font-size: 12.5px; color: var(--tl-muted); }
+.tl-disc-count b { color: var(--tl-ink); font-weight: 650; }
+
+/* "offline catalogue" hint — calm muted pill, never an alarm */
+.tl-disc-offline {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 600; color: var(--tl-muted);
+  border: 1px solid var(--tl-line); border-radius: var(--tl-r-pill);
+  padding: 2px 9px;
+}
+.tl-disc-offline svg { color: var(--tl-muted); }
+
+/* empty / offline state */
+.tl-disc-empty {
+  margin-top: var(--tl-8); text-align: center; color: var(--tl-muted);
+  display: flex; flex-direction: column; align-items: center; gap: var(--tl-3);
+}
+.tl-disc-empty .ico { color: var(--tl-muted); opacity: 0.7; }
+.tl-disc-empty .big { font-family: var(--tl-serif); font-size: 19px; color: var(--tl-ink); }
+.tl-disc-empty .searchall {
+  margin-top: var(--tl-2);
+  display: inline-flex; align-items: center; gap: 7px;
+  font-family: var(--tl-sans); font-size: 13.5px; font-weight: 600; color: var(--tl-accent);
+  background: var(--tl-accent-soft); border: 1px solid var(--tl-accent-line);
+  border-radius: var(--tl-r-pill); padding: 8px 16px; cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.tl-disc-empty .searchall:hover { background: color-mix(in oklab, var(--tl-accent) 18%, transparent); }
+
+/* ════════ Card catalog index ════════ */
+.tl-index { margin-top: var(--tl-5); }
+.tl-index-h {
+  display: grid; grid-template-columns: 30px 1fr auto; gap: var(--tl-4);
+  align-items: center; padding: 0 var(--tl-2) 10px;
+  font-family: var(--tl-sans); font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--tl-muted);
+  border-bottom: 1px solid var(--tl-line);
+}
+.tl-irow {
+  display: grid; grid-template-columns: 30px 1fr auto; gap: var(--tl-4);
+  align-items: center; padding: 12px var(--tl-2);
+  border-bottom: 1px solid var(--tl-line);
+  transition: background 120ms ease;
+}
+.tl-irow:hover { background: var(--tl-ink-04); }
+.tl-irow .rnk {
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Code", monospace;
+  font-size: 12.5px; color: var(--tl-muted);
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+.tl-irow .tw { min-width: 0; }
+.tl-irow .it {
+  font-family: var(--tl-serif); font-size: 16px; color: var(--tl-ink);
+  line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tl-irow .ia { font-family: var(--tl-sans); font-size: 12.5px; color: var(--tl-muted); margin-top: 2px; }
+.tl-irow .meta { display: flex; align-items: center; gap: var(--tl-4); }
+.tl-irow .dls {
+  font-family: var(--tl-sans); font-size: 13px; color: var(--tl-muted);
+  display: inline-flex; align-items: center; gap: 5px;
+  font-variant-numeric: tabular-nums; min-width: 84px; justify-content: flex-end;
+}
+.tl-irow .lang {
+  font-family: var(--tl-sans); font-size: 11px; font-weight: 600; letter-spacing: 0.03em;
+  color: var(--tl-muted); border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-pill); padding: 2px 8px;
+}
+.tl-getbtn {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  font-family: var(--tl-sans); font-size: 12.5px; font-weight: 600; color: var(--tl-ink);
+  background: transparent; border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-pill); padding: 6px 13px; min-width: 78px; justify-content: center;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+.tl-getbtn:hover:not(:disabled) { color: var(--tl-accent); border-color: var(--tl-accent-line); background: var(--tl-accent-soft); }
+.tl-getbtn:disabled { cursor: default; }
+.tl-getbtn.loading { color: var(--tl-muted); }
+.tl-getbtn.done { color: var(--tl-accent); border-color: var(--tl-accent-line); background: var(--tl-accent-soft); }
+
+/* load-more row */
+.tl-disc-more { display: flex; justify-content: center; margin-top: var(--tl-5); }
+
+/* tiny spinner */
+.tl-spin { width: 12px; height: 12px; border-radius: 50%; border: 1.6px solid currentColor; border-top-color: transparent; animation: tl-spin 0.7s linear infinite; }
+@keyframes tl-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .tl-spin { animation: none; } }

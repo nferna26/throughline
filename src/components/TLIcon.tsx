@@ -1,5 +1,5 @@
 // Lucide-style line icons, 20-grid, 1.6 stroke, currentColor.
-// Ported verbatim from the Claude Design handoff (lib/rg-icons.jsx) so the
+// Ported verbatim from the Claude Design handoff (lib/tl-icons.jsx) so the
 // overhaul carries no icon dependency. Replaces the old emoji glyphs.
 
 const PATHS: Record<string, string> = {
@@ -30,6 +30,12 @@ const PATHS: Record<string, string> = {
   pencil: "M13.5 4.2 15.8 6.5 7 15.3l-3 0.8 0.8-3zM12 5.7l2.3 2.3",
   flag: "M5 16V3.5M5 4.2h8.5L11.7 7l1.8 2.8H5",
   refresh: "M15.5 6.5A6 6 0 1 0 16 10M15.5 3.5v3h-3",
+  // Added for Discover (the handoff's discover.jsx references these but its icon
+  // set omits them); authored here in the same 20-grid / 1.6-stroke style.
+  search: "M8.5 14a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zM16.5 16.5 12.7 12.7",
+  globe: "M10 17a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM3 10h14M10 3c2.2 2.1 2.2 11.9 0 14M10 3c-2.2 2.1-2.2 11.9 0 14",
+  download: "M10 3.5v8M6.7 8.2 10 11.5l3.3-3.3M4.5 13.5v1.5A1.5 1.5 0 0 0 6 16.5h8a1.5 1.5 0 0 0 1.5-1.5v-1.5",
+  arrowDown: "M10 4.5v10M6.2 10.8 10 14.5l3.8-3.7",
 };
 
 import type { CSSProperties } from "react";
@@ -44,7 +50,7 @@ interface Props {
   style?: CSSProperties;
 }
 
-export default function RGIcon({ name, size = 20, strokeWidth = 1.6, className, style }: Props) {
+export default function TLIcon({ name, size = 20, strokeWidth = 1.6, className, style }: Props) {
   const d = PATHS[name];
   if (!d) return null;
   return (

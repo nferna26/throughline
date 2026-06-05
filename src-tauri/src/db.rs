@@ -20,7 +20,7 @@ pub fn open_and_migrate() -> Result<Connection> {
     // acceptable here because the durable artifact is the Markdown export
     // (written atomically before commit), not the DB row. Halves the per-commit
     // fsync cost vs. WAL's FULL default. See cto-kb
-    // adr-002-reading-gym-sqlite-synchronous-normal.
+    // adr-002-throughline-sqlite-synchronous-normal.
     conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
     migrations::apply_pending(&conn)?;
     Ok(conn)

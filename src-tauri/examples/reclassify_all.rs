@@ -3,7 +3,7 @@
 // for any stale pre-2.5 row. Safe to run repeatedly — it's a no-op once the
 // data is current.
 use rusqlite::params;
-use reading_gym_lib::*;
+use throughline_lib::*;
 
 fn main() -> anyhow::Result<()> {
     let conn = db::open_and_migrate()?;

@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   build-and-test:
-    # ReadingGym hard-codes macOS data paths (~/Library/Application Support),
+    # Throughline hard-codes macOS data paths (~/Library/Application Support),
     # so CI runs on macOS only. See README "Platform support".
     runs-on: macos-latest
     steps:
@@ -51,4 +51,4 @@ jobs:
 
       - name: Rust build (production binary)
         working-directory: src-tauri
-        run: cargo build --bin reading-gym
+        run: cargo build --bin throughline

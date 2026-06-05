@@ -1,0 +1,243 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
+import MarginTutorCard, { type TutorDraft } from "./MarginTutorCard";
+
+// ── Tauri core mock: invoke (by command name) + a drivable Channel ──────────
+// vi.mock's factory is hoisted above the module body, so the mock objects must
+// come from vi.hoisted (which runs first).
+const mocks = vi.hoisted(() => {
+  class MockChannel {
+    onmessage: ((e: unknown) => void) | null = null;
+  }
+  const invoke = vi.fn(
+    (_cmd: string, _args?: Record<string, unknown>): Promise<unknown> => Promise.resolve(null),
+  );
+  return { invoke, Channel: MockChannel };
+});
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: mocks.invoke,
+  Channel: mocks.Channel,
+}));
+
+type MockChannelT = InstanceType<typeof mocks.Channel>;
+
+function setImpl() {
+  mocks.invoke.mockReset();
+  mocks.invoke.mockImplementation((cmd: string) => {
+    switch (cmd) {
+      case "cmd_get_settings":
+        return Promise.resolve({
+          export_path: "/x",
+          ai_provider: "local",
+          ai_base_url: "http://localhost:1234/v1",
+          ai_model: "gemma-4-31b-it-mlx",
+          ai_local_only: true,
+          ai_requests_retention_days: 90,
+        });
+      case "cmd_ai_ask":
+        // Each call gets a fresh ai_request_id so we can tell brief from deep.
+        return Promise.resolve({ ai_request_id: `ai_${cmd}`, prompt_sent: "(hidden)", provider_host: "localhost" });
+      case "cmd_test_ai_connection":
+        return Promise.resolve({ reachable: true, first_model_id: "gemma-4-31b-it-mlx", message: "ok" });
+      case "cmd_set_ai_settings":
+        return Promise.resolve({});
+      case "cmd_save_ai_response_as_note":
+        return Promise.resolve({ id: "note_1", note_type: "TutorNote" });
+      default:
+        return Promise.resolve(null);
+    }
+  });
+}
+
+beforeEach(() => {
+  cleanup();
+  localStorage.clear();
+  setImpl();
+});
+
+function baseDraft(overrides: Partial<TutorDraft> = {}): TutorDraft {
+  return {
+    draftId: "draft_1",
+    mode: "explain",
+    locator: "char:120",
+    anchorStart: "char:120",
+    anchorEnd: "char:168",
+    anchoredText: "the unjust man is happy",
+    chapter: "Book I",
+    ...overrides,
+  };
+}
+
+function asksOfDepth(depth: string) {
+  return mocks.invoke.mock.calls.filter(
+    (c) => c[0] === "cmd_ai_ask" && (c[1] as { depth?: string }).depth === depth,
+  );
+}
+function lastChannel(): MockChannelT {
+  const call = [...mocks.invoke.mock.calls].reverse().find((c) => c[0] === "cmd_ai_ask");
+  if (!call) throw new Error("cmd_ai_ask was never called");
+  return (call[1] as { onEvent: MockChannelT }).onEvent;
+}
+async function pushDelta(ch: MockChannelT, text: string) {
+  await act(async () => { ch.onmessage?.({ kind: "delta", text }); });
+}
+async function pushDone(ch: MockChannelT) {
+  await act(async () => { ch.onmessage?.({ kind: "done" }); });
+}
+
+const card = (over: Partial<TutorDraft> = {}) => (
+  <MarginTutorCard bookId="bk1" draft={baseDraft(over)} active onActivate={() => {}} onSaved={() => {}} onDiscard={() => {}} />
+);
+
+describe("MarginTutorCard — opt-in gate", () => {
+  it("does NOT call the model until the reader enables the tutor", async () => {
+    render(card());
+    expect(await screen.findByText(/Enable the tutor/i)).toBeInTheDocument();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_ai_ask", expect.anything());
+
+    fireEvent.click(screen.getByText("Enable"));
+    // First call is the BRIEF tier, in the draft's lens.
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith(
+        "cmd_ai_ask",
+        expect.objectContaining({ mode: "explain", depth: "brief", selection: "the unjust man is happy" }),
+      ),
+    );
+    expect(localStorage.getItem("rg.tutorEnabled")).toBe("true");
+  });
+});
+
+describe("MarginTutorCard — brief default + go deeper", () => {
+  beforeEach(() => localStorage.setItem("rg.tutorEnabled", "true"));
+
+  it("streams a BRIEF answer immediately and shows 'Go deeper' (no prompt surface)", async () => {
+    render(card());
+    await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
+    const ch = lastChannel();
+    await pushDelta(ch, "Augustine asks whether one must know God to call on him.");
+    await pushDone(ch);
+
+    expect(screen.getByText(/whether one must know God/)).toBeInTheDocument();
+    // The default is brief — no deep call yet, and 'Go deeper' is offered.
+    expect(asksOfDepth("deep").length).toBe(0);
+    expect(await screen.findByText(/Go deeper/i)).toBeInTheDocument();
+    // Privacy: no prompt-preview surface, and the no-network command is unused.
+    expect(screen.queryByText(/nothing is sent/i)).toBeNull();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_generate_prompt_preview", expect.anything());
+  });
+
+  it("'Go deeper' fires a DEEP call and APPENDS below the brief (gist stays)", async () => {
+    render(card());
+    await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
+    await pushDelta(lastChannel(), "Brief gist of the passage.");
+    await pushDone(lastChannel());
+
+    fireEvent.click(await screen.findByText(/Go deeper/i));
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.objectContaining({ mode: "explain", depth: "deep" })),
+    );
+    await pushDelta(lastChannel(), "The deeper reasoning move beneath it.");
+    await pushDone(lastChannel());
+
+    // Both tiers are on screen: the brief gist persists as an anchor.
+    expect(screen.getByText(/Brief gist of the passage\./)).toBeInTheDocument();
+    expect(screen.getByText(/The deeper reasoning move beneath it\./)).toBeInTheDocument();
+    // The "Deeper" divider marks the appended tier.
+    expect(screen.getByText("Deeper")).toBeInTheDocument();
+    // After deep, the deepest tier bottoms out: 'Go deeper' is replaced by
+    // 'Question me' (Socratic), the panel's terminal active move.
+    expect(screen.queryByText(/Go deeper/i)).toBeNull();
+    expect(screen.getByText(/Question me/i)).toBeInTheDocument();
+  });
+
+  it("saves brief + deep + optional takeaway as one TutorNote", async () => {
+    render(card());
+    await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
+    await pushDelta(lastChannel(), "Brief gist.");
+    await pushDone(lastChannel());
+    fireEvent.click(await screen.findByText(/Go deeper/i));
+    await waitFor(() => expect(asksOfDepth("deep").length).toBe(1));
+    await pushDelta(lastChannel(), "Deeper elaboration.");
+    await pushDone(lastChannel());
+
+    fireEvent.click(await screen.findByText("Save as note"));
+    fireEvent.change(screen.getByPlaceholderText(/your takeaway/i), { target: { value: "my words" } });
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => {
+      const call = mocks.invoke.mock.calls.find((c) => c[0] === "cmd_save_ai_response_as_note");
+      expect((call?.[1] as { body: string }).body).toBe("my words\n\nBrief gist.\n\nDeeper elaboration.");
+      expect(call?.[1]).toMatchObject({ noteType: "TutorNote", anchoredText: "the unjust man is happy" });
+    });
+    expect(await screen.findByText(/Saved to notes/i)).toBeInTheDocument();
+  });
+
+  it("'Ask another way' switches lens and resets to a BRIEF call", async () => {
+    render(card());
+    await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
+    await pushDelta(lastChannel(), "First.");
+    await pushDone(lastChannel());
+
+    fireEvent.click(await screen.findByText("Define"));
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.objectContaining({ mode: "vocabulary", depth: "brief" })),
+    );
+  });
+});
+
+describe("MarginTutorCard — provider gate", () => {
+  // No AI provider chosen → the tutor must refuse to call and say so.
+  function setNoProvider() {
+    mocks.invoke.mockReset();
+    mocks.invoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings":
+          return Promise.resolve({ export_path: "/x", ai_provider: "none", ai_requests_retention_days: 90 });
+        case "cmd_ai_ask":
+          return Promise.resolve({ ai_request_id: "ai_1", prompt_sent: "(hidden)", provider_host: "" });
+        default:
+          return Promise.resolve(null);
+      }
+    });
+  }
+
+  it("when no provider is chosen, does NOT call cmd_ai_ask and shows the choose-a-provider message", async () => {
+    localStorage.setItem("rg.tutorEnabled", "true"); // would normally auto-start
+    setNoProvider();
+    render(card());
+    expect(await screen.findByText(/No AI provider is set up/i)).toBeInTheDocument();
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_get_settings"));
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_ai_ask", expect.anything());
+    expect(screen.queryByText(/nothing leaves your device/i)).toBeNull();
+    expect(screen.queryByText(/^Local-only$/)).toBeNull();
+  });
+
+  it("at the consent gate with no provider, shows the choose-a-provider message (no false on-device promise)", async () => {
+    setNoProvider();
+    render(card());
+    expect(await screen.findByText(/No AI provider is set up/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing leaves your device/i)).toBeNull();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_ai_ask", expect.anything());
+  });
+
+  it("when a CLOUD provider is chosen, the tutor IS allowed (calls cmd_ai_ask) and never claims local", async () => {
+    localStorage.setItem("rg.tutorEnabled", "true");
+    mocks.invoke.mockReset();
+    mocks.invoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings":
+          return Promise.resolve({ export_path: "/x", ai_provider: "openai", ai_model_openai: "gpt-5.5", ai_requests_retention_days: 90 });
+        case "cmd_ai_ask":
+          return Promise.resolve({ ai_request_id: "ai_1", prompt_sent: "(hidden)", provider_host: "api.openai.com" });
+        default:
+          return Promise.resolve(null);
+      }
+    });
+    render(card());
+    // Cloud provider chosen → the call goes through (the privacy choice was explicit).
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.anything()));
+    // And the UI must never falsely claim on-device for a cloud call.
+    expect(screen.queryByText(/^Local-only$/)).toBeNull();
+  });
+});

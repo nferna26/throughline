@@ -1,18 +1,18 @@
 [package]
-name = "reading-gym"
+name = "throughline"
 version = "0.1.0"
-description = "ReadingGym — local-first macOS reading app for serious readers"
+description = "Throughline — local-first macOS reading app for serious readers"
 authors = ["Nick Fernandez"]
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/nferna26/ReadingGym"
+repository = "https://github.com/nferna26/Throughline"
 readme = "../README.md"
 keywords = ["reading", "epub", "local-first", "tauri", "macos"]
 categories = ["text-processing"]
-default-run = "reading-gym"
+default-run = "throughline"
 
 [lib]
-name = "reading_gym_lib"
+name = "throughline_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -22,6 +22,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+# Reader-initiated auto-update (click → download → relaunch). Only checks when the
+# user asks (a Settings button), never on launch or a timer — within the
+# no-background-network posture. NOT tauri-plugin-http/shell (which stay banned).
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -38,6 +43,12 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "sync", "time"] }
 futures-util = "0.3"
 url = "2"
+# Secure at-rest storage for cloud-provider API keys (macOS Keychain via the
+# Security framework). Keys are NEVER written to the DB, a file, the repo, or any
+# export; only `key_present` booleans ever reach the frontend.
+keyring = { version = "3", features = ["apple-native"] }
+# Decode the Codex id_token JWT payload (for chatgpt_account_id) during device login.
+base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 tracing-appender = "0.2"

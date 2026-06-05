@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import RGIcon from "./RGIcon";
+import TLIcon from "./TLIcon";
 import type { Note } from "../types";
 
 /**
@@ -18,7 +18,7 @@ export default function MarginNoteCard(props: {
   onDelete: () => void;
 }) {
   const { note } = props;
-  const isAi = note.note_type === "SavedAICard" || note.note_type === "AI";
+  const isAi = note.note_type === "SavedAICard" || note.note_type === "AI" || note.note_type === "TutorNote";
   const isHighlight = note.note_type === "Highlight";
   const [body, setBody] = useState(note.body);
   const [saving, setSaving] = useState(false);
@@ -44,31 +44,31 @@ export default function MarginNoteCard(props: {
 
   return (
     <div
-      className={`rg-card${isAi ? " ai" : ""}${props.active ? " active" : ""}`}
+      className={`tl-card${isAi ? " ai" : ""}${props.active ? " active" : ""}`}
       style={props.style}
       onClick={props.onActivate}
     >
-      <div className="rg-card-head">
-        <span className="rg-card-type">{isHighlight ? "Highlight" : isAi ? "AI card" : note.note_type}</span>
-        <button className="rg-iconbtn" aria-label="Delete note" onClick={(e) => { e.stopPropagation(); props.onDelete(); }}>
-          <RGIcon name="x" size={14} />
+      <div className="tl-card-head">
+        <span className="tl-card-type">{isHighlight ? "Highlight" : isAi ? "AI card" : note.note_type}</span>
+        <button className="tl-iconbtn" aria-label="Delete note" onClick={(e) => { e.stopPropagation(); props.onDelete(); }}>
+          <TLIcon name="x" size={14} />
         </button>
       </div>
-      {note.anchored_text && <blockquote className="rg-card-quote">{note.anchored_text}</blockquote>}
+      {note.anchored_text && <blockquote className="tl-card-quote">{note.anchored_text}</blockquote>}
       {isAi ? (
-        <p className="rg-card-body">{note.body}</p>
+        <p className="tl-card-body">{note.body}</p>
       ) : showEditor ? (
         <textarea
-          className="rg-card-input"
+          className="tl-card-input"
           value={body}
           placeholder="Add a thought…"
           onChange={(e) => onChange(e.target.value)}
           onClick={(e) => e.stopPropagation()}
         />
       ) : (
-        <p className="rg-card-hint">Click to add a note</p>
+        <p className="tl-card-hint">Click to add a note</p>
       )}
-      {saving && <span className="rg-card-saving">Saving…</span>}
+      {saving && <span className="tl-card-saving">Saving…</span>}
     </div>
   );
 }

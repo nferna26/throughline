@@ -65,6 +65,29 @@ fn matches(needle: &str, idref: &str) -> bool {
         return true;
     }
 
+    // Filename-form labels. When a spine item has no human TOC label, the caller
+    // falls back to the href basename (e.g. "praise.xhtml", "opening-blurb.xhtml",
+    // "quote.xhtml"). A real chapter ALWAYS carries a TOC label, so a bare
+    // filename is high-confidence boilerplate — we can match names here that we'd
+    // never dare match on a human label (e.g. "praise" alone, not just the phrase
+    // "praise for"). Foreword/Preface/Introduction etc. carry real TOC labels, so
+    // they are never filename-form and stay assignable.
+    if let Some(stem) = filename_stem(needle).or_else(|| filename_stem(&idref_l)) {
+        const FILENAME_SKIP_STEMS: &[&str] = &[
+            "praise",     // praise.xhtml — endorsement blurbs
+            "blurb",      // opening-blurb.xhtml
+            "quote",      // quote.xhtml — standalone epigraph page
+            "epigraph",
+            "frontmatter",
+            "endpaper",
+            "advert",
+            "promo",
+        ];
+        if FILENAME_SKIP_STEMS.iter().any(|s| stem.contains(s)) {
+            return true;
+        }
+    }
+
     // Common compressed idrefs publishers use for back matter.
     // Match as a whole token so we don't catch "Chapter_*" by accident.
     const SKIP_IDREF_TOKENS: &[&str] = &[
@@ -79,6 +102,21 @@ fn matches(needle: &str, idref: &str) -> bool {
     }
 
     false
+}
+
+/// If `s` looks like a content filename (ends in an ebook document extension),
+/// return its normalized stem: basename minus extension, separators → spaces.
+/// Otherwise `None`. Used to recognize boilerplate spine items that have no
+/// human TOC label and were keyed by their filename.
+fn filename_stem(s: &str) -> Option<String> {
+    let lower = s.trim().to_ascii_lowercase();
+    const EXTS: &[&str] = &[".xhtml", ".html", ".htm", ".xml"];
+    if !EXTS.iter().any(|e| lower.ends_with(e)) {
+        return None;
+    }
+    let base = lower.rsplit(['/', '\\']).next().unwrap_or(&lower);
+    let stem = base.rsplit_once('.').map(|(st, _)| st).unwrap_or(base);
+    Some(stem.replace(['_', '-'], " "))
 }
 
 #[cfg(test)]
@@ -122,6 +160,29 @@ mod tests {
     fn skips_non_linear_spine_items() {
         // Linear=false means auxiliary content per the EPUB spec.
         assert!(is_front_back_matter(Some("Author note"), "note", false));
+    }
+
+    #[test]
+    fn skips_filename_form_boilerplate_without_toc_label() {
+        // No human TOC label → the caller passes the href basename. These must be
+        // skipped even though "praise for" / "blurb" / "quote" as phrases don't
+        // appear. This is the "Obviously Awesome starts on a praise page" bug.
+        assert!(is_front_back_matter(Some("praise.xhtml"), "praise", true), "praise.xhtml is endorsement boilerplate");
+        assert!(is_front_back_matter(Some("opening-blurb.xhtml"), "opening-blurb", true), "blurb page is boilerplate");
+        assert!(is_front_back_matter(Some("quote.xhtml"), "quote", true), "standalone quote page is an epigraph");
+        // Also catch it when the label is absent and only the idref is filename-y.
+        assert!(is_front_back_matter(None, "Text/praise.xhtml", true));
+    }
+
+    #[test]
+    fn keeps_filename_form_real_content() {
+        // A filename-form label that ISN'T boilerplate stays assignable — the
+        // operator's rule: skip marketing wrappers, keep authored intros/chapters.
+        assert!(!is_front_back_matter(Some("introduction.xhtml"), "introduction", true));
+        assert!(!is_front_back_matter(Some("chapter1.xhtml"), "chapter1", true));
+        assert!(!is_front_back_matter(Some("part1.xhtml"), "part1", true));
+        assert!(!is_front_back_matter(Some("foreword.xhtml"), "foreword", true));
+        assert!(!is_front_back_matter(Some("preface.xhtml"), "preface", true));
     }
 
     #[test]

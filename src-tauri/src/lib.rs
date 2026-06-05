@@ -1,4 +1,4 @@
-//! ReadingGym — Tauri backend entry point.
+//! Throughline — Tauri backend entry point.
 //!
 //! The library is organized as:
 //!
@@ -16,8 +16,10 @@
 //! command modules; this file holds only the wiring.
 
 pub mod ai_client;
+pub mod ai_providers;
 pub mod ai_retention;
 pub mod ai_stub;
+pub mod keystore;
 pub mod bin_guardrail;
 pub mod circuit_breaker;
 pub mod commands;
@@ -56,22 +58,51 @@ use crate::db::DbState;
 /// 1 → 2: `cmd_import_book` now returns `ImportOutcome { book, created }`
 /// instead of a bare `Book` (so the Book Setup Sheet shows only for genuinely
 /// new imports). This is a return-shape change → major bump per docs/IPC.md.
-pub const COMMAND_API_VERSION: u32 = 2;
+pub const COMMAND_API_VERSION: u32 = 3;
+
+/// Open the database, recovering from a CORRUPT file rather than crash-looping on
+/// launch (a permanently-unusable app — the worst outcome for a paying user). A
+/// corrupt DB is preserved alongside the original (renamed `reading.corrupt-<pid>.db`)
+/// for manual recovery, and the app starts on a fresh DB. Environmental failures
+/// (permissions, full disk) are NOT "recovered" — wiping data wouldn't help — so
+/// they still fail loudly with a clear, non-cryptic message.
+fn open_db_resilient() -> rusqlite::Connection {
+    match db::open_and_migrate() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("{e:#}").to_lowercase();
+            let looks_corrupt = ["malformed", "corrupt", "not a database", "disk image", "file is encrypted"]
+                .iter()
+                .any(|s| msg.contains(s));
+            if !looks_corrupt {
+                panic!("Throughline could not open its database (usually a permissions or disk problem, not data loss): {e:#}");
+            }
+            eprintln!("[tl] database appears corrupt; preserving it and starting fresh: {e:#}");
+            if let Ok(dbp) = paths::db_path() {
+                let bak = dbp.with_file_name(format!("reading.corrupt-{}.db", std::process::id()));
+                let _ = std::fs::rename(&dbp, &bak);
+                let _ = std::fs::remove_file(dbp.with_extension("db-wal"));
+                let _ = std::fs::remove_file(dbp.with_extension("db-shm"));
+            }
+            db::open_and_migrate().expect("could not create a fresh database after corruption recovery")
+        }
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize structured logging before anything else so DB migrations,
     // startup errors, and IPC events all get captured.
     log::init();
-    let conn = db::open_and_migrate().expect("failed to open/migrate db");
+    let conn = open_db_resilient();
     // adr-001: bound the AI audit trail on every launch. Rows older than the
     // retention window that never became a note are swept; approved rows stay.
     {
         let days = settings::get_ai_retention_days(&conn);
         match ai_retention::sweep(&conn, days) {
-            Ok(n) if n > 0 => eprintln!("[rg] ai_retention: swept {} ai_requests row(s) older than {} days", n, days),
+            Ok(n) if n > 0 => eprintln!("[tl] ai_retention: swept {} ai_requests row(s) older than {} days", n, days),
             Ok(_) => {}
-            Err(e) => eprintln!("[rg] ai_retention: sweep failed: {}", e),
+            Err(e) => eprintln!("[tl] ai_retention: sweep failed: {}", e),
         }
     }
     let state = DbState(Mutex::new(conn));
@@ -79,6 +110,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             // ── books ──
@@ -86,11 +119,16 @@ pub fn run() {
             commands::books::cmd_read_book_bytes,
             commands::books::cmd_today,
             commands::books::cmd_read_section_text,
+            commands::books::cmd_read_section_structure,
             commands::books::cmd_list_sections,
             commands::books::cmd_assignable_sections,
             commands::books::cmd_list_books,
             commands::books::cmd_set_active_book,
             commands::books::cmd_configure_plan,
+            // ── discover (public-domain catalogue; reader-initiated egress) ──
+            commands::discover::cmd_discover_search,
+            commands::discover::cmd_discover_seed,
+            commands::discover::cmd_import_from_gutendex,
             // ── sessions / plan / progress ──
             commands::sessions::cmd_start_session,
             commands::sessions::cmd_end_session,
@@ -109,6 +147,9 @@ pub fn run() {
             commands::ai::cmd_ai_ask,
             commands::ai::cmd_list_ai_models,
             commands::ai::cmd_test_ai_connection,
+            commands::ai::cmd_codex_device_start,
+            commands::ai::cmd_codex_device_poll,
+            commands::ai::cmd_codex_logout,
             commands::ai::cmd_save_ai_response_as_note,
             commands::ai::cmd_list_ai_requests,
             commands::ai::cmd_forget_ai_history,
@@ -118,6 +159,8 @@ pub fn run() {
             commands::settings_cmds::cmd_get_settings,
             commands::settings_cmds::cmd_set_export_path,
             commands::settings_cmds::cmd_set_ai_settings,
+            commands::settings_cmds::cmd_set_ai_key,
+            commands::settings_cmds::cmd_clear_ai_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -204,6 +247,7 @@ mod tests {
             "inspect_state",
             "inspect_epub",
             "reclassify_all",
+            "repair_sections",
         ];
 
         let examples_dir_candidates = ["examples", "src-tauri/examples"];
@@ -342,7 +386,7 @@ mod tests {
             StubMode::Socratic, StubMode::DurableNote, StubMode::PrepareNext,
         ] {
             let preview = build_prompt(mode, &ctx);
-            let payload = ai_client::build_request_body("any-model", &preview, true);
+            let payload = ai_client::build_request_body("any-model", &preview, true, None);
             assert_eq!(payload.messages.len(), 1);
             assert_eq!(payload.messages[0].role, "user");
             assert_eq!(

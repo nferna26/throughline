@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import AiPanel from "./AiPanel";
-import RGIcon from "../components/RGIcon";
+import TLIcon from "../components/TLIcon";
 import MarginNoteCard from "../components/MarginNoteCard";
+import MarginTutorCard, { type TutorDraft, type TutorMode } from "../components/MarginTutorCard";
+import SectionBriefingCard from "../components/SectionBriefingCard";
+import { briefingTextReady, type MarginHelp } from "../sectionBriefing";
+import { segmentParagraph, blockRoleFor, type StyleRange } from "../paragraphStructure";
 import { useDialog } from "../hooks/useDialog";
-import type { BookSection, Note, ReadingSession, TodayCard, ReaderMode } from "../types";
+import type { BookSection, Note, ReadingSession, TodayCard, ReaderMode, SettingsDto } from "../types";
 import { NOTE_TYPES, makeCharLocator, parseLocator } from "../types";
 
 interface Props {
@@ -28,7 +31,23 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const [assignableSections, setAssignableSections] = useState<BookSection[]>([]);
   const [currentIdx, setCurrentIdx] = useState<number>(-1);
   const [text, setText] = useState<string>("");
-  const [paragraphs, setParagraphs] = useState<Array<{ offset: number; text: string }>>([]);
+  // Identity guard: which section `text` actually belongs to. Cleared the moment
+  // currentIdx changes and only set once the matching section's text resolves, so
+  // Deep Study can never generate/cache a briefing from the previous section's
+  // text while we're mid-navigation. null = text not yet loaded for the current
+  // section.
+  const [textSectionId, setTextSectionId] = useState<string | null>(null);
+  // Style ranges for the current section (headings/blockquotes/emphasis), in
+  // section-relative UTF-16 offsets. Empty for plain .txt books; populated for
+  // EPUB-derived text so the reader can style it without mutating offsets.
+  const [structure, setStructure] = useState<StyleRange[]>([]);
+  // Paragraphs derive from text + structure: code-block ("pre") ranges are emitted
+  // as non-reflowed monospace paragraphs; everything else reflows as prose. Recomputes
+  // when the (async) structure arrives, so code stops being double-spaced.
+  const paragraphs = useMemo(
+    () => splitParagraphs(text, structure.filter((r) => r.kind === "pre")),
+    [text, structure],
+  );
   const [session, setSession] = useState<ReadingSession | null>(null);
   const [visited, setVisited] = useState<Set<string>>(new Set());
   const [fontSize, setFontSize] = useState<number>(
@@ -38,19 +57,53 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     () => parseInt(localStorage.getItem("rg.lineWidth") || "640", 10)
   );
   const [showNote, setShowNote] = useState(false);
-  const [showAi, setShowAi] = useState(false);
-  const [selection, setSelection] = useState<string>("");
   const [topOffset, setTopOffset] = useState<number>(0);
   const startedAt = useRef<number>(Date.now());
   const [endingPrompt, setEndingPrompt] = useState(false);
   const [summary, setSummary] = useState("");
-  // ── Companion Margin: anchored notes/highlights beside the text ──
+  // ── Companion Margin: anchored notes/highlights/tutor cards beside the text ──
   const [notes, setNotes] = useState<Note[]>([]);
-  const [sel, setSel] = useState<{ x: number; y: number; start: number; end: number; text: string } | null>(null);
+  // Draft tutor cards live only in component state until the reader saves one
+  // (which turns it into a durable TutorNote via the existing approval path).
+  const [tutorDrafts, setTutorDrafts] = useState<TutorDraft[]>([]);
+  const [sel, setSel] = useState<{ x: number; y: number; below: boolean; start: number; end: number; text: string } | null>(null);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
-  const [cardTops, setCardTops] = useState<Record<string, number>>({});
+  // Companion side panel: collapsible + drag-resizable, both persisted. Cards
+  // render in document order inside it (no absolute positioning), so a spawned
+  // tutor draft is always visible and the reading column owns the rest of the
+  // window — text stays centered/responsive instead of pinned left.
+  //
+  // DEFAULT CLOSED: the reader opens to a clean, full-width centered column
+  // (balanced at any window size). The panel auto-opens the instant the reader
+  // captures something (highlight / note / tutor), and the toolbar toggle shows
+  // a count badge when the section has notes. The open/closed choice persists.
+  const [panelOpen, setPanelOpen] = useState<boolean>(
+    () => localStorage.getItem("rg.panelOpen") === "true"
+  );
+  const [panelWidth, setPanelWidth] = useState<number>(
+    () => clampPanelWidth(parseInt(localStorage.getItem("rg.panelWidth") || "320", 10))
+  );
+  const draggingRef = useRef<boolean>(false);
   const readerRef = useRef<HTMLElement | null>(null);
   const colRef = useRef<HTMLDivElement | null>(null);
+
+  // Margin-help mode (quiet | guided | deep_study) drives how present the margin
+  // is. Loaded from settings once; defaults to "guided" until it resolves.
+  const [marginHelp, setMarginHelp] = useState<MarginHelp>("guided");
+  // Section ids whose Deep Study briefing the reader has dismissed this sitting,
+  // so dismiss sticks without re-spawning the card on every render.
+  const [briefingDismissed, setBriefingDismissed] = useState<Set<string>>(new Set());
+  // Ensure Deep Study opens the panel once per opened section (never fighting a
+  // manual toggle: only fires when the section the briefing is for changes).
+  const deepOpenedFor = useRef<string | null>(null);
+  useEffect(() => {
+    invoke<SettingsDto>("cmd_get_settings")
+      .then((s) => {
+        const m = s.margin_help === "quiet" || s.margin_help === "deep_study" ? s.margin_help : "guided";
+        setMarginHelp(m as MarginHelp);
+      })
+      .catch(() => {});
+  }, []);
 
   const refreshNotes = useCallback(async () => {
     try {
@@ -62,6 +115,26 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
 
   useEffect(() => { localStorage.setItem("rg.fontSize", String(fontSize)); }, [fontSize]);
   useEffect(() => { localStorage.setItem("rg.lineWidth", String(lineWidth)); }, [lineWidth]);
+  useEffect(() => { localStorage.setItem("rg.panelOpen", String(panelOpen)); }, [panelOpen]);
+  useEffect(() => { localStorage.setItem("rg.panelWidth", String(panelWidth)); }, [panelWidth]);
+
+  // Drag the resizer: panel width = window-right-edge minus pointer x, clamped.
+  const startPanelDrag = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    const onMove = (ev: MouseEvent) => {
+      if (!draggingRef.current || !readerRef.current) return;
+      const right = readerRef.current.getBoundingClientRect().right;
+      setPanelWidth(clampPanelWidth(right - ev.clientX));
+    };
+    const onUp = () => {
+      draggingRef.current = false;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
 
   // Load section list and start the session ONCE per reader open.
   useEffect(() => {
@@ -96,8 +169,13 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   // Load the current section's text whenever currentIdx changes.
   useEffect(() => {
     let cancelled = false;
+    // Stale-text guard: clear the text↔section identity immediately so nothing
+    // (esp. Deep Study generation) treats the previous section's text as this
+    // section's until the awaited load resolves for THIS section.
+    const sec = assignableSections[currentIdx];
+    setTextSectionId(null);
+    setStructure([]);
     async function loadSection() {
-      const sec = assignableSections[currentIdx];
       if (!sec) return;
       const t = await invoke<string>("cmd_read_section_text", {
         bookId: book.id,
@@ -105,7 +183,12 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       });
       if (cancelled) return;
       setText(t);
-      setParagraphs(splitParagraphs(t));
+      setTextSectionId(sec.id);
+      // Structure ranges are a separate, optional read (EPUB-derived text only).
+      // Failure or absence simply means unstyled paragraphs — never blocks reading.
+      invoke<StyleRange[]>("cmd_read_section_structure", { bookId: book.id, sectionId: sec.id })
+        .then((ranges) => { if (!cancelled) setStructure(Array.isArray(ranges) ? ranges : []); })
+        .catch(() => { if (!cancelled) setStructure([]); });
       // Mark the section as visited
       setVisited((prev) => {
         if (prev.has(sec.id)) return prev;
@@ -192,30 +275,55 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     setCurrentIdx((i) => Math.max(0, i - 1));
   }, []);
 
-  async function finalizeSession() {
-    if (!session) return onExit();
-    const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
-    // Sections crossed are those visited that we have moved past (i.e. not the current one
-    // unless the user scrolled to the very end). For simplicity, count all visited sections
-    // *except* the current one if it's the last visited and we haven't reached its end.
+  // Sections "completed" this sitting: every visited section we've moved past,
+  // plus the current one if scroll reached its end. Shared by the recap preview
+  // and the actual finalize so the numbers the reader sees match what's saved.
+  function completedSectionIds(): string[] {
     const sec = assignableSections[currentIdx];
     const completed: string[] = [];
     for (const v of visited) {
-      if (v !== sec?.id) {
-        completed.push(v);
-      }
+      if (v !== sec?.id) completed.push(v);
     }
-    // Include the current section if scroll reached >= 95% of its length.
     if (sec) {
       const total = sec.estimated_units || text.length || 1;
       if (topOffset / total >= 0.95) completed.push(sec.id);
+    }
+    return completed;
+  }
+
+  // `takeaway` is passed explicitly (not read from state) so Skip can end with
+  // null without racing a setState. Rescue mode never forces a takeaway and
+  // never forces section completion — a short sitting still counts.
+  async function finalizeSession(takeaway: string | null) {
+    if (!session) return onExit();
+    const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
+    const tk = takeaway && takeaway.trim() ? takeaway.trim() : null;
+    // The recap's "one sentence to remember" is a first-class Takeaway: it stays
+    // in the session export AND becomes a durable, user-authored Takeaway note,
+    // so it surfaces in the chapter notebook and on Today's "Last time". Skipping
+    // (blank) saves nothing. The body is the reader's own words — privacy-safe.
+    if (tk) {
+      try {
+        await invoke<Note>("cmd_save_note", {
+          bookId: book.id,
+          sessionId: session.id,
+          noteType: "Takeaway",
+          locator,
+          chapterLabel: currentSection?.label ?? null,
+          body: tk,
+          shortQuote: null,
+          anchorStart: null,
+          anchorEnd: null,
+          anchoredText: null,
+        });
+      } catch { /* recap takeaway is best-effort; never block ending a session */ }
     }
     await invoke<ReadingSession>("cmd_end_session", {
       sessionId: session.id,
       endLocator: locator,
       minutes,
-      completedSectionIds: completed,
-      summarySentence: summary.trim() || null,
+      completedSectionIds: completedSectionIds(),
+      summarySentence: tk,
     });
     onExit();
   }
@@ -227,6 +335,26 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   // back to within-section offsets for highlight rendering.
   const secBase = parseInt(currentSection?.start_locator || "0", 10);
   const secEnd = parseInt(currentSection?.end_locator || String(secBase + text.length), 10);
+
+  // Deep Study: once the session has started and this section's text is loaded,
+  // open the panel and render the prepared briefing. Fires at most once per
+  // section (keyed by deepOpenedFor) so it never overrides a manual close.
+  const briefingVisible =
+    marginHelp === "deep_study" &&
+    !!session &&
+    !!currentSection &&
+    // Identity guard (pure `briefingTextReady`, unit-tested): only when the
+    // loaded text provably belongs to THIS section — never the previous one,
+    // mid-navigation. This is what stops the briefing generating/caching against
+    // stale text.
+    briefingTextReady(currentSection.id, textSectionId, text) &&
+    !briefingDismissed.has(currentSection.id);
+  useEffect(() => {
+    if (briefingVisible && currentSection && deepOpenedFor.current !== currentSection.id) {
+      deepOpenedFor.current = currentSection.id;
+      setPanelOpen(true);
+    }
+  }, [briefingVisible, currentSection]);
 
   // Notes anchored inside the current section. Prefer the char anchor (precise);
   // fall back to chapter label for notes saved without one.
@@ -255,32 +383,38 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       .filter((h): h is { id: string; start: number; end: number } => h != null && h.start >= 0);
   }, [sectionNotes, secBase]);
 
-  // Position each margin card at the top of its anchored paragraph, then nudge
-  // apart any that would overlap. Recomputes on reflow (font/width/notes/text).
+  // Draft tutor cards anchored inside the current section (by char range).
+  const sectionDrafts = useMemo(() => {
+    return tutorDrafts
+      .filter((d) => {
+        const v = parseInt(parseLocator(d.anchorStart).value, 10);
+        return Number.isFinite(v) && v >= secBase && v < secEnd;
+      })
+      .sort((a, b) => parseInt(parseLocator(a.anchorStart).value, 10) - parseInt(parseLocator(b.anchorStart).value, 10));
+  }, [tutorDrafts, secBase, secEnd]);
+
+  // Cards render in document order inside the side panel (notes first by anchor,
+  // then any live tutor drafts) — no absolute positioning, so they can never be
+  // clipped or land in an invisible rail.
+
+  // Dismiss the floating selection toolbar: clear our state AND the native
+  // selection (so it doesn't immediately reappear on the next render).
+  const dismissSelection = useCallback(() => {
+    setSel(null);
+    try { window.getSelection?.()?.removeAllRanges(); } catch { /* ignore */ }
+  }, []);
+
+  // Escape dismisses the selection toolbar — the keyboard escape hatch the
+  // floating toolbar previously lacked (cite: guard-accessibility-baseline-wcag-aa
+  // keyboard rules). Only active while a selection toolbar is showing.
   useEffect(() => {
-    const col = colRef.current;
-    if (!col) return;
-    const order = sectionNotes.map((n) => {
-      const within = anchorChar(n) - secBase;
-      let best: HTMLElement | null = null;
-      let bestOff = -1;
-      for (const [off, el] of paragraphRefs.current.entries()) {
-        if (off <= within && off > bestOff) { bestOff = off; best = el; }
-      }
-      return { id: n.id, top: best ? best.offsetTop : 0 };
-    });
-    order.sort((a, b) => a.top - b.top);
-    const MIN_GAP = 92;
-    let last = -Infinity;
-    const tops: Record<string, number> = {};
-    for (const o of order) {
-      const t = Math.max(o.top, last + MIN_GAP);
-      tops[o.id] = t;
-      last = t;
+    if (!sel) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") { e.stopPropagation(); dismissSelection(); }
     }
-    setCardTops(tops);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sectionNotes, paragraphs, fontSize, lineWidth, text, secBase]);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [sel, dismissSelection]);
 
   // Capture a selection inside the reading column → show the action toolbar.
   function onTextMouseUp() {
@@ -297,13 +431,26 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     if (start == null || end == null) { setSel(null); return; }
     const rect = range.getBoundingClientRect();
     const rRect = reader.getBoundingClientRect();
+    // Clamp so the toolbar never spills off the reader's left/right edge (it is
+    // centered on x via translateX(-50%)) and flips below the line when there's
+    // no room above (selecting the very top line).
+    const pos = clampToolbarPosition(
+      rect.left - rRect.left + rect.width / 2,
+      rect.top - rRect.top,
+      rRect.width,
+      { selectionHeight: rect.height },
+    );
     setSel({
-      x: rect.left - rRect.left + rect.width / 2,
-      y: rect.top - rRect.top,
+      x: pos.x,
+      y: pos.y,
+      below: pos.below,
       start: secBase + Math.min(start, end),
       end: secBase + Math.max(start, end),
       text,
     });
+    // Guided margin-help gently surfaces the panel on selection, so help is one
+    // glance away. Quiet stays out of the way; Deep Study is already open.
+    if (marginHelp === "guided") setPanelOpen(true);
   }
 
   async function createAnchoredNote(noteType: string): Promise<Note | null> {
@@ -331,15 +478,66 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     }
   }
 
-  async function onHighlight() { await createAnchoredNote("Highlight"); }
+  async function onHighlight() { setPanelOpen(true); await createAnchoredNote("Highlight"); }
   async function onMarginNote() {
+    setPanelOpen(true);
     const n = await createAnchoredNote("MarginNote");
     if (n) setActiveNoteId(n.id);
   }
-  function onExplainSelection() {
-    if (sel && sel.text.trim().length >= 4) setSelection(sel.text);
+  // Mark a confusing passage as a Question in one tap — same anchored-note path,
+  // typed Question. The reader can elaborate (or re-tag) in the margin card.
+  async function onQuestion() {
+    setPanelOpen(true);
+    const n = await createAnchoredNote("Question");
+    if (n) setActiveNoteId(n.id);
+  }
+  // Tutor help is anchored, opt-in, and scoped to the selected text: spawn a
+  // DRAFT margin card (prompt-preview only — nothing is sent). It becomes a
+  // durable note only if the reader saves it.
+  function spawnTutorDraft(mode: TutorMode) {
+    if (!sel || sel.text.trim().length < 1) { setSel(null); return; }
+    const draft: TutorDraft = {
+      draftId: `draft_${Date.now()}_${Math.round(Math.random() * 1e6)}`,
+      mode,
+      locator: makeCharLocator(sel.start),
+      anchorStart: makeCharLocator(sel.start),
+      anchorEnd: makeCharLocator(sel.end),
+      anchoredText: sel.text,
+      chapter: currentSection?.label ?? "",
+    };
+    setTutorDrafts((d) => [...d, draft]);
+    setActiveNoteId(draft.draftId);
+    setPanelOpen(true); // make sure the new draft card is visible
+    window.getSelection?.()?.removeAllRanges();
     setSel(null);
-    setShowAi(true);
+  }
+  // Deep Study v2 marker tap → a Context tutor draft about a briefing theme
+  // (not a passage selection). Anchored at the section start; the "anchored text"
+  // is the short AI-derived theme, sent only to the local model. Reader-initiated.
+  function spawnContextMarker(theme: string) {
+    const t = theme.trim();
+    if (t.length < 1) return;
+    const draft: TutorDraft = {
+      draftId: `draft_${Date.now()}_${Math.round(Math.random() * 1e6)}`,
+      mode: "historical",
+      locator: makeCharLocator(secBase),
+      anchorStart: makeCharLocator(secBase),
+      anchorEnd: makeCharLocator(secBase),
+      anchoredText: t,
+      chapter: currentSection?.label ?? "",
+    };
+    setTutorDrafts((d) => [...d, draft]);
+    setActiveNoteId(draft.draftId);
+    setPanelOpen(true);
+  }
+  async function onTutorSaved(draftId: string, noteId: string) {
+    setTutorDrafts((d) => d.filter((x) => x.draftId !== draftId));
+    setActiveNoteId(noteId);
+    await refreshNotes();
+  }
+  function onTutorDiscard(draftId: string) {
+    setTutorDrafts((d) => d.filter((x) => x.draftId !== draftId));
+    if (activeNoteId === draftId) setActiveNoteId(null);
   }
   async function deleteNote(id: string) {
     try { await invoke("cmd_delete_note", { noteId: id }); } catch { /* ignore */ }
@@ -349,32 +547,32 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
 
   if (!currentSection) {
     return (
-      <div className="rg-reader">
-        <div className="rg-readscroll"><div className="rg-readcol"><p>No section to read.</p>
-          <button className="rg-btn rg-btn-ghost" onClick={onExit}>Back</button></div></div>
+      <div className="tl-reader">
+        <div className="tl-readscroll"><div className="tl-readcol"><p>No section to read.</p>
+          <button className="tl-btn tl-btn-ghost" onClick={onExit}>Back</button></div></div>
       </div>
     );
   }
 
   return (
-    <section className="rg-reader" ref={readerRef}>
-      <div className="rg-readtoolbar">
-        <button className="rg-back" onClick={onExit}><RGIcon name="chevronLeft" size={18} /> Today</button>
-        <span className="rg-tb-title">
+    <section className="tl-reader" ref={readerRef}>
+      <div className="tl-readtoolbar">
+        <button className="tl-back" onClick={onExit}><TLIcon name="chevronLeft" size={18} /> Today</button>
+        <span className="tl-tb-title">
           {currentSection.label}
           {targetSection && targetSection.id !== currentSection.id && ` · today: ${targetSection.label}`}
         </span>
         <div className="spacer" />
         <div className="grp bordered" role="group" aria-label="Font size">
-          <button className="rg-iconbtn" aria-label="Smaller text" onClick={() => setFontSize((f) => Math.max(12, f - 1))}><RGIcon name="minus" size={16} /></button>
-          <span className="rg-tb-label"><RGIcon name="type" size={16} /></span>
-          <button className="rg-iconbtn" aria-label="Larger text" onClick={() => setFontSize((f) => Math.min(28, f + 1))}><RGIcon name="plus" size={16} /></button>
+          <button className="tl-iconbtn" aria-label="Smaller text" onClick={() => setFontSize((f) => Math.max(12, f - 1))}><TLIcon name="minus" size={16} /></button>
+          <span className="tl-tb-label"><TLIcon name="type" size={16} /></span>
+          <button className="tl-iconbtn" aria-label="Larger text" onClick={() => setFontSize((f) => Math.min(28, f + 1))}><TLIcon name="plus" size={16} /></button>
         </div>
         <div className="grp bordered" role="group" aria-label="Line width">
           {[520, 640, 760].map((w, i) => (
             <button
               key={w}
-              className={lineWidth === w ? "rg-iconbtn active" : "rg-iconbtn"}
+              className={lineWidth === w ? "tl-iconbtn active" : "tl-iconbtn"}
               aria-pressed={lineWidth === w}
               aria-label={`Line width ${["narrow", "medium", "wide"][i]}`}
               style={{ width: 26 }}
@@ -384,69 +582,139 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
             </button>
           ))}
         </div>
-        <div className="rg-tb-div" />
-        <button className={showNote ? "rg-iconbtn active" : "rg-iconbtn"} aria-label="Add note" title="Add note" onClick={() => setShowNote(true)}><RGIcon name="pencil" size={18} /></button>
+        <div className="tl-tb-div" />
+        <button className={showNote ? "tl-iconbtn active" : "tl-iconbtn"} aria-label="Add note" title="Add note (or select text for the Companion Margin)" onClick={() => setShowNote(true)}><TLIcon name="pencil" size={18} /></button>
+        <div className="tl-tb-div" />
+        <button className="tl-iconbtn" disabled={currentIdx <= 0} aria-label="Previous section" onClick={goPrev}><TLIcon name="chevronLeft" size={18} /></button>
+        <button className="tl-iconbtn" disabled={currentIdx >= assignableSections.length - 1} aria-label="Next section" onClick={goNext}><TLIcon name="chevronRight" size={18} /></button>
+        <div className="tl-tb-div" />
         <button
-          className={showAi ? "rg-iconbtn active" : "rg-iconbtn"}
-          aria-label="Explain passage"
-          title="Tutor (prompt preview only — no remote call)"
-          onClick={() => {
-            const sel = window.getSelection?.()?.toString?.() ?? "";
-            if (sel.trim().length >= 4) setSelection(sel);
-            setShowAi(true);
-          }}
+          className={panelOpen ? "tl-iconbtn tl-paneltoggle active" : "tl-iconbtn tl-paneltoggle"}
+          aria-label={panelOpen ? "Hide notes panel" : "Show notes panel"}
+          aria-pressed={panelOpen}
+          title={panelOpen ? "Hide notes panel" : "Show notes panel"}
+          onClick={() => setPanelOpen((o) => !o)}
         >
-          <RGIcon name="sparkle" size={18} />
+          <TLIcon name="columns" size={18} />
+          {!panelOpen && (sectionNotes.length + sectionDrafts.length) > 0 && (
+            <span className="tl-panelcount">{sectionNotes.length + sectionDrafts.length}</span>
+          )}
         </button>
-        <div className="rg-tb-div" />
-        <button className="rg-iconbtn" disabled={currentIdx <= 0} aria-label="Previous section" onClick={goPrev}><RGIcon name="chevronLeft" size={18} /></button>
-        <button className="rg-iconbtn" disabled={currentIdx >= assignableSections.length - 1} aria-label="Next section" onClick={goNext}><RGIcon name="chevronRight" size={18} /></button>
-        <button className="rg-btn rg-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setEndingPrompt(true)}>{rescue ? "Done" : "Finish"}</button>
+        <button className="tl-btn tl-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setEndingPrompt(true)}>{rescue ? "Done" : "Finish"}</button>
       </div>
 
-      <div className="rg-readscroll" ref={containerRef} onScroll={handleScroll} onMouseUp={onTextMouseUp}>
-        {rescue && (
-          <div className="rg-rescue-banner" style={{ maxWidth: `${lineWidth}px` }} role="note">
-            <RGIcon name="clock" size={15} />
-            <span>Ten minutes. The goal is just to stay connected to the book — not to finish anything.</span>
+      <div className="tl-reader-body">
+        <div className="tl-reader-main" ref={containerRef} onScroll={handleScroll} onMouseUp={onTextMouseUp}>
+          {rescue && (
+            <div className="tl-rescue-banner" style={{ maxWidth: `${lineWidth}px` }} role="note">
+              <TLIcon name="clock" size={15} />
+              <span>Ten minutes. The goal is just to stay connected to the book — not to finish anything.</span>
+            </div>
+          )}
+          <div className="tl-readcol" ref={colRef} style={{ maxWidth: `${lineWidth}px`, fontSize: `${fontSize}px` }}>
+            {paragraphs.map((p) => {
+              // Block role (heading/blockquote) styles the WHOLE paragraph via a
+              // class — never a heading TAG, so it stays a `p[data-offset]` and
+              // selection anchoring keeps working. Inline emphasis is composed
+              // inside renderParagraph.
+              const role = blockRoleFor(p.offset, p.text.length, structure);
+              const cls = p.pre ? "tl-block tl-pre" : role ? `tl-block tl-${role}` : undefined;
+              return (
+                <p
+                  key={p.offset}
+                  data-offset={p.offset}
+                  className={cls}
+                  ref={(el) => {
+                    if (el) paragraphRefs.current.set(p.offset, el);
+                    else paragraphRefs.current.delete(p.offset);
+                  }}
+                >
+                  {renderParagraph(p.text, p.offset, highlights, structure, activeNoteId, setActiveNoteId)}
+                </p>
+              );
+            })}
           </div>
-        )}
-        <div className="rg-reader-body">
-          <div className="rg-readcol" ref={colRef} style={{ maxWidth: `${lineWidth}px`, fontSize: `${fontSize}px` }}>
-            {paragraphs.map((p) => (
-              <p
-                key={p.offset}
-                data-offset={p.offset}
-                ref={(el) => {
-                  if (el) paragraphRefs.current.set(p.offset, el);
-                  else paragraphRefs.current.delete(p.offset);
-                }}
-              >
-                {renderParagraph(p.text, p.offset, highlights, activeNoteId, setActiveNoteId)}
-              </p>
-            ))}
-          </div>
-          <aside className="rg-margin" aria-label="Notes and highlights">
-            {sectionNotes.map((n) => (
-              <MarginNoteCard
-                key={n.id}
-                note={n}
-                style={{ top: cardTops[n.id] ?? 0 }}
-                active={activeNoteId === n.id}
-                onActivate={() => setActiveNoteId(n.id)}
-                onSaved={refreshNotes}
-                onDelete={() => deleteNote(n.id)}
-              />
-            ))}
-          </aside>
         </div>
+
+        {panelOpen && (
+          <>
+            <div
+              className={draggingRef.current ? "tl-panel-resizer dragging" : "tl-panel-resizer"}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize notes panel"
+              onMouseDown={startPanelDrag}
+            />
+            <aside
+              className="tl-sidepanel"
+              style={{ flexBasis: `${panelWidth}px`, width: `${panelWidth}px` }}
+              aria-label="Notes, highlights, and tutor cards"
+            >
+              <div className="tl-sidepanel-head">
+                <span>Margin</span>
+                <button className="tl-iconbtn" aria-label="Hide notes panel" title="Hide notes panel" onClick={() => setPanelOpen(false)}>
+                  <TLIcon name="x" size={15} />
+                </button>
+              </div>
+              {/* Deep Study: prepared briefing for today's section, above notes. */}
+              {briefingVisible && currentSection && (
+                <SectionBriefingCard
+                  key={currentSection.id}
+                  bookId={book.id}
+                  sectionId={currentSection.id}
+                  sourceSha={book.source_sha256}
+                  mode="deep_study"
+                  chapter={currentSection.label ?? ""}
+                  locator={makeCharLocator(secBase)}
+                  sectionText={text}
+                  onDismiss={() =>
+                    setBriefingDismissed((prev) => new Set(prev).add(currentSection.id))
+                  }
+                  onAskContext={spawnContextMarker}
+                />
+              )}
+
+              {/* Empty-state hint: Guided/Deep Study guide gently; Quiet stays silent. */}
+              {sectionNotes.length === 0 && sectionDrafts.length === 0 && !briefingVisible && marginHelp !== "quiet" && (
+                <p className="tl-sidepanel-empty">
+                  Select a passage to highlight, add a note, or open a tutor prompt. Anything you capture collects here, beside the text.
+                </p>
+              )}
+              {sectionNotes.map((n) => (
+                <MarginNoteCard
+                  key={n.id}
+                  note={n}
+                  active={activeNoteId === n.id}
+                  onActivate={() => setActiveNoteId(n.id)}
+                  onSaved={refreshNotes}
+                  onDelete={() => deleteNote(n.id)}
+                />
+              ))}
+              {sectionDrafts.map((d) => (
+                <MarginTutorCard
+                  key={d.draftId}
+                  bookId={book.id}
+                  draft={d}
+                  active={activeNoteId === d.draftId}
+                  onActivate={() => setActiveNoteId(d.draftId)}
+                  onSaved={(note) => onTutorSaved(d.draftId, note.id)}
+                  onDiscard={() => onTutorDiscard(d.draftId)}
+                />
+              ))}
+            </aside>
+          </>
+        )}
       </div>
 
       {sel && (
-        <div className="rg-seltoolbar" style={{ left: sel.x, top: sel.y }} role="toolbar" aria-label="Selection actions">
-          <button className="rg-seltoolbar-btn" onClick={onHighlight}><RGIcon name="pencil" size={15} /> Highlight</button>
-          <button className="rg-seltoolbar-btn" onClick={onMarginNote}><RGIcon name="pencil" size={15} /> Note</button>
-          <button className="rg-seltoolbar-btn" onClick={onExplainSelection}><RGIcon name="sparkle" size={15} /> Explain</button>
+        <div className={sel.below ? "tl-seltoolbar below" : "tl-seltoolbar"} style={{ left: sel.x, top: sel.y }} role="toolbar" aria-label="Selection actions — press Escape to dismiss" aria-keyshortcuts="Escape">
+          <button className="tl-seltoolbar-btn" onClick={onHighlight}><TLIcon name="pencil" size={15} /> Highlight</button>
+          <button className="tl-seltoolbar-btn" onClick={onMarginNote}><TLIcon name="pencil" size={15} /> Note</button>
+          <button className="tl-seltoolbar-btn" onClick={onQuestion}><TLIcon name="help" size={15} /> Question</button>
+          <span className="tl-seltoolbar-div" />
+          <button className="tl-seltoolbar-btn" onClick={() => spawnTutorDraft("explain")}><TLIcon name="sparkle" size={15} /> Explain</button>
+          <button className="tl-seltoolbar-btn" onClick={() => spawnTutorDraft("historical")}>Context</button>
+          <button className="tl-seltoolbar-btn" onClick={() => spawnTutorDraft("vocabulary")}>Define</button>
         </div>
       )}
 
@@ -460,45 +728,102 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         />
       )}
 
-      {showAi && (
-        <AiPanel
-          bookId={book.id}
-          chapter={currentSection.label}
-          locator={locator}
-          selection={selection}
-          onClose={() => setShowAi(false)}
-        />
-      )}
-
-      {endingPrompt && (
-        <EndingPanel
-          rescue={rescue}
-          summary={summary}
-          setSummary={setSummary}
-          onCancel={() => setEndingPrompt(false)}
-          onSave={() => finalizeSession()}
-        />
-      )}
+      {endingPrompt && (() => {
+        const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
+        const ids = completedSectionIds();
+        const labels = assignableSections.filter((s) => ids.includes(s.id)).map((s) => s.label);
+        // Count what was captured THIS sitting (created at/after session start).
+        const startMs = startedAt.current - 2000; // small skew tolerance
+        const mine = notes.filter((n) => {
+          const t = Date.parse(n.created_at);
+          return Number.isFinite(t) && t >= startMs;
+        });
+        const highlights = mine.filter((n) => n.note_type === "Highlight").length;
+        const tutor = mine.filter((n) => n.note_type === "TutorNote").length;
+        const noteCount = mine.length - highlights - tutor;
+        // Next session preview: the section after the furthest one reached.
+        let maxIdx = currentIdx;
+        assignableSections.forEach((s, i) => { if (visited.has(s.id) && i > maxIdx) maxIdx = i; });
+        const nextLabel = assignableSections[maxIdx + 1]?.label ?? null;
+        const recap: RecapData = { minutes, labels, highlights, noteCount, tutor, nextLabel };
+        return (
+          <EndingPanel
+            rescue={rescue}
+            recap={recap}
+            summary={summary}
+            setSummary={setSummary}
+            onCancel={() => setEndingPrompt(false)}
+            onSave={() => finalizeSession(summary)}
+            onSkip={() => finalizeSession(null)}
+          />
+        );
+      })()}
     </section>
   );
 }
 
-function splitParagraphs(text: string): Array<{ offset: number; text: string }> {
-  const out: Array<{ offset: number; text: string }> = [];
+/**
+ * Split section text into paragraphs on blank lines, and within each paragraph
+ * collapse the single "soft-wrap" newlines that Project Gutenberg plain text
+ * uses (every ~70 chars) into spaces so the browser reflows the prose to the
+ * column width. Without this, `white-space` would render each source line as a
+ * hard break — the text reads like free verse in a narrow window and strands
+ * orphan words (e.g. "a particle") when a source line soft-wraps in a wide one.
+ *
+ * The newline→space swap is LENGTH-PRESERVING (1 char → 1 char), so the char
+ * offsets that anchor highlights and selections stay exactly aligned with the
+ * raw section text. Blank-line separators between paragraphs are consumed by the
+ * split, so each chunk contains only intra-paragraph soft wraps.
+ *
+ * Exported for unit tests (offset alignment is load-bearing for marginalia).
+ */
+export interface Paragraph { offset: number; text: string; pre?: boolean }
+
+/** Prose split+reflow on a slice, emitting offsets rebased by `base`. */
+function splitProse(text: string, base: number): Paragraph[] {
+  const out: Paragraph[] = [];
   const re = /\n\s*\n+/g;
+  const reflow = (s: string) => s.replace(/\n/g, " ");
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const chunk = text.slice(last, m.index);
-    if (chunk.trim().length > 0) {
-      out.push({ offset: last, text: chunk });
-    }
+    if (chunk.trim().length > 0) out.push({ offset: base + last, text: reflow(chunk) });
     last = m.index + m[0].length;
   }
   if (last < text.length) {
     const tail = text.slice(last);
-    if (tail.trim().length > 0) out.push({ offset: last, text: tail });
+    if (tail.trim().length > 0) out.push({ offset: base + last, text: reflow(tail) });
   }
+  return out;
+}
+
+/**
+ * Split section text into paragraphs. Prose paragraphs reflow soft-wrap newlines
+ * to spaces (length-preserving, so char offsets stay aligned for marginalia). Any
+ * `preRanges` (code blocks, in section-relative offsets) are emitted as single
+ * NON-reflowed paragraphs marked `pre` so their newlines + indentation survive —
+ * the reader renders those monospace. Offsets are always exact section offsets.
+ *
+ * Exported for unit tests (offset alignment is load-bearing for marginalia).
+ */
+export function splitParagraphs(
+  text: string,
+  preRanges: ReadonlyArray<{ start: number; end: number }> = [],
+): Paragraph[] {
+  const pres = preRanges.filter((r) => r.end > r.start).sort((a, b) => a.start - b.start);
+  if (pres.length === 0) return splitProse(text, 0);
+  const out: Paragraph[] = [];
+  let cursor = 0;
+  for (const r of pres) {
+    const s = Math.max(cursor, r.start);
+    const e = Math.min(text.length, r.end);
+    if (e <= s) continue;
+    if (s > cursor) out.push(...splitProse(text.slice(cursor, s), cursor));
+    out.push({ offset: s, text: text.slice(s, e), pre: true });
+    cursor = e;
+  }
+  if (cursor < text.length) out.push(...splitProse(text.slice(cursor), cursor));
   return out;
 }
 
@@ -526,42 +851,81 @@ function charOffsetWithinSection(node: Node, offset: number, col: HTMLElement): 
   return base + range.toString().length;
 }
 
-/** Render a paragraph's text, wrapping any anchored highlight spans in <mark>.
- *  Offsets are within-section; highlights carry section-local start/end. */
+/** Geometry for the floating selection toolbar, in reader-relative px. The
+ *  toolbar is rendered with `transform: translate(-50%, calc(-100% - 8px))`, so
+ *  `x` is its CENTER and `y` is the selection's top edge (the toolbar sits just
+ *  above it). Pure + exported so it can be unit-tested without a DOM.
+ *
+ *  Two real edge cases this guards:
+ *   - selecting the first word of a line would put `x` near 0, and `-50%` would
+ *     push half the toolbar off the left edge → clamp `x` so the toolbar's
+ *     half-width stays inside `[0, readerWidth]`.
+ *   - selecting the very top line leaves no room above it → when `y` is smaller
+ *     than the toolbar height, flip the toolbar BELOW the selection and report
+ *     `below: true` so the caller can drop the upward translate. */
+/** Clamp the companion side-panel width to a sane range (px). Exported for the
+ *  width persistence read + unit tests. */
+export function clampPanelWidth(w: number): number {
+  if (!Number.isFinite(w)) return 320;
+  return Math.min(Math.max(Math.round(w), 240), 560);
+}
+
+export function clampToolbarPosition(
+  rawX: number,
+  rawY: number,
+  readerWidth: number,
+  opts: { toolbarWidth?: number; toolbarHeight?: number; selectionHeight?: number } = {},
+): { x: number; y: number; below: boolean } {
+  const tw = opts.toolbarWidth ?? 300;
+  const th = opts.toolbarHeight ?? 40;
+  const selH = opts.selectionHeight ?? 22;
+  const half = tw / 2;
+  // Keep the whole toolbar on screen even when readerWidth < toolbarWidth.
+  const x = readerWidth >= tw
+    ? Math.min(Math.max(rawX, half), readerWidth - half)
+    : readerWidth / 2;
+  // If there isn't room for the toolbar (+8px gap) above the selection, drop it
+  // below the selected line instead of letting it clip off the top.
+  const below = rawY < th + 8;
+  const y = below ? rawY + selH : rawY;
+  return { x, y, below };
+}
+
+/** Render a paragraph's text, composing anchored highlights with inline emphasis
+ *  (bold/italic) from the structure sidecar. Offsets are within-section; the pure
+ *  `segmentParagraph` flattens overlapping ranges into ordered runs (it only
+ *  slices the string, never rewrites it, so char-offset anchoring is preserved).
+ *  When nothing applies it returns the bare string — identical to the old reader. */
 function renderParagraph(
   text: string,
   pOffset: number,
   highlights: Array<{ id: string; start: number; end: number }>,
+  inlineSpans: StyleRange[],
   activeId: string | null,
   setActive: (id: string) => void,
 ): ReactNode {
-  const pEnd = pOffset + text.length;
-  const hits = highlights
-    .filter((h) => h.end > pOffset && h.start < pEnd)
-    .map((h) => ({ id: h.id, s: Math.max(0, h.start - pOffset), e: Math.min(text.length, h.end - pOffset) }))
-    .filter((h) => h.e > h.s)
-    .sort((a, b) => a.s - b.s);
-  if (hits.length === 0) return text;
-  const out: ReactNode[] = [];
-  let cursor = 0;
-  hits.forEach((h, i) => {
-    const start = Math.max(h.s, cursor);
-    if (start > cursor) out.push(text.slice(cursor, start));
-    if (h.e > start) {
-      out.push(
+  const segments = segmentParagraph(text, pOffset, highlights, inlineSpans);
+  if (segments.length === 1 && !segments[0].hlId && !segments[0].strong && !segments[0].em) {
+    return segments[0].text;
+  }
+  return segments.map((seg, i) => {
+    if (!seg.hlId && !seg.strong && !seg.em) return seg.text;
+    let node: ReactNode = seg.text;
+    if (seg.em) node = <em>{node}</em>;
+    if (seg.strong) node = <strong>{node}</strong>;
+    if (seg.hlId) {
+      const id = seg.hlId;
+      node = (
         <mark
-          key={`${h.id}-${i}`}
-          className={activeId === h.id ? "rg-hl active" : "rg-hl"}
-          onClick={(e) => { e.stopPropagation(); setActive(h.id); }}
+          className={activeId === id ? "tl-hl active" : "tl-hl"}
+          onClick={(e) => { e.stopPropagation(); setActive(id); }}
         >
-          {text.slice(start, h.e)}
-        </mark>,
+          {node}
+        </mark>
       );
-      cursor = h.e;
     }
+    return <Fragment key={i}>{node}</Fragment>;
   });
-  if (cursor < text.length) out.push(text.slice(cursor));
-  return out;
 }
 
 /** One anchored card in the Companion Margin. User notes are editable with
@@ -624,15 +988,15 @@ function NotePanel(props: {
   }
 
   return (
-    <div className="rg-modal-backdrop">
-      <div ref={panelRef} className="rg-modal" role="dialog" aria-modal="true" aria-labelledby="text-note-panel-title">
-        <div className="rg-modal-head">
-          <span className="t" id="text-note-panel-title"><RGIcon name="pencil" size={16} /> New note</span>
-          <button className="rg-iconbtn" onClick={props.onClose} aria-label="Close note panel"><RGIcon name="x" size={16} /></button>
+    <div className="tl-modal-backdrop">
+      <div ref={panelRef} className="tl-modal" role="dialog" aria-modal="true" aria-labelledby="text-note-panel-title">
+        <div className="tl-modal-head">
+          <span className="t" id="text-note-panel-title"><TLIcon name="pencil" size={16} /> New note</span>
+          <button className="tl-iconbtn" onClick={props.onClose} aria-label="Close note panel"><TLIcon name="x" size={16} /></button>
         </div>
 
         <label>Type
-          <select className="rg-select" value={noteType} onChange={(e) => setNoteType(e.target.value)}>
+          <select className="tl-select" value={noteType} onChange={(e) => setNoteType(e.target.value)}>
             {NOTE_TYPES.map((t) => <option key={t}>{t}</option>)}
           </select>
         </label>
@@ -641,7 +1005,7 @@ function NotePanel(props: {
 
         <label>Note
           <textarea
-            className="rg-textarea"
+            className="tl-textarea"
             value={body}
             onChange={(e) => setBody(e.target.value)}
             placeholder="Paraphrase, reflection, or question…"
@@ -651,23 +1015,23 @@ function NotePanel(props: {
 
         <label>Short quote (optional)
           <textarea
-            className="rg-input"
-            style={{ minHeight: 64, fontFamily: "var(--rg-serif)", resize: "vertical" }}
+            className="tl-input"
+            style={{ minHeight: 64, fontFamily: "var(--tl-serif)", resize: "vertical" }}
             value={shortQuote}
             onChange={(e) => setShortQuote(e.target.value)}
             placeholder="Keep it under ~300 characters"
           />
         </label>
         {warn && (
-          <p className="rg-warn-text">
+          <p className="tl-warn-text">
             Quote exceeds ~300 characters. Fair use has no fixed safe word count — the default
-            posture in ReadingGym is short quotes for private study only. (Saving is still allowed.)
+            posture in Throughline is short quotes for private study only. (Saving is still allowed.)
           </p>
         )}
 
         <div className="panel-actions">
-          <button className="rg-btn rg-btn-ghost" onClick={props.onClose}>Cancel</button>
-          <button className="rg-btn rg-btn-primary" disabled={saving || !body.trim()} onClick={save}>
+          <button className="tl-btn tl-btn-ghost" onClick={props.onClose}>Cancel</button>
+          <button className="tl-btn tl-btn-primary" disabled={saving || !body.trim()} onClick={save}>
             {saving ? "Saving…" : "Save note"}
           </button>
         </div>
@@ -676,41 +1040,101 @@ function NotePanel(props: {
   );
 }
 
+interface RecapData {
+  minutes: number;
+  labels: string[];
+  highlights: number;
+  noteCount: number;
+  tutor: number;
+  nextLabel: string | null;
+}
+
+/**
+ * Session close = a recap, not a thin dialog: minutes read, sections finished,
+ * counts of highlights/notes/tutor cards, an optional one-sentence takeaway the
+ * reader can Accept/Edit/Skip, and a preview of next time. Rescue mode keeps the
+ * "That counts" framing and never forces a takeaway or completion.
+ */
 function EndingPanel(props: {
   rescue?: boolean;
+  recap: RecapData;
   summary: string;
   setSummary: (s: string) => void;
   onCancel: () => void;
   onSave: () => void;
+  onSkip: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   useDialog(panelRef, props.onCancel);
-  const { rescue } = props;
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const [editing, setEditing] = useState(props.summary.trim().length > 0);
+  const { rescue, recap } = props;
+  const hasTakeaway = props.summary.trim().length > 0;
+  function startEditing() {
+    setEditing(true);
+    setTimeout(() => taRef.current?.focus(), 0);
+  }
   return (
-    <div className="rg-modal-backdrop">
-      <div ref={panelRef} className="rg-modal" role="dialog" aria-modal="true" aria-labelledby="text-ending-panel-title">
-        <div className="rg-modal-head">
+    <div className="tl-modal-backdrop">
+      <div ref={panelRef} className="tl-modal tl-recap" role="dialog" aria-modal="true" aria-labelledby="text-ending-panel-title">
+        <div className="tl-modal-head">
           <span className="t" id="text-ending-panel-title">
-            <RGIcon name="flag" size={16} /> {rescue ? "That counts" : "Finish session"}
+            <TLIcon name="flag" size={16} /> {rescue ? "That counts" : "Session recap"}
           </span>
-          <button className="rg-iconbtn" onClick={props.onCancel} aria-label="Close finish-session panel"><RGIcon name="x" size={16} /></button>
+          <button className="tl-iconbtn" onClick={props.onCancel} aria-label="Keep reading"><TLIcon name="x" size={16} /></button>
         </div>
-        <p className="prompt">
-          {rescue
-            ? "You stayed connected to the book today. Want to jot one line before you go? (Totally optional.)"
-            : "What is one sentence you want to remember from today?"}
+
+        <div className="tl-recap-stats">
+          <div className="tl-recap-stat"><span className="n">{recap.minutes}</span><span className="l">min read</span></div>
+          <div className="tl-recap-stat"><span className="n">{recap.labels.length}</span><span className="l">section{recap.labels.length === 1 ? "" : "s"} done</span></div>
+          <div className="tl-recap-stat"><span className="n">{recap.highlights}</span><span className="l">highlight{recap.highlights === 1 ? "" : "s"}</span></div>
+          <div className="tl-recap-stat"><span className="n">{recap.noteCount}</span><span className="l">note{recap.noteCount === 1 ? "" : "s"}</span></div>
+          <div className="tl-recap-stat"><span className="n">{recap.tutor}</span><span className="l">tutor card{recap.tutor === 1 ? "" : "s"}</span></div>
+        </div>
+
+        {recap.labels.length > 0 && (
+          <p className="tl-recap-sections">Finished: {recap.labels.join(" · ")}</p>
+        )}
+
+        <div className="tl-recap-takeaway">
+          <p className="prompt">
+            {rescue
+              ? "You stayed connected to the book today. Want to keep one line before you go? (Optional.)"
+              : "One sentence you want to remember from today?"}
+          </p>
+          {editing ? (
+            <textarea
+              ref={taRef}
+              className="tl-textarea"
+              style={{ minHeight: 76 }}
+              value={props.summary}
+              autoFocus
+              onChange={(e) => props.setSummary(e.target.value)}
+              placeholder={rescue ? "Optional — or just skip." : "Your one line…"}
+            />
+          ) : hasTakeaway ? (
+            <div className="tl-recap-saved">
+              “{props.summary.trim()}”
+              <button className="tl-linkbtn" onClick={startEditing}>Edit</button>
+            </div>
+          ) : null}
+        </div>
+
+        <p className="tl-recap-next">
+          {recap.nextLabel ? <>Next time → <strong>{recap.nextLabel}</strong></> : "You've reached the last section. Beautifully done."}
         </p>
-        <textarea
-          className="rg-textarea"
-          style={{ minHeight: 90 }}
-          value={props.summary}
-          onChange={(e) => props.setSummary(e.target.value)}
-          autoFocus
-          placeholder={rescue ? "Optional — leave blank and just end." : undefined}
-        />
+
         <div className="panel-actions">
-          <button className="rg-btn rg-btn-ghost" onClick={props.onCancel}>Keep reading</button>
-          <button className="rg-btn rg-btn-primary" onClick={props.onSave}>{rescue ? "That counts — done" : "End session"}</button>
+          <button className="tl-btn tl-btn-ghost" onClick={props.onCancel}>Keep reading</button>
+          {!editing && !hasTakeaway && (
+            <button className="tl-btn tl-btn-ghost" onClick={startEditing}>Add a takeaway</button>
+          )}
+          {hasTakeaway && (
+            <button className="tl-btn tl-btn-ghost" onClick={props.onSkip}>Skip takeaway</button>
+          )}
+          <button className="tl-btn tl-btn-primary" onClick={hasTakeaway ? props.onSave : props.onSkip}>
+            {rescue ? "That counts — done" : hasTakeaway ? "Save & finish" : "Finish"}
+          </button>
         </div>
       </div>
     </div>

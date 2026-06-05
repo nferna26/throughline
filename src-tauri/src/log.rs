@@ -44,7 +44,7 @@ pub fn init() {
         let (nb, guard) = tracing_appender::non_blocking(appender);
         let _ = GUARD.set(guard);
 
-        // RUST_LOG=trace, RUST_LOG=info,reading_gym_lib=debug, etc., are honored.
+        // RUST_LOG=trace, RUST_LOG=info,throughline_lib=debug, etc., are honored.
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         let _ = tracing_subscriber::registry()
             .with(filter)

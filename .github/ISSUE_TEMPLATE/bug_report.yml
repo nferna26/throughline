@@ -1,12 +1,12 @@
 name: Bug report
-description: Something in ReadingGym misbehaved.
+description: Something in Throughline misbehaved.
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
         Thanks for the report. The local log at
-        `~/Library/Application Support/ReadingGym/logs/app.log` usually explains
+        `~/Library/Application Support/Throughline/logs/app.log` usually explains
         what happened — skim it and attach the relevant lines if you can.
   - type: textarea
     id: what-happened
@@ -36,5 +36,5 @@ body:
     id: logs
     attributes:
       label: Relevant log lines (optional)
-      description: From ~/Library/Application Support/ReadingGym/logs/app.log
+      description: From ~/Library/Application Support/Throughline/logs/app.log
       render: json

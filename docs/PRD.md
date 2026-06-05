@@ -1,8 +1,8 @@
-ReadingGym
+Throughline
 
 TL;DR
 
-ReadingGym is a focused, local-first macOS app that helps one serious reader import a DRM-free book, see exactly what to read today, complete a 15–30 minute reading session, capture one useful note, and export durable Markdown into a GBrain-style knowledgebase. The recommended path is Option C: build a tiny reading app first, use GBrain/Markdown as the durable substrate, and delay OpenClaw until the reading habit proves itself.
+Throughline is a focused, local-first macOS app that helps one serious reader import a DRM-free book, see exactly what to read today, complete a 15–30 minute reading session, capture one useful note, and export durable Markdown into a GBrain-style knowledgebase. The recommended path is Option C: build a tiny reading app first, use GBrain/Markdown as the durable substrate, and delay OpenClaw until the reading habit proves itself.
 
 The product is not a generic e-reader, AI summary app, social reading app, Bible app, or personal OS. The MVP should prove one loop: import one book, create a daily plan, read today’s section, track progress, capture a note, and export safe Markdown.
 
@@ -72,7 +72,7 @@ Do not build OpenClaw integration first; OpenClaw should be a later review/orche
 
 
 
-Do not build cloud sync, accounts, social features, mobile apps, DRM handling, PDF/OCR, quizzes, spaced repetition, automatic summaries, or autonomous AI behavior.
+Do not build cloud sync, accounts, social features, mobile apps, DRM handling, PDF/OCR, quizzes, spaced repetition, or background/remote/unsolicited AI. (See "AI posture (updated)" below: local, reader-initiated tutor lenses and a session-triggered Deep Study briefing ARE in scope; AI that runs on a timer, on launch, in the background, or against a remote endpoint by default is NOT.)
 
 
 
@@ -164,7 +164,7 @@ One-book library: Import one DRM-free EPUB or plain text file.
 
 
 
-Local source preservation: Copy the source file into app storage under ~/Library/Application Support/ReadingGym/books/{book_id}/.
+Local source preservation: Copy the source file into app storage under ~/Library/Application Support/Throughline/books/{book_id}/.
 
 
 
@@ -330,7 +330,9 @@ Stub modes: Include Explain this passage, Historical context, Vocabulary/referen
 
 
 
-No remote calls by default: Buttons generate prompt previews only unless the user explicitly enables a provider later.
+No remote calls by default: tutor calls go to a local OpenAI-compatible endpoint; remote endpoints are refused while local-only is ON. (Historical note: the original MVP shipped prompt-preview-only stubs; the app has since added real local streaming — see "AI posture (updated)" below.)
+
+AI posture (updated): AI is local-first and reader-initiated. (1) Tutor lenses (Explain/Context/Define/Socratic) fire only on a reader's passage selection + lens click and stream from the local endpoint. (2) Deep Study margin-help may generate a local "section briefing" — study prep for the section about to be read — ONLY after the reader chose Deep Study, started a session, and gave tutor consent. The briefing is cached, dismissable, regenerable, local-only, and never exported unless the reader saves it. No AI runs in the background, on a timer, on launch, or against a remote endpoint by default. AI output becomes a durable note + Markdown only on explicit save. Raw source text never leaves the device and is never exported.
 
 
 
@@ -390,7 +392,7 @@ Entry Point & First-Time User Experience
 
 
 
-The user launches ReadingGym as a local macOS app.
+The user launches Throughline as a local macOS app.
 
 
 
@@ -636,7 +638,7 @@ Narrative
 
 Nick wants to become the kind of person who reads serious books consistently, not the kind of person who endlessly designs systems for reading. He has a local-first workflow, a GBrain-style Markdown knowledgebase, and interest in future OpenClaw orchestration, but the hardest moment is simpler: after coffee, before email or Slack, he needs to open something and read today’s section.
 
-ReadingGym turns that moment into a concrete routine. The app opens to a single prescription: the current book, today’s section, estimated time, and a Start Reading button. The reader resumes where he left off, keeps the interface calm, and makes notes available without turning the session into a dashboard. If he is confused, AI appears only as a tutor on selected text, not as an automatic chapter summary. At the end, he captures one sentence or note worth keeping, and the app exports safe Markdown with source locators into GBrain.
+Throughline turns that moment into a concrete routine. The app opens to a single prescription: the current book, today’s section, estimated time, and a Start Reading button. The reader resumes where he left off, keeps the interface calm, and makes notes available without turning the session into a dashboard. If he is confused, AI appears only as a tutor on selected text, not as an automatic chapter summary. At the end, he captures one sentence or note worth keeping, and the app exports safe Markdown with source locators into GBrain.
 
 The product succeeds if it helps Nick read Augustine for 14 days instead of spending the month building infrastructure. GBrain remains the durable substrate. OpenClaw waits until there is enough real reading behavior and Markdown memory to review. The wedge is narrow by design: today’s reading, one session, one serious book, one durable note.
 
@@ -830,11 +832,11 @@ Backend commands: Rust commands for filesystem operations, hashing, SQLite acces
 
 
 
-Operational database: SQLite database at ~/Library/Application Support/ReadingGym/reading.db.
+Operational database: SQLite database at ~/Library/Application Support/Throughline/reading.db.
 
 
 
-Local files: Imported books stored under ~/Library/Application Support/ReadingGym/books/{book_id}/.
+Local files: Imported books stored under ~/Library/Application Support/Throughline/books/{book_id}/.
 
 
 
@@ -1006,27 +1008,27 @@ Application data path:
 
 
 
-~/Library/Application Support/ReadingGym/reading.db
+~/Library/Application Support/Throughline/reading.db
 
 
 
-~/Library/Application Support/ReadingGym/books/{book_id}/source.epub
+~/Library/Application Support/Throughline/books/{book_id}/source.epub
 
 
 
-~/Library/Application Support/ReadingGym/books/{book_id}/source.txt
+~/Library/Application Support/Throughline/books/{book_id}/source.txt
 
 
 
-~/Library/Application Support/ReadingGym/books/{book_id}/manifest.json
+~/Library/Application Support/Throughline/books/{book_id}/manifest.json
 
 
 
-~/Library/Application Support/ReadingGym/books/{book_id}/toc.json
+~/Library/Application Support/Throughline/books/{book_id}/toc.json
 
 
 
-~/Library/Application Support/ReadingGym/backups/
+~/Library/Application Support/Throughline/backups/
 
 
 
@@ -1234,7 +1236,7 @@ Create Tauri v2, React, TypeScript, and Vite app.
 
 
 
-Initialize Git repo under ~/Code/reading-gym or timestamped fallback.
+Initialize Git repo under ~/Code/throughline or timestamped fallback.
 
 
 

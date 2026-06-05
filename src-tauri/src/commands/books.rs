@@ -7,31 +7,41 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use tauri::State;
 
 use crate::commands::db_helpers::*;
 use crate::db::DbState;
 use crate::error::AppError;
-use crate::models::{Book, BookSection, ImportOutcome, ReadingPlan, TodayCard};
+use crate::models::{Book, BookSection, ImportOutcome, ReadingPlan, StyleRange, TodayCard};
 use crate::{epub_classify, export, import, log, models, paths, plan, recovery, settings};
 
 #[tauri::command]
 pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<ImportOutcome, AppError> {
-    eprintln!("[rg] cmd_import_book called with path={}", path);
-    let src = PathBuf::from(&path);
+    eprintln!("[tl] cmd_import_book called with path={}", path);
+    import_or_dedup(&PathBuf::from(&path), state.inner())
+}
 
+/// The single owned import path. Hashes the source for dedup, and on a fresh
+/// book runs the full pipeline (immutable copy → sectionize → manifest → default
+/// plan → export → log). Both the local file picker (`cmd_import_book`) and the
+/// public-domain download (`cmd_import_from_gutendex`) funnel through here so
+/// SHA dedup, source immutability, and the default plan happen in exactly one
+/// place. The DB lock is deliberately NOT held across `import::import_any`
+/// (which copies + sectionizes the whole file): we lock only for the dedup
+/// probe and again for the inserts.
+pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, AppError> {
     // Dedup (skip & switch): if a book with this file's SHA-256 is already
     // imported, make it the active book and return it instead of creating a
     // duplicate. Hashing the source directly matches the stored hash because
     // both importers store the hash of the raw copied file.
-    if let Ok(sha) = import::hash_file(&src) {
+    if let Ok(sha) = import::hash_file(src) {
         let conn = state.0.lock()?;
         if let Some(existing) = fetch_book_by_sha(&conn, &sha)? {
             eprintln!(
-                "[rg] cmd_import_book: dedup hit (sha {}…) -> existing book_id={}",
+                "[tl] import_or_dedup: dedup hit (sha {}…) -> existing book_id={}",
                 &sha[..8.min(sha.len())],
                 existing.id
             );
@@ -40,15 +50,15 @@ pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<ImportOutc
         }
     }
 
-    let result = match import::import_any(&src) {
+    let result = match import::import_any(src) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[rg] cmd_import_book: import_any failed: {:#}", e);
+            eprintln!("[tl] import_or_dedup: import_any failed: {:#}", e);
             return Err(AppError::io(format!("import failed: {:#}", e)));
         }
     };
     eprintln!(
-        "[rg] cmd_import_book: imported '{}' [{}] with {} sections",
+        "[tl] import_or_dedup: imported '{}' [{}] with {} sections",
         result.book.title, result.book.source_type, result.sections.len()
     );
     let conn = state.0.lock()?;
@@ -60,7 +70,7 @@ pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<ImportOutc
     insert_plan(&conn, &p)?;
     // Make the freshly imported book the active one on the Today screen.
     bump_last_opened_at(&conn, &result.book.id)?;
-    if let Ok(path) = export::export_book(&result.book) {
+    if let Ok(path) = export::export_book(&export::root_for(&conn), &result.book) {
         log::log_export("book", &path.to_string_lossy());
     }
     log::log_import(
@@ -70,7 +80,7 @@ pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<ImportOutc
         result.sections.len(),
         &result.book.source_sha256,
     );
-    eprintln!("[rg] cmd_import_book: OK book_id={}", result.book.id);
+    eprintln!("[tl] import_or_dedup: OK book_id={}", result.book.id);
     Ok(ImportOutcome { book: result.book, created: true })
 }
 
@@ -126,7 +136,9 @@ pub fn cmd_configure_plan(
         .ok_or_else(|| AppError::not_found("plan", Some(book_id)))
 }
 
-/// For EPUBs: return the raw bytes so the frontend can hand them to epub.js.
+/// Return a book's stored source bytes (source.epub / source.txt). No longer used
+/// by any reader (EPUBs are read as extracted text now), but kept for inspection /
+/// future use. The raw bytes are never exported.
 #[tauri::command]
 pub fn cmd_read_book_bytes(book_id: String, state: State<DbState>) -> Result<Vec<u8>, AppError> {
     let conn = state.0.lock()?;
@@ -195,10 +207,13 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
         let today = chrono::Utc::now().naive_utc().date();
         let finish = chrono::NaiveDate::parse_from_str(&plan.target_finish_date, "%Y-%m-%d")
             .unwrap_or(today);
-        Some(recovery::build_bundle(days_behind.max(1), today, section.is_some(), finish))
+        Some(recovery::build_bundle(days_behind.max(1), today, finish))
     } else {
         None
     };
+
+    // Build the "Last time" memory before `book` is moved into the card.
+    let memory = today_memory(&conn, &book.id)?;
 
     Ok(Some(TodayCard {
         book,
@@ -217,7 +232,45 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
         resume_percent,
         plan_status: computed.plan_status.clone(),
         forecast: computed.forecast.clone(),
+        memory,
     }))
+}
+
+/// Build the "Today remembers" surface from local notes. Privacy-safe by
+/// construction: `last_capture` only ever carries a user-authored Takeaway or
+/// Question body (the reader's own words), never a raw passage, AI output, or
+/// short quote. Counts are pure aggregates.
+fn today_memory(conn: &rusqlite::Connection, book_id: &str) -> rusqlite::Result<models::TodayMemory> {
+    let highlight_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM notes WHERE book_id = ?1 AND note_type = 'Highlight'",
+        params![book_id],
+        |r| r.get(0),
+    )?;
+    // "Notes" = anything the reader authored that isn't a bare highlight and has
+    // a real body. Saved tutor notes count (the reader chose to keep them).
+    let note_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM notes WHERE book_id = ?1 AND note_type <> 'Highlight' AND TRIM(body) <> ''",
+        params![book_id],
+        |r| r.get(0),
+    )?;
+    // Most recent Takeaway or Question with the reader's own words.
+    let last_capture = conn
+        .query_row(
+            "SELECT note_type, body, chapter_label, created_at FROM notes
+             WHERE book_id = ?1 AND note_type IN ('Takeaway', 'Question') AND TRIM(body) <> ''
+             ORDER BY created_at DESC LIMIT 1",
+            params![book_id],
+            |r| {
+                Ok(models::LastCapture {
+                    note_type: r.get(0)?,
+                    body: r.get(1)?,
+                    chapter_label: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            },
+        )
+        .optional()?;
+    Ok(models::TodayMemory { last_capture, highlight_count, note_count })
 }
 
 fn compute_streak(conn: &Connection, book_id: &str) -> rusqlite::Result<models::StreakSummary> {
@@ -240,17 +293,81 @@ fn compute_streak(conn: &Connection, book_id: &str) -> rusqlite::Result<models::
 #[tauri::command]
 pub fn cmd_read_section_text(book_id: String, section_id: String, state: State<DbState>) -> Result<String, AppError> {
     let conn = state.0.lock()?;
+    // Lazy one-time backfill: EPUBs imported before the text pivot have an
+    // immutable source.epub but no derived source.txt (and NULL section locators).
+    // Generate the text + fill locators in place on first open. Best-effort — on
+    // failure we read what exists rather than blocking the reader.
+    let source_type: Option<String> = conn
+        .query_row("SELECT source_type FROM books WHERE id = ?1", params![book_id], |r| r.get(0))
+        .optional()?;
+    if source_type.as_deref() == Some("epub") {
+        if let Err(e) = crate::import_epub::ensure_epub_text(&conn, &book_id) {
+            eprintln!("[tl] epub text backfill skipped for {book_id}: {e}");
+        }
+    }
     let mut stmt = conn.prepare("SELECT start_locator, end_locator FROM book_sections WHERE id = ?1 AND book_id = ?2")?;
     let (start, end): (Option<String>, Option<String>) = stmt
         .query_row(params![section_id, book_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
     let start: usize = start.unwrap_or_else(|| "0".to_string()).parse().unwrap_or(0);
     let end: Option<usize> = end.and_then(|s| s.parse().ok());
+    read_txt_section(&book_id, start, end).map_err(AppError::from)
+}
 
-    let src_path = paths::book_dir(&book_id)?.join("source.txt");
-    let body = fs::read_to_string(&src_path)?;
+/// Style ranges (headings/blockquotes/emphasis) for one section, in UTF-16
+/// offsets relative to the section's text — so the reader can style EPUB-derived
+/// text without mutating it. Empty for .txt books (no `structure.json`) and for
+/// any section with no captured ranges. Reads the per-book sidecar written at
+/// import; never touches the DB.
+#[tauri::command]
+pub fn cmd_read_section_structure(book_id: String, section_id: String) -> Result<Vec<StyleRange>, AppError> {
+    let path = paths::book_dir(&book_id)?.join("structure.json");
+    let Ok(raw) = fs::read_to_string(&path) else { return Ok(Vec::new()); };
+    let map: HashMap<String, Vec<StyleRange>> = serde_json::from_str(&raw).unwrap_or_default();
+    Ok(map.get(&section_id).cloned().unwrap_or_default())
+}
+
+/// Char offset (into the RAW source.txt) where the book body begins. Set by the
+/// text importer after stripping a Project Gutenberg header; `0` when there is
+/// no header (or for legacy imports with no `body_offsets.json`).
+fn body_start_offset(book_id: &str) -> usize {
+    let Ok(dir) = paths::book_dir(book_id) else { return 0 };
+    let Ok(raw) = fs::read_to_string(dir.join("body_offsets.json")) else { return 0 };
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("body_start").and_then(|n| n.as_u64()))
+        .map(|n| n as usize)
+        .unwrap_or(0)
+}
+
+/// Read one text section's body from disk. Section `start`/`end` locators are
+/// offsets into the *stripped body* (what `import_txt` sectionized), so they
+/// must be rebased by `body_start` before slicing the RAW file — otherwise a
+/// Gutenberg-headed import renders text shifted by the header length. See
+/// [`slice_body`] for the pure slicing math (unit-tested).
+pub fn read_txt_section(book_id: &str, start: usize, end: Option<usize>) -> std::io::Result<String> {
+    let src_path = paths::book_dir(book_id)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+        .join("source.txt");
+    let raw = fs::read_to_string(&src_path)?;
+    Ok(slice_body(&raw, body_start_offset(book_id), start, end))
+}
+
+/// Pure section slice: take `raw`, skip `body_start` header chars, then return
+/// the `[start, end)` window measured from the body start (UTF-8 safe — clamps
+/// to char boundaries so a multi-byte boundary never panics).
+fn slice_body(raw: &str, body_start: usize, start: usize, end: Option<usize>) -> String {
+    let body = &raw[body_start.min(raw.len())..];
     let end = end.unwrap_or(body.len()).min(body.len());
     let start = start.min(end);
-    Ok(body[start..end].to_string())
+    // Snap both ends down to the nearest char boundary so slicing can't panic on
+    // a multi-byte UTF-8 codepoint (section offsets are computed on `&str` chars
+    // upstream, but defend the slice regardless).
+    let snap = |i: usize| {
+        let mut i = i.min(body.len());
+        while i > 0 && !body.is_char_boundary(i) { i -= 1; }
+        i
+    };
+    body[snap(start)..snap(end)].to_string()
 }
 
 #[tauri::command]
@@ -282,10 +399,29 @@ fn canonical_assignable_sections(conn: &Connection, book_id: &str) -> rusqlite::
         |r| r.get::<_, String>(0),
     ).ok();
 
-    let needs_reclassify = matches!(source_type.as_deref(), Some("epub")) && all_assignable;
+    // Reclassify an EPUB when EITHER every section is still assignable (a
+    // pre-classification import) OR the classifier version this book was last
+    // classified with is behind the current one (the classifier improved — e.g.
+    // it learned to skip filename-form "praise.xhtml" boilerplate). The version
+    // gate makes already-classified books self-heal exactly once per bump,
+    // without reparsing the epub on every open.
+    let is_epub = matches!(source_type.as_deref(), Some("epub"));
+    let stored_ver = settings::get_string(conn, &classify_version_key(book_id))
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    let needs_reclassify = is_epub && (all_assignable || stored_ver < EPUB_CLASSIFY_VERSION);
     let working = if needs_reclassify {
         match reclassify_epub_in_place(conn, book_id) {
-            Ok(()) => list_sections(conn, book_id)?,
+            Ok(()) => {
+                // Record the version we just classified with so the reparse
+                // doesn't run again until the classifier changes.
+                let _ = settings::set_string(
+                    conn,
+                    &classify_version_key(book_id),
+                    &EPUB_CLASSIFY_VERSION.to_string(),
+                );
+                list_sections(conn, book_id)?
+            }
             Err(e) => {
                 eprintln!("reclassify failed for {}: {} — falling back to original list", book_id, e);
                 all
@@ -295,6 +431,17 @@ fn canonical_assignable_sections(conn: &Connection, book_id: &str) -> rusqlite::
         all
     };
     Ok(working.into_iter().filter(|s| s.assignable).collect())
+}
+
+/// Bump when `epub_classify` changes which spine items count as front/back
+/// matter, so already-imported EPUBs re-classify themselves on next open.
+/// v2: filename-form boilerplate (praise.xhtml / *-blurb.xhtml / quote.xhtml).
+const EPUB_CLASSIFY_VERSION: u32 = 2;
+
+/// Per-book settings key holding the classifier version this book was last
+/// classified with. A `settings` KV row, so no schema migration is needed.
+fn classify_version_key(book_id: &str) -> String {
+    format!("epub_classify_version:{book_id}")
 }
 
 fn reclassify_epub_in_place(conn: &Connection, book_id: &str) -> anyhow::Result<()> {
@@ -319,7 +466,16 @@ fn reclassify_epub_in_place(conn: &Connection, book_id: &str) -> anyhow::Result<
     for item in &doc.spine {
         if let Some(res) = doc.resources.get(&item.idref) {
             let href = strip_fragment(&res.path.to_string_lossy());
-            let label = toc_label_by_href.get(&href).cloned();
+            // Match the IMPORT path's label derivation exactly: prefer the TOC
+            // label, else fall back to the href's file name (e.g. "praise.xhtml").
+            // Without this fallback the classifier saw label=None here and the
+            // filename-form boilerplate rules couldn't fire — so reclassify
+            // disagreed with import. Keep the two paths identical.
+            let label = toc_label_by_href.get(&href).cloned().or_else(|| {
+                std::path::Path::new(&href)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+            });
             spine_meta_by_href.insert(
                 href,
                 SpineMeta { idref: item.idref.clone(), linear: item.linear, label },
@@ -557,5 +713,29 @@ mod tests {
         }
         let canonical = canonical_assignable_sections(&conn, "b_stale").expect("canonical");
         assert_eq!(canonical.len(), 5);
+    }
+
+    /// REGRESSION: a Gutenberg-headed text import stores section locators
+    /// relative to the stripped body. The section read MUST rebase by
+    /// `body_start`, or the reader shows text shifted by the header length.
+    #[test]
+    fn slice_body_rebases_section_offsets_past_the_header() {
+        let header = "Title: Confessions\n\n*** START OF THE PROJECT GUTENBERG EBOOK ***\n";
+        let body = "BOOK I. Great art Thou, O Lord.\n\nBOOK II. I will now call to mind.";
+        let raw = format!("{header}{body}");
+        let body_start = header.len();
+
+        // Section 0 = first "BOOK I" chapter, body offsets [0, 33).
+        let s0 = super::slice_body(&raw, body_start, 0, Some(33));
+        assert!(s0.starts_with("BOOK I."), "section text must begin at the body, got {s0:?}");
+        assert!(!s0.contains("START OF"), "header must never bleed into section text");
+
+        // Section to end-of-body.
+        let s1 = super::slice_body(&raw, body_start, 33, None);
+        assert!(s1.contains("BOOK II"), "tail section reads to end of body");
+
+        // No header (body_start = 0) behaves as a plain slice.
+        let plain = super::slice_body("abcdef", 0, 2, Some(4));
+        assert_eq!(plain, "cd");
     }
 }

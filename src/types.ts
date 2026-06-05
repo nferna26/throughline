@@ -72,6 +72,34 @@ export interface ImportOutcome {
   created: boolean;
 }
 
+/** A row in the public-domain catalogue (Discover). `txt_url`/`epub_url` are
+ *  opaque download URLs echoed straight back to `cmd_import_from_gutendex`; the
+ *  UI never needs to understand them. The catalogue source brand name stays out
+ *  of the UI entirely — see Discover.tsx. */
+export interface DiscoverBook {
+  id: number;
+  title: string;
+  author: string;
+  language: string;
+  download_count: number;
+  has_txt: boolean;
+  has_epub: boolean;
+  txt_url: string | null;
+  epub_url: string | null;
+}
+
+export interface DiscoverPage {
+  /** Live catalogue size for the "free titles" / "Search all N" copy. */
+  count: number;
+  /** 1-based page to request next, or null at the end of results. */
+  next_page: number | null;
+  results: DiscoverBook[];
+  /** True when results came from the bundled offline seed (the live catalogue
+   *  was unreachable) rather than the full library — drives a calm "offline
+   *  catalogue" hint so a smaller result set is honestly explained. */
+  offline: boolean;
+}
+
 export interface ReadingSession {
   id: string;
   book_id: string;
@@ -134,8 +162,7 @@ export type RecoveryOption =
   | { kind: "ResumeToday" }
   | { kind: "GentleCatchup"; extra_minutes: number; for_sessions: number }
   | { kind: "WeekendCatchup"; weekend_starts_in_days: number }
-  | { kind: "ExtendFinish"; add_days: number; new_finish: string }
-  | { kind: "RestartCurrentChapter" };
+  | { kind: "ExtendFinish"; add_days: number; new_finish: string };
 
 export interface RecoveryBundle {
   headline: string;
@@ -178,6 +205,22 @@ export interface TodayCard {
   plan_status: string;
   /** Honest finish projection; null while plan_ready or done. */
   forecast: FinishForecast | null;
+  /** "Last time" memory for calm re-entry; fields empty when nothing captured. */
+  memory: TodayMemory;
+}
+
+/** The reader's own most recent durable capture (their words, never a passage). */
+export interface LastCapture {
+  note_type: string;
+  body: string;
+  chapter_label: string | null;
+  created_at: string;
+}
+
+export interface TodayMemory {
+  last_capture: LastCapture | null;
+  highlight_count: number;
+  note_count: number;
 }
 
 export const NOTE_TYPES = [
@@ -185,6 +228,7 @@ export const NOTE_TYPES = [
   "Question",
   "Connection",
   "Reflection",
+  "Takeaway",
   "Short Quote",
 ] as const;
 
@@ -221,6 +265,43 @@ export interface SettingsDto {
   quote_policy: string;
   quote_warn_chars: number;
   ai_requests_retention_days: number;
+  /** "quiet" | "guided" | "deep_study" — how present the Companion Margin is. */
+  margin_help: string;
+  // ── Cloud AI providers ──
+  /** "local" | "openai" | "anthropic" | "codex" | "none" | "" (empty = not chosen). */
+  ai_provider: string;
+  /** True once onboarding has made an AI choice. */
+  ai_provider_chosen: boolean;
+  /** True when a cloud provider was explicitly chosen (selection leaves the Mac). */
+  ai_remote_allowed: boolean;
+  ai_model_openai: string;
+  ai_model_anthropic: string;
+  ai_model_codex: string;
+  ai_key_present_openai: boolean;
+  ai_key_present_anthropic: boolean;
+  ai_codex_creds_present: boolean;
+}
+
+/** Human label + privacy disclosure for a provider, used by onboarding + cards. */
+export const AI_PROVIDERS: Array<{
+  id: "local" | "openai" | "anthropic" | "codex";
+  label: string;
+  /** Short where-your-text-goes disclosure shown before any call. */
+  disclosure: string;
+  remote: boolean;
+}> = [
+  { id: "local", label: "Local (LM Studio)", remote: false,
+    disclosure: "Runs entirely on this Mac. Nothing you read or select leaves your device." },
+  { id: "openai", label: "OpenAI", remote: true,
+    disclosure: "Your selected passage (or section) is sent to OpenAI under your API key — never the whole book." },
+  { id: "anthropic", label: "Anthropic", remote: true,
+    disclosure: "Your selected passage (or section) is sent to Anthropic under your API key — never the whole book." },
+  { id: "codex", label: "Codex (ChatGPT login)", remote: true,
+    disclosure: "Your selected passage (or section) is sent to OpenAI via your Codex login — never the whole book." },
+];
+
+export function aiProviderLabel(id: string): string {
+  return AI_PROVIDERS.find((p) => p.id === id)?.label ?? "AI";
 }
 
 export type StreamEvent =

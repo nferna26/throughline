@@ -15,8 +15,6 @@ pub enum RecoveryOption {
     WeekendCatchup { weekend_starts_in_days: i64 },
     /// "Extend finish date by N days" — moves the goalpost, recomputes plan.
     ExtendFinish { add_days: i64, new_finish: String },
-    /// "Restart current chapter" — reset progress on the in-flight section.
-    RestartCurrentChapter,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -31,13 +29,18 @@ pub const HEADLINE: &str = "Next smallest step: 10 minutes.";
 
 /// Decide which recovery options to surface for a given days_behind value.
 ///
+/// Every option expresses a concrete trade-off against the actual gap, never a
+/// generic "you owe a debt": keep the date and add a few minutes (GentleCatchup),
+/// use the weekend window (WeekendCatchup), or move the finish and keep today's
+/// pace (ExtendFinish). There is no "restart the chapter" — throwing away read
+/// progress is not a recovery, it's a punishment.
+///
 /// Rules:
-/// - Resume Today is always offered.
+/// - Resume Today is always offered (the calmest path: just read the next section).
 /// - GentleCatchup is offered when 1–4 behind. Higher values bias to ExtendFinish.
 /// - WeekendCatchup is offered only when there's a weekend day in the next 3 days.
 /// - ExtendFinish is offered when >= 2 behind. Adds days_behind days by default.
-/// - RestartCurrentChapter is offered when in_chapter is true (caller's choice).
-pub fn options_for(days_behind: i64, today: NaiveDate, in_chapter: bool, finish_date: NaiveDate) -> Vec<RecoveryOption> {
+pub fn options_for(days_behind: i64, today: NaiveDate, finish_date: NaiveDate) -> Vec<RecoveryOption> {
     let mut out: Vec<RecoveryOption> = Vec::new();
     out.push(RecoveryOption::ResumeToday);
 
@@ -63,10 +66,6 @@ pub fn options_for(days_behind: i64, today: NaiveDate, in_chapter: bool, finish_
         });
     }
 
-    if in_chapter {
-        out.push(RecoveryOption::RestartCurrentChapter);
-    }
-
     out
 }
 
@@ -83,8 +82,8 @@ fn days_until_next_weekend(today: NaiveDate) -> Option<i64> {
     }
 }
 
-pub fn build_bundle(days_behind: i64, today: NaiveDate, in_chapter: bool, finish_date: NaiveDate) -> RecoveryBundle {
-    let options = options_for(days_behind.max(0), today, in_chapter, finish_date);
+pub fn build_bundle(days_behind: i64, today: NaiveDate, finish_date: NaiveDate) -> RecoveryBundle {
+    let options = options_for(days_behind.max(0), today, finish_date);
     RecoveryBundle {
         headline: HEADLINE.to_string(),
         days_behind: days_behind.max(0),
@@ -137,43 +136,57 @@ mod tests {
 
     #[test]
     fn resume_today_is_always_offered() {
-        let opts = options_for(0, d(2026, 5, 25), false, d(2026, 6, 25));
+        let opts = options_for(0, d(2026, 5, 25), d(2026, 6, 25));
         assert!(opts.contains(&RecoveryOption::ResumeToday));
     }
 
     #[test]
     fn gentle_catchup_offered_for_small_deficit() {
-        let opts = options_for(2, d(2026, 5, 25), false, d(2026, 6, 25));
+        let opts = options_for(2, d(2026, 5, 25), d(2026, 6, 25));
         assert!(opts.iter().any(|o| matches!(o, RecoveryOption::GentleCatchup { extra_minutes: 10, for_sessions: 2 })));
     }
 
     #[test]
     fn extend_finish_offered_when_significantly_behind() {
-        let opts = options_for(3, d(2026, 5, 25), false, d(2026, 6, 25));
+        let opts = options_for(3, d(2026, 5, 25), d(2026, 6, 25));
         assert!(opts.iter().any(|o| matches!(o, RecoveryOption::ExtendFinish { add_days: 3, .. })));
     }
 
     #[test]
-    fn restart_chapter_only_when_in_chapter() {
-        let with = options_for(1, d(2026, 5, 25), true, d(2026, 6, 25));
-        assert!(with.contains(&RecoveryOption::RestartCurrentChapter));
-        let without = options_for(1, d(2026, 5, 25), false, d(2026, 6, 25));
-        assert!(!without.contains(&RecoveryOption::RestartCurrentChapter));
+    fn only_shame_free_options_are_ever_offered() {
+        // Throwing away read progress is not a recovery — "restart the chapter"
+        // was removed. Every surfaced option must be one of the four trade-offs
+        // that keep your reading, for any deficit.
+        for db in 0..=10 {
+            let opts = options_for(db, d(2026, 5, 28), d(2026, 6, 25));
+            for o in &opts {
+                assert!(
+                    matches!(
+                        o,
+                        RecoveryOption::ResumeToday
+                            | RecoveryOption::GentleCatchup { .. }
+                            | RecoveryOption::WeekendCatchup { .. }
+                            | RecoveryOption::ExtendFinish { .. }
+                    ),
+                    "unexpected recovery option {o:?} for days_behind={db}"
+                );
+            }
+        }
     }
 
     #[test]
     fn weekend_catchup_only_when_close_to_weekend() {
         // 2026-05-25 is a Monday → 4 days to Saturday → not offered
-        let mon = options_for(2, d(2026, 5, 25), false, d(2026, 6, 25));
+        let mon = options_for(2, d(2026, 5, 25), d(2026, 6, 25));
         assert!(!mon.iter().any(|o| matches!(o, RecoveryOption::WeekendCatchup { .. })));
         // 2026-05-28 is a Thursday → 1 day to Saturday → offered
-        let thu = options_for(2, d(2026, 5, 28), false, d(2026, 6, 25));
+        let thu = options_for(2, d(2026, 5, 28), d(2026, 6, 25));
         assert!(thu.iter().any(|o| matches!(o, RecoveryOption::WeekendCatchup { .. })));
     }
 
     #[test]
     fn headline_is_shame_free() {
-        let b = build_bundle(5, d(2026, 5, 28), true, d(2026, 6, 25));
+        let b = build_bundle(5, d(2026, 5, 28), d(2026, 6, 25));
         assert_eq!(b.headline, "Next smallest step: 10 minutes.");
         // No "streak" or "broken" or punishment language.
         assert!(!b.headline.to_lowercase().contains("streak"));

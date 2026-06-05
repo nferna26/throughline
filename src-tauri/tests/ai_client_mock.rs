@@ -12,7 +12,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use reading_gym_lib::ai_client::{run_chat_call, ChatCallOpts, StreamEvent};
+use throughline_lib::ai_client::{run_chat_call, ChatCallOpts, StreamEvent};
 
 #[tokio::test]
 async fn mock_server_streams_deltas_to_client() {
@@ -72,6 +72,8 @@ async fn mock_server_streams_deltas_to_client() {
         prompt: prompt.to_string(),
         stream: true,
         timeout: Duration::from_secs(5),
+        max_tokens: Some(64),
+        ..Default::default()
     };
     let mut rx = run_chat_call(opts).await.expect("run_chat_call");
 
@@ -99,6 +101,7 @@ async fn mock_server_streams_deltas_to_client() {
         "prompt bytes did not arrive verbatim");
     assert!(body.contains("\"stream\":true"));
     assert!(body.contains("\"model\":\"mock-model\""));
+    assert!(body.contains("\"max_tokens\":64"), "the brevity ceiling must reach the server");
 }
 
 #[tokio::test]
@@ -110,6 +113,8 @@ async fn remote_url_refused_when_local_only_on() {
         prompt: "anything".to_string(),
         stream: true,
         timeout: Duration::from_secs(1),
+        max_tokens: None,
+        ..Default::default()
     };
     let err = run_chat_call(opts).await.expect_err("must be rejected");
     let msg = err.to_string();

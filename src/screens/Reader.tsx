@@ -1,6 +1,5 @@
 import type { TodayCard, ReaderMode } from "../types";
 import TextReader from "./TextReader";
-import EpubReader from "./EpubReader";
 
 interface Props {
   today: TodayCard;
@@ -8,11 +7,10 @@ interface Props {
   onExit: () => void;
 }
 
+// One reader for every book. EPUBs are converted to clean text at import (see
+// import_epub.rs) and read through the same plain-text path as .txt — there is no
+// separate epub.js renderer anymore (the iframe made text selection unfixable in
+// WKWebView; see docs/EPUB_AI_EVAL.md).
 export default function Reader({ today, mode = "full", onExit }: Props) {
-  const { book } = today;
-  if (book.source_type === "epub") {
-    return <EpubReader today={today} mode={mode} onExit={onExit} />;
-  }
-  // default to text
   return <TextReader today={today} mode={mode} onExit={onExit} />;
 }

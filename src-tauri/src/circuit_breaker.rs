@@ -1,6 +1,6 @@
 //! In-process circuit breaker for external integration points.
 //!
-//! ReadingGym's only external integration is the local AI server (LM Studio /
+//! Throughline's only external integration is the local AI server (LM Studio /
 //! llama.cpp / any OpenAI-compatible endpoint). When that server hangs or
 //! disappears, repeated calls cascade into a frozen UI. This breaker fails
 //! fast after a threshold of recent failures, gives the server a cool-down

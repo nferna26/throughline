@@ -108,7 +108,7 @@ fn read_note(conn: &rusqlite::Connection, id: &str) -> Result<Note, AppError> {
 /// Shared by save and update so both keep the mirror current.
 fn reexport_note(conn: &rusqlite::Connection, mut note: Note) -> Result<Note, AppError> {
     if let Some(book) = fetch_book(conn, &note.book_id)? {
-        if let Ok(path) = export::export_note(&book, &note) {
+        if let Ok(path) = export::export_note(&export::root_for(conn), &book, &note) {
             log::log_export("note", &path.to_string_lossy());
             note.exported_markdown_path = Some(path.to_string_lossy().to_string());
             conn.execute(

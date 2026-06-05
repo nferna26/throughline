@@ -1,0 +1,1039 @@
+//! Cloud AI providers (OpenAI, Anthropic, Codex-login) behind one dispatch that
+//! normalizes every provider into the existing `StreamEvent` Delta/Done/Error
+//! channel, so the reader cards are unchanged.
+//!
+//! - OpenAI + Local reuse `ai_client::run_chat_call` (OpenAI-compatible).
+//! - Anthropic uses its own `/v1/messages` named-event SSE protocol.
+//! - Codex reuses the credentials the official `codex login` already wrote to
+//!   `~/.codex/auth.json` (refresh reactively on 401), then calls the ChatGPT
+//!   backend Responses API. The app NEVER shells out and never references
+//!   OpenClaw — all Codex facts come from the official open-source openai/codex.
+//!
+//! Keys/tokens are read only here to set one request header and are never logged.
+
+use std::time::Duration;
+
+use anyhow::{anyhow, Context, Result};
+use base64::Engine as _;
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tokio::sync::mpsc;
+
+use crate::ai_client::{run_chat_call, ChatCallOpts, StreamEvent};
+use crate::settings::AiProvider;
+
+const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+const CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const CODEX_ORIGINATOR: &str = "codex_cli_rs";
+// Device-code login (app-owned, independent of the Codex CLI file). Endpoints +
+// flow from the official openai/codex (codex-rs/login/{device_code_auth,server}.rs).
+const CODEX_DEVICE_USERCODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
+const CODEX_DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
+const CODEX_DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
+const CODEX_DEVICE_VERIFICATION_URL: &str = "https://auth.openai.com/codex/device";
+
+/// Resolved per-call provider auth (the secret material, read just-in-time).
+pub enum ProviderAuth {
+    Local,
+    OpenAiKey(String),
+    AnthropicKey(String),
+    Codex,
+}
+
+/// A normalized provider call. `base_url`/`local_only` apply to Local only.
+pub struct ProviderCall {
+    pub provider: AiProvider,
+    pub model: String,
+    pub prompt: String,
+    pub max_tokens: Option<u32>,
+    pub timeout: Duration,
+    pub auth: ProviderAuth,
+    pub base_url: String,
+    pub local_only: bool,
+}
+
+/// Dispatch a call to the chosen provider, returning the same StreamEvent
+/// receiver every provider normalizes into.
+pub async fn run_provider_call(call: ProviderCall) -> Result<mpsc::Receiver<StreamEvent>> {
+    match call.provider {
+        AiProvider::Local => {
+            run_chat_call(ChatCallOpts {
+                base_url: call.base_url,
+                model: call.model,
+                local_only: true,
+                prompt: call.prompt,
+                stream: true,
+                timeout: call.timeout,
+                max_tokens: call.max_tokens,
+                auth_token: None,
+                cloud_openai: false,
+            })
+            .await
+        }
+        AiProvider::OpenAi => {
+            let key = match call.auth {
+                ProviderAuth::OpenAiKey(k) => k,
+                _ => return Err(anyhow!("OpenAI selected but no API key is configured")),
+            };
+            run_chat_call(ChatCallOpts {
+                base_url: OPENAI_BASE_URL.to_string(),
+                model: call.model,
+                local_only: false,
+                prompt: call.prompt,
+                stream: true,
+                timeout: call.timeout,
+                max_tokens: call.max_tokens,
+                auth_token: Some(key),
+                cloud_openai: true,
+            })
+            .await
+        }
+        AiProvider::Anthropic => {
+            let key = match call.auth {
+                ProviderAuth::AnthropicKey(k) => k,
+                _ => return Err(anyhow!("Anthropic selected but no API key is configured")),
+            };
+            run_anthropic(&call.model, &key, &call.prompt, call.max_tokens, call.timeout).await
+        }
+        AiProvider::Codex => {
+            run_codex(&call.model, &call.prompt, call.max_tokens, call.timeout).await
+        }
+        AiProvider::Disabled | AiProvider::Unset => {
+            Err(anyhow!("No AI provider chosen. Pick one in Settings → Assistance."))
+        }
+    }
+}
+
+// ── Shared SSE pump ─────────────────────────────────────────────────────────
+
+/// Per-line outcome from a provider's SSE parser.
+pub enum SseOutcome {
+    Delta(String),
+    Done,
+    Error(String),
+    Ignore,
+}
+
+/// Drive an SSE response body line-by-line through `parse`, emitting StreamEvents.
+/// Ends with a synthetic Done if the stream closes cleanly without a terminal event.
+async fn pump_sse<F>(resp: reqwest::Response, tx: mpsc::Sender<StreamEvent>, parse: F)
+where
+    F: Fn(&str) -> SseOutcome,
+{
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(b) => b,
+            Err(e) => {
+                let _ = tx.send(StreamEvent::Error { message: format!("stream error: {e}") }).await;
+                return;
+            }
+        };
+        buf.extend_from_slice(&chunk);
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let line_bytes = buf.drain(..=pos).collect::<Vec<u8>>();
+            let line = String::from_utf8_lossy(&line_bytes);
+            match parse(&line) {
+                SseOutcome::Delta(t) => {
+                    let _ = tx.send(StreamEvent::Delta { text: t }).await;
+                }
+                SseOutcome::Done => {
+                    let _ = tx.send(StreamEvent::Done).await;
+                    return;
+                }
+                SseOutcome::Error(m) => {
+                    let _ = tx.send(StreamEvent::Error { message: m }).await;
+                    return;
+                }
+                SseOutcome::Ignore => {}
+            }
+        }
+    }
+    let _ = tx.send(StreamEvent::Done).await;
+}
+
+/// Strip the `data:` prefix from an SSE line, returning the JSON payload (or None
+/// for `event:`/comment/blank lines that carry no data).
+fn sse_data_payload(line: &str) -> Option<&str> {
+    let t = line.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let payload = t.strip_prefix("data:")?.trim();
+    if payload.is_empty() || payload == "[DONE]" {
+        return None;
+    }
+    Some(payload)
+}
+
+// ── Anthropic (/v1/messages) ────────────────────────────────────────────────
+
+/// Map one Anthropic SSE line to an outcome. Only `content_block_delta` with a
+/// `text_delta` yields text; `message_stop` ends; an `error` event is fatal;
+/// everything else (message_start, ping, …) is ignored. Pure → unit-tested.
+pub fn parse_anthropic_line(line: &str) -> SseOutcome {
+    let Some(payload) = sse_data_payload(line) else { return SseOutcome::Ignore };
+    let v: serde_json::Value = match serde_json::from_str(payload) {
+        Ok(v) => v,
+        Err(_) => return SseOutcome::Ignore,
+    };
+    match v.get("type").and_then(|x| x.as_str()) {
+        Some("content_block_delta") => {
+            if v.pointer("/delta/type").and_then(|x| x.as_str()) == Some("text_delta") {
+                if let Some(t) = v.pointer("/delta/text").and_then(|x| x.as_str()) {
+                    return SseOutcome::Delta(t.to_string());
+                }
+            }
+            SseOutcome::Ignore
+        }
+        Some("message_stop") => SseOutcome::Done,
+        Some("error") => {
+            let msg = v
+                .pointer("/error/message")
+                .and_then(|x| x.as_str())
+                .unwrap_or("Anthropic stream error")
+                .to_string();
+            SseOutcome::Error(msg)
+        }
+        _ => SseOutcome::Ignore,
+    }
+}
+
+async fn run_anthropic(
+    model: &str,
+    key: &str,
+    prompt: &str,
+    max_tokens: Option<u32>,
+    timeout: Duration,
+) -> Result<mpsc::Receiver<StreamEvent>> {
+    let client = reqwest::Client::builder().timeout(timeout).build().context("reqwest build")?;
+    let body = json!({
+        "model": model,
+        "max_tokens": max_tokens.unwrap_or(1024),
+        "messages": [{ "role": "user", "content": prompt }],
+        "stream": true,
+    });
+    let key = key.to_string();
+    let model = model.to_string();
+    let (tx, rx) = mpsc::channel::<StreamEvent>(64);
+    tokio::spawn(async move {
+        let resp = client
+            .post(ANTHROPIC_URL)
+            .header("x-api-key", key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await;
+        let _ = &model;
+        match resp {
+            Ok(r) if r.status().is_success() => pump_sse(r, tx, parse_anthropic_line).await,
+            Ok(r) => {
+                let status = r.status();
+                let snippet = r.text().await.unwrap_or_default();
+                let _ = tx
+                    .send(StreamEvent::Error { message: humanize_http("Anthropic", status, &snippet) })
+                    .await;
+            }
+            Err(e) => {
+                let _ = tx.send(StreamEvent::Error { message: format!("Anthropic request failed: {e}") }).await;
+            }
+        }
+    });
+    Ok(rx)
+}
+
+// ── Codex (ChatGPT-login → Responses API) ───────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct CodexTokens {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id_token: Option<String>,
+    access_token: String,
+    refresh_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account_id: Option<String>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct CodexAuth {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth_mode: Option<String>,
+    #[serde(rename = "OPENAI_API_KEY", skip_serializing_if = "Option::is_none")]
+    openai_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tokens: Option<CodexTokens>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_refresh: Option<String>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
+}
+
+fn codex_home() -> std::path::PathBuf {
+    if let Ok(h) = std::env::var("CODEX_HOME") {
+        if !h.trim().is_empty() {
+            return std::path::PathBuf::from(h);
+        }
+    }
+    dirs::home_dir().unwrap_or_default().join(".codex")
+}
+
+fn codex_auth_path() -> std::path::PathBuf {
+    codex_home().join("auth.json")
+}
+
+fn read_codex_auth() -> Option<CodexAuth> {
+    let raw = std::fs::read_to_string(codex_auth_path()).ok()?;
+    serde_json::from_str::<CodexAuth>(&raw).ok()
+}
+
+/// True when usable ChatGPT-login Codex credentials exist (tokens with a
+/// non-empty access token). Cheap. Never returns or logs token values.
+/// NOTE: the app-owned half reads the Keychain (a macOS prompt), so this is NOT
+/// on the launch path — `build_dto` uses the persisted flag plus
+/// `codex_cli_auth_present` instead. Kept for request-time / test use.
+pub fn codex_creds_present() -> bool {
+    crate::keystore::has_codex_creds() || codex_cli_auth_present()
+}
+
+/// The no-prompt half: a usable Codex login in the CLI's own `~/.codex/auth.json`
+/// (a plain file read, never the Keychain). Safe to call on every launch.
+pub fn codex_cli_auth_present() -> bool {
+    read_codex_auth()
+        .and_then(|a| a.tokens)
+        .map(|t| !t.access_token.trim().is_empty() && !t.refresh_token.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// Atomically write auth.json back (temp file + rename), preserving fields we
+/// don't model via serde flatten. The app only ever rewrites it after a refresh.
+fn write_codex_auth(auth: &CodexAuth) -> Result<()> {
+    let path = codex_auth_path();
+    let tmp = path.with_extension("json.rgtmp");
+    let data = serde_json::to_string_pretty(auth).context("serialize codex auth")?;
+    std::fs::write(&tmp, data).context("write codex auth tmp")?;
+    std::fs::rename(&tmp, &path).context("rename codex auth")?;
+    Ok(())
+}
+
+// ── App-owned Codex credentials + device-code login ──
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct CodexAppCreds {
+    access_token: String,
+    refresh_token: String,
+    account_id: String,
+}
+
+/// Which store a set of Codex creds came from, so a refresh writes back correctly.
+#[derive(Clone, Copy, PartialEq)]
+enum CodexSource {
+    App,
+    File,
+}
+
+struct ResolvedCodex {
+    access_token: String,
+    refresh_token: String,
+    account_id: String,
+    source: CodexSource,
+}
+
+/// Resolve usable Codex creds, preferring the app-owned Keychain login (device
+/// code) over the Codex CLI's ~/.codex/auth.json. None if neither is complete.
+fn load_codex() -> Option<ResolvedCodex> {
+    if let Some(json) = crate::keystore::get_codex_creds() {
+        if let Ok(c) = serde_json::from_str::<CodexAppCreds>(&json) {
+            if !c.access_token.trim().is_empty()
+                && !c.refresh_token.trim().is_empty()
+                && !c.account_id.trim().is_empty()
+            {
+                return Some(ResolvedCodex {
+                    access_token: c.access_token,
+                    refresh_token: c.refresh_token,
+                    account_id: c.account_id,
+                    source: CodexSource::App,
+                });
+            }
+        }
+    }
+    let auth = read_codex_auth()?;
+    let t = auth.tokens?;
+    let account_id = t.account_id?;
+    if t.access_token.trim().is_empty() || t.refresh_token.trim().is_empty() {
+        return None;
+    }
+    Some(ResolvedCodex { access_token: t.access_token, refresh_token: t.refresh_token, account_id, source: CodexSource::File })
+}
+
+/// Extract chatgpt_account_id from a Codex id_token (JWT payload → the
+/// `https://api.openai.com/auth` claim namespace). Never logs the token.
+fn jwt_chatgpt_account_id(id_token: &str) -> Option<String> {
+    let payload = id_token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    v.get("https://api.openai.com/auth")?
+        .get("chatgpt_account_id")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+/// Refresh a resolved access token via the public OAuth client, persisting the
+/// rotated tokens back to whichever store they came from.
+async fn codex_refresh_resolved(client: &reqwest::Client, r: &mut ResolvedCodex) -> Result<String> {
+    let resp = client
+        .post(CODEX_TOKEN_URL)
+        .header("content-type", "application/json")
+        .json(&json!({ "client_id": CODEX_CLIENT_ID, "grant_type": "refresh_token", "refresh_token": r.refresh_token }))
+        .send()
+        .await
+        .context("codex token refresh request")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let snippet = resp.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "Codex token refresh failed (HTTP {status}). Sign in again. {}",
+            snippet.chars().take(160).collect::<String>()
+        ));
+    }
+    #[derive(Deserialize)]
+    struct RefreshResp { access_token: Option<String>, refresh_token: Option<String> }
+    let parsed: RefreshResp = resp.json().await.context("decode codex refresh response")?;
+    if let Some(at) = parsed.access_token { r.access_token = at; }
+    if let Some(rt) = parsed.refresh_token { r.refresh_token = rt; }
+    match r.source {
+        CodexSource::App => {
+            let creds = CodexAppCreds {
+                access_token: r.access_token.clone(),
+                refresh_token: r.refresh_token.clone(),
+                account_id: r.account_id.clone(),
+            };
+            crate::keystore::set_codex_creds(&serde_json::to_string(&creds).unwrap_or_default())
+                .map_err(|e| anyhow!("persist codex creds: {e}"))?;
+        }
+        CodexSource::File => {
+            if let Some(mut auth) = read_codex_auth() {
+                if let Some(t) = auth.tokens.as_mut() {
+                    t.access_token = r.access_token.clone();
+                    t.refresh_token = r.refresh_token.clone();
+                }
+                auth.last_refresh = Some(chrono::Utc::now().to_rfc3339());
+                let _ = write_codex_auth(&auth);
+            }
+        }
+    }
+    Ok(r.access_token.clone())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CodexDeviceStart {
+    pub device_auth_id: String,
+    pub user_code: String,
+    pub verification_url: String,
+    pub interval: u64,
+}
+
+/// Begin a device-code login: request a code to enter at the verification URL.
+pub async fn codex_device_start() -> Result<CodexDeviceStart> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+    let resp = client
+        .post(CODEX_DEVICE_USERCODE_URL)
+        .header("content-type", "application/json")
+        .json(&json!({ "client_id": CODEX_CLIENT_ID }))
+        .send()
+        .await
+        .context("codex device usercode request")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let snippet = resp.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "Could not start Codex device login (HTTP {status}). Device-code login may need enabling in your ChatGPT settings. {}",
+            snippet.chars().take(160).collect::<String>()
+        ));
+    }
+    #[derive(Deserialize)]
+    struct R {
+        device_auth_id: String,
+        #[serde(alias = "usercode")]
+        user_code: String,
+        // The endpoint returns interval as a STRING ("5"); accept string or number.
+        #[serde(default)]
+        interval: Option<serde_json::Value>,
+    }
+    let r: R = resp.json().await.context("decode device usercode response")?;
+    let interval = r
+        .interval
+        .as_ref()
+        .and_then(|v| match v {
+            serde_json::Value::String(s) => s.trim().parse::<u64>().ok(),
+            serde_json::Value::Number(n) => n.as_u64(),
+            _ => None,
+        })
+        .unwrap_or(5)
+        .clamp(2, 10);
+    Ok(CodexDeviceStart {
+        device_auth_id: r.device_auth_id,
+        user_code: r.user_code,
+        verification_url: CODEX_DEVICE_VERIFICATION_URL.to_string(),
+        interval,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CodexDevicePoll {
+    /// "pending" | "complete" | "denied"
+    pub status: String,
+    pub message: String,
+}
+
+/// Poll once for device-login completion. On success, exchanges the code and
+/// stores the app-owned creds in the Keychain.
+pub async fn codex_device_poll(device_auth_id: &str, user_code: &str) -> Result<CodexDevicePoll> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+    let resp = client
+        .post(CODEX_DEVICE_TOKEN_URL)
+        .header("content-type", "application/json")
+        .json(&json!({ "device_auth_id": device_auth_id, "user_code": user_code }))
+        .send()
+        .await
+        .context("codex device token poll")?;
+    let status = resp.status();
+    if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(CodexDevicePoll { status: "pending".into(), message: "Waiting for approval…".into() });
+    }
+    if !status.is_success() {
+        let snippet = resp.text().await.unwrap_or_default();
+        return Ok(CodexDevicePoll { status: "denied".into(), message: format!("HTTP {status}: {}", snippet.chars().take(120).collect::<String>()) });
+    }
+    #[derive(Deserialize)]
+    struct Code { authorization_code: String, code_verifier: String }
+    let code: Code = resp.json().await.context("decode device token response")?;
+    let creds = codex_exchange_code(&client, &code.authorization_code, &code.code_verifier).await?;
+    crate::keystore::set_codex_creds(&serde_json::to_string(&creds).unwrap_or_default())
+        .map_err(|e| anyhow!("store codex creds: {e}"))?;
+    Ok(CodexDevicePoll { status: "complete".into(), message: "Signed in with ChatGPT.".into() })
+}
+
+/// Exchange the device authorization_code for tokens (form-encoded), then decode
+/// the id_token for the account id. Skips the optional api-key token-exchange —
+/// the ChatGPT Responses path uses the access_token directly.
+async fn codex_exchange_code(client: &reqwest::Client, code: &str, code_verifier: &str) -> Result<CodexAppCreds> {
+    let resp = client
+        .post(CODEX_TOKEN_URL)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", CODEX_DEVICE_REDIRECT_URI),
+            ("client_id", CODEX_CLIENT_ID),
+            ("code_verifier", code_verifier),
+        ])
+        .send()
+        .await
+        .context("codex code exchange")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let snippet = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("Codex code exchange failed (HTTP {status}). {}", snippet.chars().take(160).collect::<String>()));
+    }
+    #[derive(Deserialize)]
+    struct T { id_token: String, access_token: String, refresh_token: String }
+    let t: T = resp.json().await.context("decode codex token response")?;
+    let account_id = jwt_chatgpt_account_id(&t.id_token)
+        .ok_or_else(|| anyhow!("Codex token is missing a ChatGPT account id"))?;
+    Ok(CodexAppCreds { access_token: t.access_token, refresh_token: t.refresh_token, account_id })
+}
+
+/// The ChatGPT Codex Responses backend REQUIRES a non-empty `instructions`
+/// (system) field. We keep the reader prompt as the user `input` and supply a
+/// short instruction so the request validates.
+const CODEX_INSTRUCTIONS: &str = "You are a concise, helpful reading tutor. Answer the reader's request directly.";
+
+fn codex_responses_body(model: &str, prompt: &str) -> serde_json::Value {
+    json!({
+        "model": model,
+        "instructions": CODEX_INSTRUCTIONS,
+        "input": [
+            { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": prompt }] }
+        ],
+        "stream": true,
+        "store": false,
+    })
+}
+
+/// Map one Codex Responses-API SSE line to an outcome. Pure → unit-tested.
+pub fn parse_codex_line(line: &str) -> SseOutcome {
+    let Some(payload) = sse_data_payload(line) else { return SseOutcome::Ignore };
+    let v: serde_json::Value = match serde_json::from_str(payload) {
+        Ok(v) => v,
+        Err(_) => return SseOutcome::Ignore,
+    };
+    match v.get("type").and_then(|x| x.as_str()) {
+        Some("response.output_text.delta") => {
+            match v.get("delta").and_then(|x| x.as_str()) {
+                Some(t) => SseOutcome::Delta(t.to_string()),
+                None => SseOutcome::Ignore,
+            }
+        }
+        Some("response.completed") => SseOutcome::Done,
+        Some("response.failed") | Some("error") | Some("response.error") => {
+            let msg = v
+                .pointer("/response/error/message")
+                .or_else(|| v.pointer("/error/message"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("Codex stream error")
+                .to_string();
+            SseOutcome::Error(msg)
+        }
+        _ => SseOutcome::Ignore,
+    }
+}
+
+async fn codex_post(
+    client: &reqwest::Client,
+    access_token: &str,
+    account_id: &str,
+    body: &serde_json::Value,
+) -> reqwest::Result<reqwest::Response> {
+    client
+        .post(CODEX_RESPONSES_URL)
+        .bearer_auth(access_token)
+        .header("ChatGPT-Account-ID", account_id)
+        .header("originator", CODEX_ORIGINATOR)
+        .header("content-type", "application/json")
+        .header("accept", "text/event-stream")
+        .json(body)
+        .send()
+        .await
+}
+
+async fn run_codex(
+    model: &str,
+    prompt: &str,
+    _max_tokens: Option<u32>,
+    timeout: Duration,
+) -> Result<mpsc::Receiver<StreamEvent>> {
+    let mut creds = load_codex().ok_or_else(|| {
+        anyhow!("No Codex login found. Sign in with ChatGPT in Settings → Assistance, or run `codex login`.")
+    })?;
+    let client = reqwest::Client::builder().timeout(timeout).build().context("reqwest build")?;
+    let body = codex_responses_body(model, prompt);
+
+    let mut resp = codex_post(&client, &creds.access_token, &creds.account_id, &body).await;
+
+    // Reactive refresh: one retry if the token was rejected.
+    if let Ok(r) = &resp {
+        if r.status() == reqwest::StatusCode::UNAUTHORIZED {
+            let fresh = codex_refresh_resolved(&client, &mut creds).await?;
+            resp = codex_post(&client, &fresh, &creds.account_id, &body).await;
+        }
+    }
+
+    let (tx, rx) = mpsc::channel::<StreamEvent>(64);
+    tokio::spawn(async move {
+        match resp {
+            Ok(r) if r.status().is_success() => pump_sse(r, tx, parse_codex_line).await,
+            Ok(r) => {
+                let status = r.status();
+                let snippet = r.text().await.unwrap_or_default();
+                let _ = tx.send(StreamEvent::Error { message: humanize_http("Codex", status, &snippet) }).await;
+            }
+            Err(e) => {
+                let _ = tx.send(StreamEvent::Error { message: format!("Codex request failed: {e}") }).await;
+            }
+        }
+    });
+    Ok(rx)
+}
+
+// ── Connection tests (onboarding "Test" button + live checks) ───────────────
+
+/// (reachable, resolved_model_id, human message).
+pub type ConnTest = (bool, Option<String>, String);
+
+/// Pick the best chat model from an OpenAI model list: prefer the bare flagship
+/// alias, else the newest non-mini/nano/specialized `gpt-5.x`. Pure → testable.
+pub fn best_gpt5_model(ids: &[String]) -> Option<String> {
+    if ids.iter().any(|i| i == "gpt-5.5") {
+        return Some("gpt-5.5".to_string());
+    }
+    let mut candidates: Vec<&String> = ids
+        .iter()
+        .filter(|i| i.starts_with("gpt-5"))
+        .filter(|i| !["mini", "nano", "chat", "audio", "realtime", "codex"].iter().any(|x| i.contains(x)))
+        .collect();
+    // Newest-looking last (lexical works for gpt-5, gpt-5.1, gpt-5.5, dated snapshots).
+    candidates.sort();
+    candidates.last().map(|s| s.to_string())
+}
+
+/// Dispatch a connection test for a provider. `key` overrides the stored key (so
+/// onboarding can test before saving). Never logs the key.
+pub async fn test_provider(
+    provider: AiProvider,
+    key: Option<String>,
+    base_url: &str,
+    model: &str,
+    timeout: Duration,
+) -> ConnTest {
+    match provider {
+        AiProvider::Local => match crate::ai_client::test_connection(base_url, true).await {
+            Ok((true, m)) => {
+                let label = m.clone().unwrap_or_else(|| "(none listed)".to_string());
+                (true, m, format!("Reachable on this Mac. First model: {label}"))
+            }
+            Ok((false, _)) => (false, None, format!("Could not reach {base_url}/models. Is your local server (LM Studio) running?")),
+            Err(e) => (false, None, format!("{e}")),
+        },
+        AiProvider::OpenAi => match key {
+            Some(k) => test_openai(&k, timeout).await,
+            None => (false, None, "Add your OpenAI API key first.".to_string()),
+        },
+        AiProvider::Anthropic => match key {
+            Some(k) => test_anthropic(&k, model, timeout).await,
+            None => (false, None, "Add your Anthropic API key first.".to_string()),
+        },
+        AiProvider::Codex => test_codex(model, timeout).await,
+        AiProvider::Disabled | AiProvider::Unset => (false, None, "Choose a provider first.".to_string()),
+    }
+}
+
+async fn test_openai(key: &str, timeout: Duration) -> ConnTest {
+    let client = match reqwest::Client::builder().timeout(timeout).build() {
+        Ok(c) => c,
+        Err(e) => return (false, None, format!("client build: {e}")),
+    };
+    match client.get(format!("{OPENAI_BASE_URL}/models")).bearer_auth(key).send().await {
+        Ok(r) if r.status().is_success() => {
+            #[derive(Deserialize)]
+            struct M { id: String }
+            #[derive(Deserialize)]
+            struct R { data: Option<Vec<M>> }
+            let parsed: R = r.json().await.unwrap_or(R { data: None });
+            let ids: Vec<String> = parsed.data.unwrap_or_default().into_iter().map(|m| m.id).collect();
+            let best = best_gpt5_model(&ids);
+            let label = best.clone().unwrap_or_else(|| "gpt-5.5".to_string());
+            (true, best, format!("Connected to OpenAI. Best available model: {label}"))
+        }
+        Ok(r) => {
+            let status = r.status();
+            (false, None, humanize_http("OpenAI", status, &r.text().await.unwrap_or_default()))
+        }
+        Err(e) => (false, None, format!("OpenAI request failed: {e}")),
+    }
+}
+
+async fn test_anthropic(key: &str, model: &str, timeout: Duration) -> ConnTest {
+    let client = match reqwest::Client::builder().timeout(timeout).build() {
+        Ok(c) => c,
+        Err(e) => return (false, None, format!("client build: {e}")),
+    };
+    let body = json!({ "model": model, "max_tokens": 1, "messages": [{ "role": "user", "content": "ping" }] });
+    match client
+        .post(ANTHROPIC_URL)
+        .header("x-api-key", key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => (true, Some(model.to_string()), format!("Connected to Anthropic ({model}).")),
+        Ok(r) if r.status().as_u16() == 400 => {
+            // Auth passed (a 400 means the key worked but the body/model needs a tweak).
+            (true, Some(model.to_string()), "Anthropic key works. Double-check the model id.".to_string())
+        }
+        Ok(r) => {
+            let status = r.status();
+            (false, None, humanize_http("Anthropic", status, &r.text().await.unwrap_or_default()))
+        }
+        Err(e) => (false, None, format!("Anthropic request failed: {e}")),
+    }
+}
+
+async fn test_codex(model: &str, timeout: Duration) -> ConnTest {
+    let mut creds = match load_codex() {
+        Some(c) => c,
+        None => return (false, None, "No Codex login found. Sign in with ChatGPT below, or run `codex login`.".to_string()),
+    };
+    let client = match reqwest::Client::builder().timeout(timeout).build() {
+        Ok(c) => c,
+        Err(e) => return (false, None, format!("client build: {e}")),
+    };
+    let body = codex_responses_body(model, "ping");
+    let mut resp = codex_post(&client, &creds.access_token, &creds.account_id, &body).await;
+    if let Ok(r) = &resp {
+        if r.status() == reqwest::StatusCode::UNAUTHORIZED {
+            match codex_refresh_resolved(&client, &mut creds).await {
+                Ok(fresh) => { resp = codex_post(&client, &fresh, &creds.account_id, &body).await; }
+                Err(e) => return (false, None, format!("{e}")),
+            }
+        }
+    }
+    match resp {
+        Ok(r) if r.status().is_success() => (true, Some(model.to_string()), "Connected via your Codex login.".to_string()),
+        Ok(r) => {
+            let status = r.status();
+            (false, None, humanize_http("Codex", status, &r.text().await.unwrap_or_default()))
+        }
+        Err(e) => (false, None, format!("Codex request failed: {e}")),
+    }
+}
+
+fn humanize_http(provider: &str, status: reqwest::StatusCode, snippet: &str) -> String {
+    let s = snippet.chars().take(300).collect::<String>();
+    match status.as_u16() {
+        401 => format!("{provider}: authentication failed (check your API key)."),
+        403 => format!("{provider}: access denied (403). {s}"),
+        429 => format!("{provider}: rate limited (429). Try again shortly."),
+        _ => format!("{provider}: HTTP {status}. {s}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn is_delta(o: SseOutcome, expect: &str) -> bool {
+        matches!(o, SseOutcome::Delta(t) if t == expect)
+    }
+
+    #[test]
+    fn anthropic_stream_maps_text_delta_stop_and_error() {
+        assert!(matches!(parse_anthropic_line("event: message_start"), SseOutcome::Ignore));
+        assert!(matches!(
+            parse_anthropic_line(r#"data: {"type":"message_start","message":{}}"#),
+            SseOutcome::Ignore
+        ));
+        assert!(is_delta(
+            parse_anthropic_line(r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#),
+            "Hello",
+        ));
+        // input_json_delta (tool calls) is not text → ignored
+        assert!(matches!(
+            parse_anthropic_line(r#"data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}"#),
+            SseOutcome::Ignore
+        ));
+        assert!(matches!(parse_anthropic_line(r#"data: {"type":"ping"}"#), SseOutcome::Ignore));
+        assert!(matches!(parse_anthropic_line(r#"data: {"type":"message_stop"}"#), SseOutcome::Done));
+        match parse_anthropic_line(r#"data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#) {
+            SseOutcome::Error(m) => assert_eq!(m, "Overloaded"),
+            _ => panic!("expected Error"),
+        }
+    }
+
+    #[test]
+    fn codex_stream_maps_output_text_delta_completed_and_failed() {
+        assert!(is_delta(
+            parse_codex_line(r#"data: {"type":"response.output_text.delta","delta":"Hi"}"#),
+            "Hi",
+        ));
+        assert!(matches!(parse_codex_line(r#"data: {"type":"response.created"}"#), SseOutcome::Ignore));
+        assert!(matches!(parse_codex_line(r#"data: {"type":"response.completed"}"#), SseOutcome::Done));
+        match parse_codex_line(r#"data: {"type":"response.failed","response":{"error":{"message":"boom"}}}"#) {
+            SseOutcome::Error(m) => assert_eq!(m, "boom"),
+            _ => panic!("expected Error"),
+        }
+    }
+
+    #[test]
+    fn sse_data_payload_strips_prefix_and_skips_noise() {
+        assert_eq!(sse_data_payload("data: {\"a\":1}"), Some("{\"a\":1}"));
+        assert_eq!(sse_data_payload("event: ping"), None);
+        assert_eq!(sse_data_payload(""), None);
+        assert_eq!(sse_data_payload("data: [DONE]"), None);
+    }
+
+    #[test]
+    fn codex_auth_parses_chatgpt_login_shape_and_present_check() {
+        // Fabricated shape from the public openai/codex source — NOT a real token.
+        let raw = r#"{
+          "auth_mode":"chatgpt",
+          "OPENAI_API_KEY":null,
+          "tokens":{"id_token":"jwt","access_token":"at","refresh_token":"rt","account_id":"acct"},
+          "last_refresh":"2026-04-17T00:00:00Z",
+          "some_future_field":123
+        }"#;
+        let auth: CodexAuth = serde_json::from_str(raw).unwrap();
+        let t = auth.tokens.as_ref().unwrap();
+        assert_eq!(t.access_token, "at");
+        assert_eq!(t.account_id.as_deref(), Some("acct"));
+        // Unknown fields are preserved for round-trip write-back.
+        let reser = serde_json::to_string(&auth).unwrap();
+        assert!(reser.contains("some_future_field"));
+        assert!(reser.contains("\"OPENAI_API_KEY\"") == false || reser.contains("null") == false);
+    }
+
+    #[test]
+    fn best_gpt5_model_prefers_flagship_then_newest_nonspecialized() {
+        let ids = vec![
+            "gpt-4o".into(), "gpt-5".into(), "gpt-5-mini".into(),
+            "gpt-5.5".into(), "gpt-5.5-2026-04-23".into(), "gpt-5-codex".into(),
+        ];
+        assert_eq!(best_gpt5_model(&ids).as_deref(), Some("gpt-5.5"));
+        // Without the bare alias, pick the newest non-specialized gpt-5.x.
+        let ids2 = vec!["gpt-4o".into(), "gpt-5".into(), "gpt-5.1".into(), "gpt-5-mini".into()];
+        assert_eq!(best_gpt5_model(&ids2).as_deref(), Some("gpt-5.1"));
+        // No gpt-5 family at all → None.
+        assert_eq!(best_gpt5_model(&["gpt-4o".to_string()]), None);
+    }
+
+    #[test]
+    fn jwt_decodes_chatgpt_account_id_from_id_token() {
+        let payload = serde_json::json!({
+            "https://api.openai.com/auth": { "chatgpt_account_id": "acct-xyz" },
+            "exp": 9999999999u64
+        });
+        let p = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let token = format!("aGVhZGVy.{p}.c2ln");
+        assert_eq!(jwt_chatgpt_account_id(&token).as_deref(), Some("acct-xyz"));
+        // Malformed / missing claim → None (never panics).
+        assert_eq!(jwt_chatgpt_account_id("not-a-jwt"), None);
+        let empty = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"{}");
+        assert_eq!(jwt_chatgpt_account_id(&format!("h.{empty}.s")), None);
+    }
+
+    #[test]
+    fn codex_body_is_a_streaming_responses_request() {
+        let b = codex_responses_body("gpt-5.5", "hello");
+        assert_eq!(b["model"], "gpt-5.5");
+        assert_eq!(b["input"][0]["content"][0]["text"], "hello");
+        assert_eq!(b["stream"], true);
+        assert!(b["instructions"].as_str().map(|s| !s.is_empty()).unwrap_or(false));
+    }
+
+    // ── Live checks (ignore-gated; network + real creds; never run in CI) ──
+    // Run e.g.: `cargo test --lib -- --ignored live_anthropic --nocapture`.
+    // They read keys from env / ~/.codex and never print the secret.
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_anthropic() {
+        let key = std::env::var("ANTHROPIC_API_KEY").expect("set ANTHROPIC_API_KEY");
+        let (ok, model, msg) =
+            test_provider(AiProvider::Anthropic, Some(key.clone()), "", "claude-opus-4-8", Duration::from_secs(25)).await;
+        println!("[anthropic] connect ok={ok} model={model:?} :: {msg}");
+        assert!(ok, "anthropic connection failed: {msg}");
+        // End-to-end streaming smoke: one tiny prompt → Delta(s) then Done.
+        let mut rx = run_anthropic("claude-opus-4-8", &key, "Reply with exactly one word: pong", Some(16), Duration::from_secs(25))
+            .await
+            .expect("run_anthropic");
+        let mut got = String::new();
+        let mut done = false;
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                StreamEvent::Delta { text } => got.push_str(&text),
+                StreamEvent::Done => { done = true; break; }
+                StreamEvent::Error { message } => panic!("anthropic stream error: {message}"),
+            }
+        }
+        println!("[anthropic] stream reply = {got:?}");
+        assert!(done && !got.trim().is_empty(), "expected a streamed reply");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_codex_device_start() {
+        // Verifies the device-auth endpoint + client_id (non-interactive). The full
+        // approve→poll→exchange is done by the user in the app UI.
+        match codex_device_start().await {
+            Ok(s) => {
+                println!("[codex-device] device_auth_id={}", s.device_auth_id);
+                println!("[codex-device] user_code={} url={} interval={}", s.user_code, s.verification_url, s.interval);
+                assert!(!s.user_code.trim().is_empty(), "expected a user code");
+                assert!(!s.device_auth_id.trim().is_empty(), "expected a device_auth_id");
+                assert!(s.verification_url.contains("codex/device"));
+            }
+            Err(e) => panic!("device start failed: {e}"),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_codex_device_finish() {
+        // Run AFTER approving a device code in the browser, passing the ids inline:
+        //   RG_DEVICE_AUTH_ID=… RG_USER_CODE=… cargo test --lib -- --ignored live_codex_device_finish --nocapture
+        let dai = std::env::var("RG_DEVICE_AUTH_ID").expect("set RG_DEVICE_AUTH_ID");
+        let uc = std::env::var("RG_USER_CODE").expect("set RG_USER_CODE");
+        let mut done = false;
+        for _ in 0..18 {
+            let r = codex_device_poll(&dai, &uc).await.expect("poll");
+            println!("[codex-device] poll status={} :: {}", r.status, r.message);
+            if r.status == "complete" { done = true; break; }
+            if r.status == "denied" { panic!("denied: {}", r.message); }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+        assert!(done, "device login did not complete in time");
+        // App-owned creds are now stored (in-memory keystore under test).
+        assert!(crate::keystore::has_codex_creds(), "app-owned creds were not stored");
+        // And a real Codex call must work using the app-owned creds.
+        let (ok, model, msg) = test_provider(AiProvider::Codex, None, "", "gpt-5.5", Duration::from_secs(30)).await;
+        println!("[codex-device] post-login codex test ok={ok} model={model:?} :: {msg}");
+        assert!(ok, "codex call with app-owned creds failed: {msg}");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_codex() {
+        let (ok, model, msg) =
+            test_provider(AiProvider::Codex, None, "", "gpt-5.5", Duration::from_secs(30)).await;
+        println!("[codex] connect ok={ok} model={model:?} :: {msg}");
+        // End-to-end stream: verify response.output_text.delta → text actually flows.
+        if ok {
+            match run_codex("gpt-5.5", "Reply with exactly one word: pong", Some(16), Duration::from_secs(30)).await {
+                Ok(mut rx) => {
+                    let mut got = String::new();
+                    while let Some(ev) = rx.recv().await {
+                        match ev {
+                            StreamEvent::Delta { text } => got.push_str(&text),
+                            StreamEvent::Done => break,
+                            StreamEvent::Error { message } => { println!("[codex] stream error: {message}"); break; }
+                        }
+                    }
+                    println!("[codex] stream reply = {got:?}");
+                }
+                Err(e) => println!("[codex] run_codex error: {e}"),
+            }
+        }
+        // Codex backend is an unofficial/fragile contract — report, don't hard-fail.
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_openai() {
+        let key = std::env::var("OPENAI_API_KEY").expect("set OPENAI_API_KEY");
+        let (ok, model, msg) =
+            test_provider(AiProvider::OpenAi, Some(key.clone()), "", "", Duration::from_secs(25)).await;
+        println!("[openai] connect ok={ok} model={model:?} :: {msg}");
+        assert!(ok, "openai connection failed: {msg}");
+        // End-to-end stream via the real dispatch (max_completion_tokens path).
+        let call = ProviderCall {
+            provider: AiProvider::OpenAi,
+            model: model.unwrap_or_else(|| "gpt-5.5".to_string()),
+            prompt: "Reply with exactly one word: pong".to_string(),
+            max_tokens: Some(256),
+            timeout: Duration::from_secs(30),
+            auth: ProviderAuth::OpenAiKey(key),
+            base_url: String::new(),
+            local_only: false,
+        };
+        let mut rx = run_provider_call(call).await.expect("run_provider_call");
+        let mut got = String::new();
+        let mut done = false;
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                StreamEvent::Delta { text } => got.push_str(&text),
+                StreamEvent::Done => { done = true; break; }
+                StreamEvent::Error { message } => panic!("openai stream error: {message}"),
+            }
+        }
+        println!("[openai] stream reply = {got:?}");
+        assert!(done && !got.trim().is_empty(), "expected a streamed reply");
+    }
+}

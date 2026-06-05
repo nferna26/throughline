@@ -16,10 +16,15 @@ pub fn cmd_api_version() -> u32 {
 }
 
 #[tauri::command]
-pub fn cmd_paths_info() -> Result<serde_json::Value, AppError> {
+pub fn cmd_paths_info(state: State<DbState>) -> Result<serde_json::Value, AppError> {
     let app = paths::app_support_dir()?;
     let db = paths::db_path()?;
-    let export = paths::default_export_root()?;
+    // Report the EFFECTIVE export root (configured path or default), not the
+    // hardcoded default — otherwise this disagrees with where exports go.
+    let export = {
+        let conn = state.0.lock()?;
+        crate::export::root_for(&conn)
+    };
     Ok(serde_json::json!({
         "app_support": app.to_string_lossy(),
         "db_path": db.to_string_lossy(),
@@ -42,12 +47,13 @@ pub fn cmd_set_export_path(path: String, state: State<DbState>) -> Result<settin
 
 #[tauri::command]
 pub fn cmd_set_ai_settings(
+    provider: Option<String>,
     base_url: Option<String>,
     model: Option<String>,
-    local_only: Option<bool>,
     retention_days: Option<i64>,
     state: State<DbState>,
 ) -> Result<settings::SettingsDto, AppError> {
+    use settings::AiProvider;
     let conn = state.0.lock()?;
     if let Some(days) = retention_days {
         // adr-001: clamp to >= 0 (0 disables the sweep / keeps everything).
@@ -55,32 +61,83 @@ pub fn cmd_set_ai_settings(
         settings::set_string(&conn, settings::KEY_AI_RETENTION_DAYS, &days.to_string())
             .map_err(AppError::from)?;
     }
+
+    // Provider choice (authoritative). Stamps the onboarding-complete flag once.
+    if let Some(p) = provider.as_deref() {
+        let prov = AiProvider::from_str(p);
+        if matches!(prov, AiProvider::Unset) {
+            return Err(AppError::validation(format!("unknown AI provider: {p:?}")));
+        }
+        settings::set_string(&conn, settings::KEY_AI_PROVIDER, prov.as_str()).map_err(AppError::from)?;
+        // Keep the legacy ai_local_only flag in sync for any old reader of it.
+        settings::set_string(
+            &conn,
+            settings::KEY_LOCAL_ONLY,
+            if matches!(prov, AiProvider::Local) { "true" } else { "false" },
+        )
+        .map_err(AppError::from)?;
+        if settings::get_string(&conn, settings::KEY_AI_PROVIDER_CHOSEN_AT).is_none() {
+            settings::set_string(
+                &conn,
+                settings::KEY_AI_PROVIDER_CHOSEN_AT,
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .map_err(AppError::from)?;
+        }
+        if let Some(m) = model.as_deref() {
+            settings::set_ai_model_for(&conn, prov, m).map_err(AppError::from)?;
+        }
+    } else if let Some(m) = model.as_deref() {
+        // No provider in this call → the model edits the CURRENT provider's model
+        // (falling back to Local) so Settings can tweak a model without re-choosing.
+        let cur = settings::get_ai_provider(&conn);
+        let target = if cur.is_remote() || matches!(cur, AiProvider::Local) { cur } else { AiProvider::Local };
+        settings::set_ai_model_for(&conn, target, m).map_err(AppError::from)?;
+    }
+
+    // The base_url slot is LOCAL-ONLY: it must be a loopback host. Cloud endpoints
+    // are code constants, never user-set, so a typo can never redirect a key.
     if let Some(u) = base_url.as_ref() {
-        // Validate against the *desired* local_only setting (the one in this call,
-        // or the existing one). This prevents saving a remote URL while local-only
-        // is still ON.
-        let effective_local_only = local_only.unwrap_or_else(|| settings::get_local_only(&conn));
-        ai_client::validate_base_url(u, effective_local_only).map_err(AppError::from)?;
+        ai_client::validate_base_url(u, true).map_err(|_| {
+            AppError::config(format!(
+                "The local AI base URL must be a loopback address (localhost / 127.0.0.1). Got: {u}"
+            ))
+        })?;
         settings::set_string(&conn, settings::KEY_AI_BASE_URL, u.trim()).map_err(AppError::from)?;
     }
-    if let Some(m) = model.as_ref() {
-        settings::set_string(&conn, settings::KEY_AI_MODEL, m.trim()).map_err(AppError::from)?;
+
+    settings::build_dto(&conn).map_err(AppError::from)
+}
+
+/// Store a cloud provider's API key in the OS Keychain. The key is NEVER echoed
+/// back, logged, written to the DB, or returned by any command — only the
+/// resulting `ai_key_present_*` boolean reaches the frontend.
+#[tauri::command]
+pub fn cmd_set_ai_key(
+    provider: String,
+    key: String,
+    state: State<DbState>,
+) -> Result<settings::SettingsDto, AppError> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::validation("API key is empty."));
     }
-    if let Some(lo) = local_only {
-        settings::set_string(&conn, settings::KEY_LOCAL_ONLY, if lo { "true" } else { "false" })
-            .map_err(AppError::from)?;
-        // When flipping local-only back ON, re-validate the stored URL — if it
-        // is now non-loopback, refuse the flip and tell the user.
-        if lo {
-            let url = settings::get_ai_base_url(&conn);
-            if ai_client::validate_base_url(&url, true).is_err() {
-                settings::set_string(&conn, settings::KEY_LOCAL_ONLY, "false").ok();
-                return Err(AppError::config(format!(
-                    "Cannot turn Local-only mode ON while AI base URL is non-loopback ({}). Change the URL first.",
-                    url
-                )));
-            }
-        }
-    }
+    crate::keystore::set_key(&provider, trimmed)
+        .map_err(|e| AppError::config(format!("Could not store the API key: {e}")))?;
+    let conn = state.0.lock()?;
+    settings::mark_key_present(&conn, &provider, true);
+    settings::build_dto(&conn).map_err(AppError::from)
+}
+
+/// Delete a cloud provider's stored API key (idempotent).
+#[tauri::command]
+pub fn cmd_clear_ai_key(
+    provider: String,
+    state: State<DbState>,
+) -> Result<settings::SettingsDto, AppError> {
+    crate::keystore::clear_key(&provider)
+        .map_err(|e| AppError::config(format!("Could not clear the API key: {e}")))?;
+    let conn = state.0.lock()?;
+    settings::mark_key_present(&conn, &provider, false);
     settings::build_dto(&conn).map_err(AppError::from)
 }

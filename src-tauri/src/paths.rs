@@ -2,10 +2,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 pub fn app_support_dir() -> Result<PathBuf> {
-    // Acceptance/test binaries set READINGGYM_DATA_DIR via `bin_guardrail::init_isolated_data_dir`
+    // Acceptance/test binaries set THROUGHLINE_DATA_DIR via `bin_guardrail::init_isolated_data_dir`
     // so they never touch the user's real Application Support directory. Production
-    // (`reading-gym` main binary) never sets it, so it resolves to the OS path below.
-    if let Ok(override_path) = std::env::var("READINGGYM_DATA_DIR") {
+    // (`throughline` main binary) never sets it, so it resolves to the OS path below.
+    if let Ok(override_path) = std::env::var("THROUGHLINE_DATA_DIR") {
         if !override_path.trim().is_empty() {
             return Ok(PathBuf::from(override_path));
         }
@@ -19,7 +19,7 @@ pub fn app_support_dir() -> Result<PathBuf> {
     #[cfg(test)]
     {
         let test_dir = std::env::temp_dir()
-            .join("readinggym-test")
+            .join("throughline-test")
             .join(std::process::id().to_string());
         std::fs::create_dir_all(&test_dir)
             .context("create cfg(test) data dir")?;
@@ -28,7 +28,7 @@ pub fn app_support_dir() -> Result<PathBuf> {
     #[cfg(not(test))]
     {
         let home = dirs::home_dir().context("no home dir")?;
-        Ok(home.join("Library").join("Application Support").join("ReadingGym"))
+        Ok(home.join("Library").join("Application Support").join("Throughline"))
     }
 }
 
@@ -47,7 +47,7 @@ pub fn book_dir(book_id: &str) -> Result<PathBuf> {
 pub fn default_export_root() -> Result<PathBuf> {
     // Acceptance/test binaries set this via `bin_guardrail::init_isolated_data_dir`
     // to avoid scattering stub Markdown into the user's real GBrain folder.
-    if let Ok(override_path) = std::env::var("READINGGYM_EXPORT_DIR") {
+    if let Ok(override_path) = std::env::var("THROUGHLINE_EXPORT_DIR") {
         if !override_path.trim().is_empty() {
             return Ok(PathBuf::from(override_path));
         }
@@ -71,7 +71,7 @@ pub fn ensure_dirs() -> Result<()> {
 /// leaves the destination untouched. On failure, the temp file is cleaned up so
 /// no `.tmp` litter is left behind.
 ///
-/// This is the durability primitive for ReadingGym exports — Markdown is the
+/// This is the durability primitive for Throughline exports — Markdown is the
 /// canonical artifact per the PRD, so a half-written export would violate the
 /// "the rest of the app can die and the notes are still readable" promise.
 pub fn atomic_write_string(dest: &std::path::Path, content: &str) -> Result<()> {
@@ -125,10 +125,10 @@ fn nanos_suffix() -> u128 {
         .unwrap_or(0)
 }
 
-/// Crate-wide mutex used by tests that mutate `READINGGYM_DATA_DIR` or
-/// `READINGGYM_EXPORT_DIR`. These env vars are process-global, so concurrent
+/// Crate-wide mutex used by tests that mutate `THROUGHLINE_DATA_DIR` or
+/// `THROUGHLINE_EXPORT_DIR`. These env vars are process-global, so concurrent
 /// tests that set them will race. Any test that calls `init_isolated_data_dir`,
-/// `set_var(READINGGYM_*)`, or `db::open_and_migrate` (which reads the dir
+/// `set_var(THROUGHLINE_*)`, or `db::open_and_migrate` (which reads the dir
 /// indirectly) should acquire this lock first.
 ///
 /// We use `std::sync::Mutex` so the mutex is poison-tolerant; the helper
@@ -155,7 +155,7 @@ mod tests {
     fn cfg_test_app_support_dir_is_under_temp() {
         let _g = lock_env_for_test();
         // Make sure no override is set, so we exercise the real branch.
-        unsafe { std::env::remove_var("READINGGYM_DATA_DIR"); }
+        unsafe { std::env::remove_var("THROUGHLINE_DATA_DIR"); }
         let resolved = app_support_dir().expect("app_support_dir under cfg(test)");
         let sys_temp = std::env::temp_dir();
         assert!(
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn atomic_write_creates_file() {
-        let dir = std::env::temp_dir().join(format!("rg-atomic-{}", nanos_suffix()));
+        let dir = std::env::temp_dir().join(format!("tl-atomic-{}", nanos_suffix()));
         std::fs::create_dir_all(&dir).unwrap();
         let dest = dir.join("note.md");
         atomic_write_string(&dest, "hello").unwrap();
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn atomic_write_overwrites_existing_atomically() {
-        let dir = std::env::temp_dir().join(format!("rg-atomic-overwrite-{}", nanos_suffix()));
+        let dir = std::env::temp_dir().join(format!("tl-atomic-overwrite-{}", nanos_suffix()));
         std::fs::create_dir_all(&dir).unwrap();
         let dest = dir.join("note.md");
         std::fs::write(&dest, "original").unwrap();
@@ -194,7 +194,7 @@ mod tests {
     /// `EISDIR` on Unix.
     #[test]
     fn atomic_write_failure_preserves_existing_and_cleans_up_tmp() {
-        let dir = std::env::temp_dir().join(format!("rg-atomic-fail-{}", nanos_suffix()));
+        let dir = std::env::temp_dir().join(format!("tl-atomic-fail-{}", nanos_suffix()));
         std::fs::create_dir_all(&dir).unwrap();
         // Pre-existing real note next to where we'll attempt to write.
         let real_note = dir.join("real.md");

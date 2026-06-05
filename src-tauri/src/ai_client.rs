@@ -34,6 +34,23 @@ pub struct ChatRequest {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    /// Hard ceiling on generated tokens. This is the real brevity guardrail for
+    /// the tutor: the local model ignores prose-only "keep it short" directives,
+    /// so the caller sets a tier-specific cap (brief vs deep) here. Omitted from
+    /// the wire when None so servers that dislike the field aren't disturbed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    /// OpenAI's GPT-5.x reasoning models reject `max_tokens` and require
+    /// `max_completion_tokens` instead. Local/LM-Studio uses `max_tokens`. Only
+    /// one of the two is ever set; the other is omitted from the wire.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_completion_tokens: Option<u32>,
+    /// OpenAI reasoning effort ("minimal"|"low"|"medium"|"high"). For our concise
+    /// tutor answers we ask for "minimal" so the small token budget produces
+    /// visible output instead of being consumed by hidden reasoning. Omitted for
+    /// non-OpenAI endpoints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -44,7 +61,12 @@ pub struct ChatMessage {
 
 /// Build the OpenAI-shape request body for a prompt + model. Used directly
 /// by the unit test that pins `preview text == sent text`.
-pub fn build_request_body(model: &str, prompt: &str, stream: bool) -> ChatRequest {
+pub fn build_request_body(
+    model: &str,
+    prompt: &str,
+    stream: bool,
+    max_tokens: Option<u32>,
+) -> ChatRequest {
     ChatRequest {
         model: model.to_string(),
         messages: vec![ChatMessage {
@@ -53,6 +75,29 @@ pub fn build_request_body(model: &str, prompt: &str, stream: bool) -> ChatReques
         }],
         stream,
         temperature: None,
+        max_tokens,
+        max_completion_tokens: None,
+        reasoning_effort: None,
+    }
+}
+
+/// OpenAI cloud (api.openai.com) body: GPT-5.x reasoning models want
+/// `max_completion_tokens` (not `max_tokens`) and reject a `temperature` other
+/// than the default, so we omit both. Same one-user-message shape otherwise.
+pub fn build_openai_cloud_body(
+    model: &str,
+    prompt: &str,
+    stream: bool,
+    max_completion_tokens: Option<u32>,
+) -> ChatRequest {
+    ChatRequest {
+        model: model.to_string(),
+        messages: vec![ChatMessage { role: "user".to_string(), content: prompt.to_string() }],
+        stream,
+        temperature: None,
+        max_tokens: None,
+        max_completion_tokens,
+        reasoning_effort: Some("none".to_string()),
     }
 }
 
@@ -179,6 +224,29 @@ pub struct ChatCallOpts {
     pub prompt: String,
     pub stream: bool,
     pub timeout: Duration,
+    /// Hard generated-token ceiling (brevity guardrail). None = server default.
+    pub max_tokens: Option<u32>,
+    /// Bearer token. `None` sends the literal "local" (LM Studio ignores it);
+    /// `Some(key)` sends a real API key (OpenAI cloud). Never logged.
+    pub auth_token: Option<String>,
+    /// True for OpenAI cloud: use `max_completion_tokens` and drop `temperature`.
+    pub cloud_openai: bool,
+}
+
+impl Default for ChatCallOpts {
+    fn default() -> Self {
+        ChatCallOpts {
+            base_url: String::new(),
+            model: String::new(),
+            local_only: true,
+            prompt: String::new(),
+            stream: true,
+            timeout: Duration::from_secs(180),
+            max_tokens: None,
+            auth_token: None,
+            cloud_openai: false,
+        }
+    }
 }
 
 /// Run a chat completion call. If `stream` is true, emits `StreamEvent`s on
@@ -201,7 +269,14 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
         .context("reqwest client build")?;
 
     let (tx, rx) = mpsc::channel::<StreamEvent>(64);
-    let body = build_request_body(&opts.model, &opts.prompt, opts.stream);
+    let body = if opts.cloud_openai {
+        build_openai_cloud_body(&opts.model, &opts.prompt, opts.stream, opts.max_tokens)
+    } else {
+        build_request_body(&opts.model, &opts.prompt, opts.stream, opts.max_tokens)
+    };
+    // Bearer token: real key for OpenAI cloud, else the literal "local" (LM Studio
+    // ignores it; some endpoints require any token). Never logged.
+    let auth_token = opts.auth_token.clone().unwrap_or_else(|| "local".to_string());
 
     tokio::spawn(async move {
         // Local-only enforcement is also re-checked at the top of run_chat_call
@@ -209,7 +284,7 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
         // explicitly opted out.
         let resp = client
             .post(&endpoint)
-            .bearer_auth("local") // LM Studio ignores; some endpoints require any token
+            .bearer_auth(&auth_token)
             .json(&body)
             .send()
             .await;
@@ -423,12 +498,28 @@ mod tests {
     #[test]
     fn request_body_uses_exact_prompt_text() {
         let prompt = "You are a patient tutor. I'm reading Source: \"X\"…\n\n> selection here";
-        let body = build_request_body("qwen-7b", prompt, true);
+        let body = build_request_body("qwen-7b", prompt, true, Some(90));
         assert_eq!(body.model, "qwen-7b");
         assert_eq!(body.messages.len(), 1);
         assert_eq!(body.messages[0].role, "user");
         assert_eq!(body.messages[0].content, prompt, "preview text MUST equal sent text");
         assert!(body.stream);
+        assert_eq!(body.max_tokens, Some(90), "the brevity ceiling must be carried on the body");
+    }
+
+    #[test]
+    fn request_body_omits_max_tokens_from_wire_when_none() {
+        let body = build_request_body("m", "p", true, None);
+        assert_eq!(body.max_tokens, None);
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(!json.contains("max_tokens"), "None max_tokens must not serialize: {json}");
+    }
+
+    #[test]
+    fn request_body_serializes_max_tokens_when_set() {
+        let body = build_request_body("m", "p", true, Some(256));
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"max_tokens\":256"), "max_tokens must reach the wire: {json}");
     }
 
     #[test]

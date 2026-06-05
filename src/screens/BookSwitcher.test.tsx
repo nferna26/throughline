@@ -28,14 +28,14 @@ beforeEach(() => mockInvoke.mockReset());
 
 describe("BookSwitcher", () => {
   it("shows the active book's title on the collapsed chip", () => {
-    render(<BookSwitcher activeBook={active} onSwitch={() => {}} onImport={() => {}} />);
+    render(<BookSwitcher activeBook={active} onSwitch={() => {}} onDiscover={() => {}} onImport={() => {}} />);
     expect(screen.getByRole("button", { name: /Active Book/ })).toBeInTheDocument();
   });
 
   it("lists every imported book when opened", async () => {
     mockInvoke.mockResolvedValueOnce(allBooks);
     const user = userEvent.setup();
-    render(<BookSwitcher activeBook={active} onSwitch={() => {}} onImport={() => {}} />);
+    render(<BookSwitcher activeBook={active} onSwitch={() => {}} onDiscover={() => {}} onImport={() => {}} />);
     await user.click(screen.getByRole("button", { name: /Active Book/ }));
     expect(await screen.findByText("Second Book")).toBeInTheDocument();
     expect(screen.getByText("Third Book")).toBeInTheDocument();
@@ -46,7 +46,7 @@ describe("BookSwitcher", () => {
     mockInvoke.mockResolvedValueOnce(allBooks);
     const onSwitch = vi.fn();
     const user = userEvent.setup();
-    render(<BookSwitcher activeBook={active} onSwitch={onSwitch} onImport={() => {}} />);
+    render(<BookSwitcher activeBook={active} onSwitch={onSwitch} onDiscover={() => {}} onImport={() => {}} />);
     await user.click(screen.getByRole("button", { name: /Active Book/ }));
     await user.click(await screen.findByText("Second Book"));
     expect(onSwitch).toHaveBeenCalledWith("b2");

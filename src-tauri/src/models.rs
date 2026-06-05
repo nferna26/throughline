@@ -32,6 +32,20 @@ pub struct BookSection {
 
 fn default_true() -> bool { true }
 
+/// An inline/block style range within a section's plain text, in **UTF-16
+/// code-unit** offsets relative to that section's text — matching the reader's JS
+/// string units exactly. Produced by the EPUB→text extractor and consumed by the
+/// reader to style headings, blockquotes, and bold/italic WITHOUT mutating the
+/// text, so char-offset note anchoring stays exact. `kind` is one of
+/// `h1`..`h6`, `blockquote` (block roles applied to the whole paragraph) or
+/// `strong`/`em` (inline spans).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct StyleRange {
+    pub kind: String,
+    pub start: u32,
+    pub end: u32,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ReadingPlan {
     pub id: String,
@@ -179,4 +193,32 @@ pub struct TodayCard {
     /// Finish forecast — present only once the plan is active and a window has
     /// passed. None before then (a fresh import is never "behind").
     pub forecast: Option<FinishForecast>,
+    /// "Last time" memory for calm re-entry on Today. Always present; its fields
+    /// are empty/None when the reader hasn't captured anything yet.
+    #[serde(default)]
+    pub memory: TodayMemory,
+}
+
+/// The reader's own most recent durable capture, surfaced on Today so picking
+/// the book back up feels like continuing a thought. Body is user-authored
+/// (Takeaway/Question) — never a raw passage, AI output, or short quote.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LastCapture {
+    pub note_type: String,
+    pub body: String,
+    pub chapter_label: Option<String>,
+    pub created_at: String,
+}
+
+/// "Today remembers" surface data, derived entirely from the local DB.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TodayMemory {
+    /// Most recent user-authored Takeaway or Question, if any.
+    pub last_capture: Option<LastCapture>,
+    /// Count of saved highlights for this book.
+    pub highlight_count: i64,
+    /// Count of user-authored notes (anything with a real body that isn't a
+    /// bare highlight) — questions, takeaways, reflections, margin notes, and
+    /// saved tutor notes the reader chose to keep.
+    pub note_count: i64,
 }

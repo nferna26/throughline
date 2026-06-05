@@ -1,4 +1,4 @@
-# ReadingGym IPC Contract
+# Throughline IPC Contract
 
 The Rust backend exposes commands to the React frontend via Tauri's `invoke` bridge. This document is the binding contract: argument names, types, return shapes, error shapes, and the semver commitment for changes.
 
@@ -70,14 +70,14 @@ Read-only display of local data locations. Useful for rollback instructions and 
 **Dedup (skip & switch):** if the file's SHA-256 already matches an imported book, no duplicate is created — the existing book is made active (`last_opened_at` bumped) and returned with `created: false`. Re-import is idempotent. The frontend opens the Book Setup Sheet only when `created: true`.
 
 #### `cmd_configure_plan`
-- args: `{ bookId: string; targetFinishDate: string; daysPerWeek: number; sessionMinutes: number; marginHelp?: "guided" | "quiet" }` — `targetFinishDate` is `YYYY-MM-DD`
+- args: `{ bookId: string; targetFinishDate: string; daysPerWeek: number; sessionMinutes: number; marginHelp?: "quiet" | "guided" | "deep_study" }` — `targetFinishDate` is `YYYY-MM-DD`
 - returns: `ReadingPlan` (the updated plan)
 - errors:
   - `NotFound` — no plan for the book
   - `Validation` — finish date unparseable or in the past
   - `Db` — sqlite error
 
-Configures a freshly imported book's plan from the Book Setup Sheet: sets the target finish date and days-per-week, recomputes the daily section target, and persists the reading rhythm (`reading_rhythm_minutes`) and `margin_help` settings. **Does NOT activate the plan** — status stays `plan_ready`, so the book remains "not behind" until the first reading session (Priority 0). Added in `COMMAND_API_VERSION` 2 (new command; additive on its own).
+Configures a freshly imported book's plan from the Book Setup Sheet: sets the target finish date and days-per-week, recomputes the daily section target, and persists the reading rhythm (`reading_rhythm_minutes`) and `margin_help` settings. `marginHelp` is one of `quiet` | `guided` | `deep_study` (validated against `settings::MARGIN_HELP_LEVELS`; an unrecognized value falls back to the `guided` default). **Does NOT activate the plan** — status stays `plan_ready`, so the book remains "not behind" until the first reading session (Priority 0). Added in `COMMAND_API_VERSION` 2 (new command; additive on its own).
 
 #### `cmd_read_book_bytes`
 - args: `{ bookId: string }`
@@ -119,6 +119,31 @@ This is the list both readers index into. Frontends MUST use this, not `cmd_list
 - errors: `NotFound` if the book doesn't exist; `Db`
 
 Makes `bookId` the active book by bumping its `last_opened_at`, so the next `cmd_today` composes that book's card. This is what the Today-header book switcher calls; the frontend re-invokes `cmd_today` afterward. Added in 0.1.x — additive, `COMMAND_API_VERSION` stays `1`.
+
+---
+
+### Discover (public-domain catalogue)
+
+> **Network note.** These are the only two commands that reach a remote host that is not an AI provider. Both are **reader-initiated** — they run on a click, never on a timer, launch, or in the background — and only fetch *incoming* public-domain text; no source text or reader data is ever sent out. The upstream catalogue service is intentionally never named in the UI ("the public-domain library"). Added in `COMMAND_API_VERSION` 2 (additive).
+
+#### `cmd_discover_search`
+- args: `{ query?: string | null; page?: number | null; languages?: string | null }` — `query` empty/omitted ⇒ most-downloaded; `page` is 1-based; `languages` defaults to `en`
+- returns: `DiscoverPage { count: number; next_page: number | null; results: DiscoverBook[]; offline: boolean }` (see types.ts). `count` is the catalogue size for the requested query; `next_page` is null at the end of results; `offline` is `true` when results came from the bundled seed (see below).
+- errors:
+  - `Io { message }` — only if even the offline seed is unavailable (the live path failing no longer errors — it degrades; see below)
+
+Results are sorted by popularity. The live path restricts to titles that expose a `text/plain` format (importable) and `DiscoverBook.txt_url` / `epub_url` are opaque download URLs echoed straight back to `cmd_import_from_gutendex`.
+
+**Offline fallback.** The live catalogue is a single third-party service. If it is unreachable (timeout / connect / non-2xx / unparseable body), the command does **not** error — it falls back to a bundled offline seed (`src-tauri/resources/discover_seed.json`, the top ~200 most-downloaded public-domain books, `include_str!`-embedded) and returns those results with `offline: true`. The seed is searched by case-insensitive substring over title/author, popularity-ordered, paged like the live path; an empty query is idle browse. Seed rows derive their `txt_url`/`epub_url` from the book id (`gutenberg.org/cache/epub/{id}/pg{id}.txt|.epub`), so importing a seeded book never touches the search API. A **successful** live response with zero results is returned as-is (`offline: false`) — only a transport/HTTP/parse failure triggers the fallback, so a genuine "no matches" is never masked by unrelated seed books. The seed is regenerated offline by `scripts/build-discover-seed.mjs`; it is build-time tooling, not shipped or run at runtime.
+
+#### `cmd_import_from_gutendex`
+- args: `{ book: { txt_url: string | null; epub_url: string | null } }` — pass the chosen row's URLs verbatim
+- returns: `ImportOutcome { book: Book; created: boolean }` — identical shape to `cmd_import_book`, so the frontend routes to Plan setup the same way (Setup Sheet only when `created: true`).
+- errors:
+  - `Io { message }` — download failed / interrupted, or the import pipeline failed for both formats
+  - `Validation { message }` — the row carried no importable format
+
+Downloads the chosen book and imports it through the **same owned path** as the file picker (`books::import_or_dedup`), so SHA dedup, the immutable source copy, and the default plan all happen in one place. Prefers plain text and falls back to EPUB — both because some titles ship only one and because Gutenberg's legacy `.txt` is often latin-1, which the strict-UTF-8 text importer rejects (the EPUB then carries its own encoding). Re-importing a book already present dedups to it (`created: false`) just like the file picker.
 
 ---
 
@@ -194,11 +219,13 @@ Side effects: inserts a `notes` row, exports Markdown to `{export_root}/Notes/`.
 `mode` must be one of: `explain`, `historical`, `vocabulary`, `socratic`, `durable_note`, `prepare_next`.
 
 #### `cmd_save_ai_preview_as_note`
-- args: `{ aiRequestId: string; noteType: string; body: string; locator: string; chapterLabel?: string }`
+- args: `{ aiRequestId: string; noteType: string; body: string; locator: string; chapterLabel?: string; anchorStart?: string; anchorEnd?: string; anchoredText?: string; sessionId?: string }`
 - returns: `Note`
 - errors: `Validation` (empty body); `NotFound` (ai_request); `Db`, `Io`
 
-Side effect: flips `ai_requests.wrote_to_memory` to 1.
+Side effects: writes the Note's Markdown mirror under `…/Notes/` and flips `ai_requests.wrote_to_memory` to 1.
+
+The four optional fields are **additive** (a minor change — no integer API bump): legacy callers that send only the first five args still work (absent options deserialize to `null`). When present, `anchorStart`/`anchorEnd`/`anchoredText` pin the saved card in the Companion Margin — this is the path the text reader's margin **tutor card** uses, saving a `noteType: "TutorNote"` anchored to the selected passage.
 
 #### `cmd_ai_ask`
 - args: `{ bookId: string; mode: string; selection: string; chapter?: string; locator?: string; userNote?: string; onEvent: Channel<StreamEvent> }`
@@ -230,9 +257,11 @@ The call is fronted by a circuit breaker (3 failures / 60s window / 30s cool-dow
 Deliberately bypasses the circuit breaker's `check()` — an operator clicking "Test connection" wants a real probe even when the breaker is Open. The outcome still feeds the breaker.
 
 #### `cmd_save_ai_response_as_note`
-- args: `{ aiRequestId: string; noteType: string; body: string; locator: string; chapterLabel?: string }`
+- args: `{ aiRequestId: string; noteType: string; body: string; locator: string; chapterLabel?: string; anchorStart?: string; anchorEnd?: string; anchoredText?: string; sessionId?: string }`
 - returns: `Note`
 - errors: same as `cmd_save_ai_preview_as_note`
+
+Like `cmd_save_ai_preview_as_note`, the four trailing fields are **additive/optional**; when present they anchor the saved card in the Companion Margin. Privacy note: the saved `body` is user-authored text — neither this command nor `export_note` writes the AI prompt or the raw selected passage to Markdown (`anchored_text` is stored in the DB only, never exported).
 
 #### `cmd_list_ai_requests`
 - args: none
@@ -317,7 +346,7 @@ Recommended startup pattern:
 ```ts
 import { invoke } from "@tauri-apps/api/core";
 
-const FRONTEND_EXPECTED_API_VERSION = 1;
+const FRONTEND_EXPECTED_API_VERSION = 2;
 
 async function checkBackend() {
   try {
@@ -334,4 +363,4 @@ async function checkBackend() {
 }
 ```
 
-(ReadingGym ships frontend + backend in the same binary, so this is mostly a refactoring safety net rather than a deployment-time check. But it's wired so a future split deploy works.)
+(Throughline ships frontend + backend in the same binary, so this is mostly a refactoring safety net rather than a deployment-time check. But it's wired so a future split deploy works.)

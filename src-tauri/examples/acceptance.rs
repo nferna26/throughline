@@ -17,7 +17,7 @@ use chrono::Utc;
 use rusqlite::params;
 use uuid::Uuid;
 
-use reading_gym_lib::*;
+use throughline_lib::*;
 
 fn main() -> anyhow::Result<()> {
     // Guardrail: this binary MUST use an isolated temp data dir, never the

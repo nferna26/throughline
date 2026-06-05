@@ -10,6 +10,7 @@
 pub mod ai;
 pub mod books;
 pub mod db_helpers;
+pub mod discover;
 pub mod notes;
 pub mod sessions;
 pub mod settings_cmds;

@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import RGIcon, { type IconName } from "../components/RGIcon";
+import TLIcon, { type IconName } from "../components/TLIcon";
 import type { TodayCard, PaceState, RecoveryOption, RecomputedPlan, FinishForecast } from "../types";
 
 interface Props {
   today: TodayCard | null;
+  /** Open the public-domain catalogue (the primary "get a book" path). */
+  onDiscover: () => void;
+  /** Import a local .txt/.epub via the file picker (the secondary path). */
   onImport: () => void;
   onStart: (t: TodayCard) => void;
   /** The calm "I only have 10 minutes" path — opens the reader in rescue mode. */
@@ -29,7 +32,7 @@ function forecastNote(f: FinishForecast | null | undefined, planReady: boolean):
 }
 
 // Pace as glyph + word (never color-only) — maps our PaceState to the design's
-// .rg-pace classes. Cites guard-accessibility-baseline-wcag-aa item 6.
+// .tl-pace classes. Cites guard-accessibility-baseline-wcag-aa item 6.
 function paceMeta(p: PaceState): { cls: "on" | "behind"; icon: IconName; word: string } {
   switch (p.kind) {
     case "on_pace":     return { cls: "on",     icon: "check",  word: "On pace" };
@@ -46,7 +49,6 @@ function optionIcon(o: RecoveryOption): IconName {
     case "GentleCatchup":          return "flag";
     case "WeekendCatchup":         return "flag";
     case "ExtendFinish":           return "refresh";
-    case "RestartCurrentChapter":  return "refresh";
   }
 }
 
@@ -69,94 +71,109 @@ function describeOption(o: RecoveryOption): { primary: string; detail?: string }
         primary: `Re-pace to finish by ${o.new_finish}`,
         detail: `Adds ${o.add_days} day${o.add_days === 1 ? "" : "s"}; recomputes the daily plan. Completed sections stay completed.`,
       };
-    case "RestartCurrentChapter":
-      return { primary: "Restart current chapter", detail: "Clear today's section progress and start over." };
   }
 }
 
-export default function Today({ today, onImport, onStart, onStartRescue, onRefresh }: Props) {
+export default function Today({ today, onDiscover, onImport, onStart, onStartRescue, onRefresh }: Props) {
   if (!today) {
     return (
-      <div className="rg-welcome">
-        <div className="rg-welcome-card">
-          <div className="mark"><RGIcon name="book" size={26} /></div>
-          <h1>Welcome to ReadingGym</h1>
-          <p>One book at a time, a little each day. Import something you mean to finish, and it'll be waiting on Today.</p>
-          <button className="rg-btn rg-btn-primary" style={{ margin: "0 auto" }} onClick={onImport}>
-            <RGIcon name="upload" size={18} /> Import a book
+      <div className="tl-welcome">
+        <div className="tl-welcome-card">
+          <div className="mark"><TLIcon name="book" size={26} /></div>
+          <h1>Welcome to Throughline</h1>
+          <p>One book at a time, a little each day. Find something you mean to finish, and it'll be waiting on Today.</p>
+          <button className="tl-btn tl-btn-primary" style={{ margin: "0 auto" }} onClick={onDiscover}>
+            <TLIcon name="search" size={18} /> Find a book to read
           </button>
-          <div className="hint">Supports .txt and .epub · stays on this Mac</div>
+          <button className="tl-btn-quiet" style={{ margin: "var(--tl-2) auto 0" }} onClick={onImport}>
+            <TLIcon name="upload" size={16} /> Import a file instead
+          </button>
+          <div className="hint">Thousands of free public-domain books · or your own .txt / .epub · stays on this Mac</div>
         </div>
       </div>
     );
   }
 
-  const { book, section, section_completed, estimated_minutes, session_minutes, monthly_pct, pace, day_index, total_days, streak, recovery, plan_status, forecast } = today;
+  const { book, section, section_completed, estimated_minutes, session_minutes, monthly_pct, pace, day_index, total_days, streak, recovery, plan_status, forecast, memory } = today;
   const pm = paceMeta(pace);
   // A freshly imported book's plan hasn't started its pace clock yet. It is, by
   // design, NEVER behind — the copy here must say so plainly and calmly.
   const planReady = plan_status === "plan_ready";
   const fcNote = forecastNote(forecast, planReady);
+  // "Continue where you left off": a saved mid-section position from a prior
+  // sitting (not a fresh plan, not a completed section). The reader resumes at
+  // the exact paragraph either way — this just names it so re-entry feels like
+  // picking a thought back up rather than restarting. `resume_percent` is the
+  // within-section progress the reader last reached.
+  const resumePct = today.resume_percent ?? 0;
+  const isResuming = !planReady && !section_completed && !!section && resumePct >= 3 && resumePct < 97;
   const primaryLabel = !section
     ? "Start reading"
     : planReady
       ? `Start your first ${session_minutes}-minute session`
       : section_completed
         ? `Read on — ${session_minutes} more minutes`
-        : `Start ${session_minutes}-minute session`;
+        : isResuming
+          ? `Continue — ${Math.round(resumePct)}% into this section`
+          : `Start ${session_minutes}-minute session`;
 
   return (
-    <div className="rg-col rg-today">
-      <div className="rg-kicker">
+    <div className="tl-col tl-today">
+      <div className="tl-kicker">
         <span className="dot" />
         {planReady ? "Today — plan ready" : `Today — day ${day_index} of ${total_days}`}
       </div>
 
-      <h1 className="rg-today-title">{book.title}</h1>
-      {book.author && <div className="rg-today-author">{book.author}</div>}
+      <h1 className="tl-today-title">{book.title}</h1>
+      {book.author && <div className="tl-today-author">{book.author}</div>}
 
       {section ? (
         <>
-          <div className="rg-section-label">{section.label}</div>
-          <div className="rg-meta">
-            <span className="item"><RGIcon name="clock" size={15} /> ≈ {estimated_minutes} min</span>
+          <div className="tl-section-label">{section.label}</div>
+          <div className="tl-meta">
+            <span className="item"><TLIcon name="clock" size={15} /> ≈ {estimated_minutes} min</span>
             <span className="sep" />
             <span className="item">{monthly_pct}% complete</span>
             <span className="sep" />
             {planReady ? (
-              <span className="rg-pace on" aria-label="Plan ready — you are not behind">
-                <RGIcon name="flag" size={15} /> Plan ready
+              <span className="tl-pace on" aria-label="Plan ready — you are not behind">
+                <TLIcon name="flag" size={15} /> Plan ready
               </span>
             ) : (
-              <span className={`rg-pace ${pm.cls}`} aria-label={`Pace: ${pm.word}`}>
-                <RGIcon name={pm.icon} size={15} /> {pm.word}
+              <span className={`tl-pace ${pm.cls}`} aria-label={`Pace: ${pm.word}`}>
+                <TLIcon name={pm.icon} size={15} /> {pm.word}
               </span>
             )}
           </div>
           {planReady && (
-            <p className="rg-planready-note">
+            <p className="tl-planready-note">
               Plan ready. You are not behind. Start today or begin tomorrow.
             </p>
           )}
-          {fcNote && <p className="rg-forecast-note">{fcNote}</p>}
+          {fcNote && <p className="tl-forecast-note">{fcNote}</p>}
         </>
       ) : (
-        <div className="rg-section-label" style={{ fontStyle: "normal", color: "var(--rg-muted)" }}>
+        <div className="tl-section-label" style={{ fontStyle: "normal", color: "var(--tl-muted)" }}>
           {pace.kind === "done" ? "You finished the book." : "No section assigned."}
         </div>
       )}
 
-      <button className="rg-btn rg-btn-primary block" disabled={!section} onClick={() => onStart(today)}>
-        <RGIcon name="book" size={18} /> {primaryLabel}
+      {isResuming && (
+        <p className="tl-resume-note" role="note">
+          <TLIcon name="book" size={14} /> You left off about {Math.round(resumePct)}% into {section!.label}. It opens right where you stopped.
+        </p>
+      )}
+      <button className="tl-btn tl-btn-primary block" disabled={!section} onClick={() => onStart(today)}>
+        <TLIcon name="book" size={18} /> {primaryLabel}
       </button>
       {/* Always offered, never the loud option: a 10-minute "just stay
           connected" sitting. Same reader, calm framing, no pace pressure. */}
-      <button className="rg-btn rg-btn-ghost rg-rescue-btn" disabled={!section} onClick={() => onStartRescue(today)}>
-        <RGIcon name="clock" size={16} /> I only have 10 minutes
+      <button className="tl-btn tl-btn-ghost tl-rescue-btn" disabled={!section} onClick={() => onStartRescue(today)}>
+        <TLIcon name="clock" size={16} /> I only have 10 minutes
       </button>
 
-      <div className="rg-streak">
-        <span className="rg-dots" aria-hidden="true">
+      <div className="tl-streak">
+        <span className="tl-dots" aria-hidden="true">
           {Array.from({ length: 7 }, (_, i) => (
             <span key={i} className={i < streak.days_read_last_7 ? "d read" : "d"} />
           ))}
@@ -164,12 +181,44 @@ export default function Today({ today, onImport, onStart, onStartRescue, onRefre
         <span>You read {streak.days_read_last_7} of the last 7 days.</span>
       </div>
 
+      <LastTime memory={memory} />
+
       {recovery && <RecoveryPanel bundle={recovery} bookId={book.id} sectionId={section?.id ?? null} onRefresh={onRefresh} />}
 
-      <hr className="rg-divline" style={{ marginTop: "calc(var(--rg-7) * var(--rg-density))" }} />
-      <button className="rg-btn-quiet" style={{ marginTop: "var(--rg-3)" }} onClick={onImport}>
-        <RGIcon name="plus" size={16} /> Import another book
+      <hr className="tl-divline" style={{ marginTop: "calc(var(--tl-7) * var(--tl-density))" }} />
+      <button className="tl-btn-quiet" style={{ marginTop: "var(--tl-3)" }} onClick={onDiscover}>
+        <TLIcon name="plus" size={16} /> Find another book
       </button>
+    </div>
+  );
+}
+
+// "Last time" — a calm, no-shame re-entry surface built from local DB data.
+// Shows the reader's most recent Takeaway/Question to pick a thought back up,
+// plus quiet counts. Nothing dashboard-y; renders nothing for a fresh book.
+function LastTime({ memory }: { memory: import("../types").TodayMemory }) {
+  const cap = memory.last_capture;
+  const counts: string[] = [];
+  if (memory.highlight_count > 0) counts.push(`${memory.highlight_count} highlight${memory.highlight_count === 1 ? "" : "s"}`);
+  if (memory.note_count > 0) counts.push(`${memory.note_count} note${memory.note_count === 1 ? "" : "s"}`);
+  const countLine = counts.join(" · ");
+
+  if (!cap && !countLine) return null; // fresh book — stay quiet
+
+  if (!cap) {
+    // Captures exist but no takeaway/question yet — one quiet line, no nudge spam.
+    return <div className="tl-lasttime quiet"><span>{countLine} so far.</span></div>;
+  }
+
+  const verb = cap.note_type === "Question" ? "You asked" : "You noted";
+  return (
+    <div className="tl-lasttime" role="note" aria-label="Last time">
+      <div className="tl-lasttime-head">
+        <span className="tl-lasttime-kicker"><TLIcon name={cap.note_type === "Question" ? "help" : "sparkle"} size={13} /> Last time</span>
+        {cap.chapter_label && <span className="tl-lasttime-loc">{cap.chapter_label}</span>}
+      </div>
+      <p className="tl-lasttime-body">{verb}: <span className="tl-lasttime-quote">“{cap.body.length > 200 ? cap.body.slice(0, 200).trim() + "…" : cap.body}”</span></p>
+      {countLine && <p className="tl-lasttime-counts">{countLine}</p>}
     </div>
   );
 }
@@ -182,16 +231,9 @@ function RecoveryPanel(props: {
 }) {
   const [working, setWorking] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  // Two-stage confirm for the only destructive recovery action.
-  const [pendingRestart, setPendingRestart] = useState(false);
 
   async function actOn(option: RecoveryOption) {
     setMessage(null);
-    if (option.kind === "RestartCurrentChapter") {
-      if (!props.sectionId) { setMessage("No current section to restart."); return; }
-      setPendingRestart(true);
-      return;
-    }
     setWorking(option.kind);
     try {
       switch (option.kind) {
@@ -218,24 +260,9 @@ function RecoveryPanel(props: {
     }
   }
 
-  async function confirmRestart() {
-    if (!props.sectionId) return;
-    setWorking("RestartCurrentChapter");
-    setPendingRestart(false);
-    try {
-      await invoke("cmd_restart_current_section", { bookId: props.bookId, sectionId: props.sectionId });
-      setMessage("Current section progress cleared. Open the reader to start over.");
-      await props.onRefresh();
-    } catch (e: any) {
-      setMessage(`Failed: ${e?.message ?? e}`);
-    } finally {
-      setWorking(null);
-    }
-  }
-
   return (
-    <div className="rg-recovery">
-      <div className="head"><RGIcon name="behind" size={16} /> A little behind — that's alright.</div>
+    <div className="tl-recovery">
+      <div className="head"><TLIcon name="behind" size={16} /> A little behind — that's alright.</div>
       <div className="lead">
         Behind by {props.bundle.days_behind} day{props.bundle.days_behind === 1 ? "" : "s"}. Pick how to get back in — no catch-up marathon required.
       </div>
@@ -243,28 +270,17 @@ function RecoveryPanel(props: {
         {props.bundle.options.map((o, i) => {
           const d = describeOption(o);
           return (
-            <button key={i} className="rg-opt" onClick={() => actOn(o)} disabled={working !== null}>
+            <button key={i} className="tl-opt" onClick={() => actOn(o)} disabled={working !== null}>
               <span>
                 <span className="t">{working === o.kind ? "…" : d.primary}</span>
                 {d.detail && <span className="s">{d.detail}</span>}
               </span>
-              <RGIcon name={optionIcon(o)} size={18} />
+              <TLIcon name={optionIcon(o)} size={18} />
             </button>
           );
         })}
       </div>
-      {pendingRestart && (
-        <div className="rg-recovery" role="alert" style={{ marginTop: "var(--rg-3)", borderColor: "var(--rg-alert)", background: "var(--rg-alert-soft)" }}>
-          <p className="lead" style={{ margin: 0 }}>
-            Restart current chapter? This clears your saved progress and resume position for the section. Note history and reading sessions are kept.
-          </p>
-          <div style={{ display: "flex", gap: "var(--rg-2)", justifyContent: "flex-end", marginTop: "var(--rg-3)" }}>
-            <button className="rg-btn rg-btn-ghost" onClick={() => setPendingRestart(false)}>Cancel</button>
-            <button className="rg-btn rg-btn-primary" onClick={confirmRestart}>Yes, restart this chapter</button>
-          </div>
-        </div>
-      )}
-      {message && <p className="lead" style={{ marginTop: "var(--rg-3)", marginBottom: 0, color: "var(--rg-ok)" }}>{message}</p>}
+      {message && <p className="lead" style={{ marginTop: "var(--tl-3)", marginBottom: 0, color: "var(--tl-ok)" }}>{message}</p>}
     </div>
   );
 }
