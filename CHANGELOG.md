@@ -2,10 +2,10 @@
 
 All notable changes to Throughline are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver. The
-Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 1)
+Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 3)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
-## [Unreleased]
+## [0.2.0] - 2026-06-05
 
 ### Added
 
@@ -239,4 +239,5 @@ local-first macOS desktop app (Tauri v2 + React + Rust + SQLite).
 - No in-app notes browser (notes live in the exported Markdown).
 - No frontend (React) test suite yet.
 
+[0.2.0]: https://github.com/nferna26/throughline/releases/tag/v0.2.0
 [0.1.0]: https://github.com/nferna26/throughline/releases/tag/v0.1.0
