@@ -10,21 +10,21 @@ Prove a single loop end-to-end: **import one book → see today's section → re
 - No OpenClaw integration. None. Not even a stub that imports it.
 - No mobile app, no PDF/OCR, no DRM handling or circumvention.
 - No quizzes, spaced repetition, XP, badges, streaks-as-punishment, mascots, confetti, leaderboards.
-- No **background, remote, or unsolicited** AI. AI never runs on a timer, on launch, or in the background; it never calls a remote endpoint by default; it never acts without the reader's action.
+- No **background or unsolicited** AI. AI never runs on a timer, on launch, or in the background; it never acts without the reader's action. (A remote/cloud provider is an allowed opt-in — see the AI contract below — but it still only fires on a deliberate reader action.)
 - No local embeddings, no Bible mode, no nutrition/running features.
 - No dashboard-first or library-first UX. The app opens to **Today**.
 
 ## AI contract (what AI MAY do)
-AI is local-first and reader-initiated. Two surfaces are allowed:
-1. **Tutor lenses** (Explain / Context / Define / Socratic) — fire only when the reader selects a passage and clicks a lens. Streamed from a local OpenAI-compatible endpoint; remote endpoints are refused while local-only is ON (the default).
-2. **Deep Study section briefing** — a local, **session-triggered** study prep generated *only* when the reader chose **Deep Study** margin-help, **started a session**, and gave **tutor consent**. It must be **cached, dismissable, regenerable, local-only**, and **never exported unless the reader saves it**. It is study prep for the section about to be read — not an automatic summary, never generated in the background or on a schedule.
+AI is reader-initiated. Local-only (a loopback model like LM Studio) is the **default**, but the reader may opt into a cloud provider (OpenAI / Anthropic / Codex) in Settings; this is an intended feature, not a contract violation. Two surfaces are allowed:
+1. **Tutor lenses** (Explain / Context / Define / Socratic) — fire only when the reader selects a passage and clicks a lens. Streamed from an OpenAI-compatible endpoint: the loopback model by default, or the reader's chosen cloud provider once they explicitly turn local-only OFF. While local-only is ON, non-loopback endpoints are refused at the call site.
+2. **Deep Study section briefing** — a **session-triggered** study prep generated *only* when the reader chose **Deep Study** margin-help, **started a session**, and gave **tutor consent**. It runs through the reader's chosen provider (local by default, or their opted-in cloud provider). It must be **cached, dismissable, regenerable**, and **never exported unless the reader saves it**. It is study prep for the section about to be read — not an automatic summary, never generated in the background or on a schedule.
 
-Both surfaces: selection/section context only (never the whole book), prompts + injection hardening stay server-side and are never rendered, raw source text never leaves the device, and AI output becomes a durable Note + Markdown **only when the reader explicitly saves it**.
+Both surfaces: selection/section context only (never the whole book) — when a cloud provider is active, only that selection/section is sent and the whole-book source is never bulk-uploaded; prompts + injection hardening stay server-side and are never rendered; and AI output becomes a durable Note + Markdown **only when the reader explicitly saves it**.
 
 If you think something outside this list is needed, STOP and ask in plain text before writing it.
 
 ## Copyright & privacy posture (non-negotiable)
-- Raw EPUB/text source files stay local. Never exported, never sent to any API.
+- Raw EPUB/text source **files** stay local. Never exported, never bulk-uploaded to any API. (Cloud tutoring may send only the reader's selected passage or current section — never the whole-book source file.)
 - Exports contain locators, paraphrases, reflections, and short quotes only.
 - Every imported source gets a SHA-256 hash stored in the DB.
 - Exported notes carry `source_private: true` in frontmatter.
