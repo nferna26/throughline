@@ -10,14 +10,9 @@ The binding contract is [CLAUDE.md](./CLAUDE.md). The full spec is [docs/PRD.md]
 
 ## Screenshots
 
-<!-- Drop PNGs into docs/screenshots/ and they'll render here.
-     Suggested shots: Today screen, the reader, the AI tutor panel mid-stream, Settings. -->
-
 | Today | Reader | AI Tutor |
 | --- | --- | --- |
 | ![Today screen](docs/screenshots/today.png) | ![Reader](docs/screenshots/reader.png) | ![AI tutor](docs/screenshots/tutor.png) |
-
-> Screenshots not committed yet — drop them into `docs/screenshots/` to populate this table.
 
 ## Platform support
 
