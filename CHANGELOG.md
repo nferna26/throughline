@@ -239,4 +239,4 @@ local-first macOS desktop app (Tauri v2 + React + Rust + SQLite).
 - No in-app notes browser (notes live in the exported Markdown).
 - No frontend (React) test suite yet.
 
-[0.1.0]: https://github.com/nferna26/Throughline/releases/tag/v0.1.0
+[0.1.0]: https://github.com/nferna26/throughline/releases/tag/v0.1.0

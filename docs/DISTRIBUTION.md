@@ -151,13 +151,20 @@ won't install.
 
 ---
 
-## ⚠️ Finalize before the first public release
+## Status / what's left before the first public release
 
-- **Repo name in the endpoint.** `tauri.conf.json → plugins.updater.endpoints`
-  is `https://github.com/nferna26/throughline/...`. The repo is still
-  **`ReadingGym`** at the time of writing. The endpoint **must** match the real
-  repo (owner + name) or the updater 404s. Update it, or switch to the
-  own-domain option above.
-- **Apple + updater secrets set** (tables above).
-- **Tested the notarized `.dmg`** on a clean Mac — Gatekeeper opens it with no
+Done:
+- ✅ **Repo renamed** to `nferna26/throughline`, so the updater endpoint resolves.
+- ✅ **Apple signing + notarization secrets** set, and the *Developer ID
+  Application: Trainable LLC* cert is in the keychain.
+- ✅ **Updater signing key** (`TAURI_SIGNING_PRIVATE_KEY`) uploaded; its public
+  half matches the `pubkey` baked into `tauri.conf.json`.
+
+Remaining:
+- **Push the branch + a tag.** The release workflow checks out the tagged commit,
+  so the commits must be on GitHub. Bump with `npm run version:set <x.y.z>`, then
+  `git push` the branch and `git tag vX.Y.Z && git push origin vX.Y.Z`.
+- **Test the notarized `.dmg`** on a clean Mac — Gatekeeper should open it with no
   warning and no right-click.
+- **Publish the draft release** the workflow creates — that activates both the
+  download link and auto-update.

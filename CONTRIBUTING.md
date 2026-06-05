@@ -18,8 +18,8 @@ value is in what it refuses to do. See the full list in `CLAUDE.md`.
 Prereqs: Node 20+, Rust + Cargo, Xcode Command Line Tools, macOS.
 
 ```bash
-git clone https://github.com/nferna26/Throughline
-cd Throughline
+git clone https://github.com/nferna26/throughline
+cd throughline
 npm install
 npm run tauri dev
 ```

@@ -68,10 +68,11 @@ wired; you just set the matching **repo secrets**:
 
 ## ⚠️ Finalize before shipping
 
-- **Endpoint URL.** `plugins.updater.endpoints` currently points at
+- **Endpoint URL.** `plugins.updater.endpoints` points at
   `https://github.com/nferna26/throughline/releases/latest/download/latest.json`.
-  Set it to the **actual** repo once the GitHub repo is renamed/created (the repo
-  is still `ReadingGym` at the time of writing — see the rename notes).
+  The repo has been renamed to `throughline`, so this now resolves — the
+  `latest/download/latest.json` path 404s only until the first release is
+  **published** (drafts don't count).
 - **`version`** in `tauri.conf.json` must increase for each release, and
   `latest.json`'s `version` must be greater than the installed app's for the
   updater to offer it.

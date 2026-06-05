@@ -1,6 +1,6 @@
 # Throughline
 
-[![CI](https://github.com/nferna26/Throughline/actions/workflows/ci.yml/badge.svg)](https://github.com/nferna26/Throughline/actions/workflows/ci.yml)
+[![CI](https://github.com/nferna26/throughline/actions/workflows/ci.yml/badge.svg)](https://github.com/nferna26/throughline/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS-black)
 
@@ -21,7 +21,7 @@ The binding contract is [CLAUDE.md](./CLAUDE.md). The full spec is [docs/PRD.md]
 
 ## Platform support
 
-**macOS only.** Data paths are macOS-specific (`~/Library/Application Support/Throughline/`). Tauri can compile for Linux and Windows, but those paths would need to move to `dirs::data_dir()` first — see [issue tracker](https://github.com/nferna26/Throughline/issues) if you want to help.
+**macOS only.** Data paths are macOS-specific (`~/Library/Application Support/Throughline/`). Tauri can compile for Linux and Windows, but those paths would need to move to `dirs::data_dir()` first — see [issue tracker](https://github.com/nferna26/throughline/issues) if you want to help.
 
 ## Scope
 
@@ -73,8 +73,8 @@ Prereqs: Node 20+, Rust + Cargo, Xcode Command Line Tools, macOS.
 **Run from source (dev):**
 
 ```bash
-git clone https://github.com/nferna26/Throughline
-cd Throughline
+git clone https://github.com/nferna26/throughline
+cd throughline
 npm install
 npm run tauri dev
 ```
