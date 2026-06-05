@@ -243,6 +243,11 @@ export default function Settings() {
                   ? "AI is turned off."
                   : AI_PROVIDERS.find((p) => p.id === providerDraft)?.disclosure}
               </p>
+              {providerDraft === "codex" && (
+                <p className="tl-trust-warn" style={{ marginTop: "var(--tl-3)", paddingTop: 0, borderTop: "none" }}>
+                  <TLIcon name="behind" size={14} /> <span><strong>Experimental.</strong> Codex talks to an unofficial ChatGPT endpoint that can change or break without warning. For a reliable tutor, choose OpenAI or Anthropic with your own API key.</span>
+                </p>
+              )}
             </div>
 
             {providerDraft === "local" && (

@@ -66,4 +66,21 @@ describe("Settings — Your data trust summary", () => {
     expect(screen.getByText(/your selected passage or section is sent to OpenAI/i)).toBeInTheDocument();
     expect(screen.queryByText(/disabled until you re-enable/i)).toBeNull();
   });
+
+  it("flags Codex as an experimental, unofficial endpoint", async () => {
+    wire({ ai_provider: "codex", ai_remote_allowed: true });
+    render(<Settings />);
+    // The Codex option carries a clear experimental marker steering toward OpenAI/Anthropic.
+    await waitFor(() => expect(screen.getByText(/^Experimental\.$/i)).toBeInTheDocument());
+    expect(screen.getByText(/unofficial ChatGPT endpoint that can change or break/i)).toBeInTheDocument();
+    expect(screen.getByText(/choose OpenAI or Anthropic with your own API key/i)).toBeInTheDocument();
+  });
+
+  it("does not flag OpenAI as experimental", async () => {
+    wire({ ai_provider: "openai", ai_remote_allowed: true });
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/run on a remote model/i)).toBeInTheDocument());
+    // The experimental marker is specific to Codex's unofficial endpoint.
+    expect(screen.queryByText(/^Experimental\.$/i)).toBeNull();
+  });
 });
