@@ -228,13 +228,14 @@ fn detect_chapters(body: &str) -> Vec<(String, usize, usize)> {
         if len > TARGET_SECTION_CHARS * 3 {
             let parts = len.div_ceil(TARGET_SECTION_CHARS);
             let part_len = len / parts;
+            // Snap each interior split DOWN to a char boundary. The same snapped
+            // value is reused as this part's end and the next part's start, so
+            // the parts stay abutting (no overlap/gap) and never slice a
+            // multibyte codepoint.
+            let split = |p: usize| floor_char_boundary(body, s + p * part_len);
             for p in 0..parts {
-                let ps = s + p * part_len;
-                let pe = if p == parts - 1 {
-                    e
-                } else {
-                    s + (p + 1) * part_len
-                };
+                let ps = if p == 0 { s } else { split(p) };
+                let pe = if p == parts - 1 { e } else { split(p + 1) };
                 refined.push((format!("{} — pt {}", label, p + 1), ps, pe));
             }
         } else {
@@ -405,6 +406,19 @@ fn chunk_evenly(body: &str) -> Vec<(String, usize, usize)> {
     out
 }
 
+/// Snap a byte index DOWN to the nearest UTF-8 char boundary of `body`
+/// (`std::str::floor_char_boundary` is still unstable). Section locators are
+/// used to slice the body, so every split point MUST land on a boundary or the
+/// slice panics; snapping down also keeps abutment intact because the same
+/// snapped value is shared by a section's end and the next section's start.
+fn floor_char_boundary(body: &str, idx: usize) -> usize {
+    let mut idx = idx.min(body.len());
+    while idx > 0 && !body.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
 fn snap_to_paragraph(body: &str, idx: usize) -> usize {
     let bytes = body.as_bytes();
     let max_skip = 500.min(bytes.len() - idx);
@@ -414,7 +428,10 @@ fn snap_to_paragraph(body: &str, idx: usize) -> usize {
             return pos + 2;
         }
     }
-    idx
+    // No paragraph break within reach: fall back to the raw chunk boundary, but
+    // snap it onto a char boundary so a multibyte body never yields a locator
+    // that slices through a codepoint.
+    floor_char_boundary(body, idx)
 }
 
 pub struct ImportResult {
@@ -740,6 +757,48 @@ mod tests {
         for (label, s, e) in &secs {
             assert!(e > s, "degenerate empty section {label}: {s}..{e}");
         }
+    }
+
+    #[test]
+    fn chunk_locators_are_char_boundaries_for_dense_multibyte_body() {
+        // A long run of multibyte glyphs with NO paragraph break forces
+        // snap_to_paragraph onto its raw-index fallback. Before the fix that
+        // fallback returned a byte offset that could slice through a codepoint,
+        // so body[start..end] (used to read the section) would panic. Every
+        // locator must now land on a UTF-8 char boundary.
+        let body: String = "é—🜨à"
+            .chars()
+            .cycle()
+            .take(12_000) // >> TARGET_SECTION_CHARS so n >= 2 boundaries exist
+            .collect();
+        let secs = chunk_evenly(&body);
+        assert!(secs.len() >= 2, "need a real boundary, got {}", secs.len());
+        for (label, s, e) in &secs {
+            assert!(
+                body.is_char_boundary(*s) && body.is_char_boundary(*e),
+                "section {label} {s}..{e} crosses a codepoint"
+            );
+            // Must be sliceable without panicking.
+            let _ = &body[*s..*e];
+            assert!(e > s, "degenerate section {label}");
+        }
+        assert_eq!(secs[0].1, 0);
+        assert_eq!(secs.last().unwrap().2, body.len());
+        for w in secs.windows(2) {
+            assert_eq!(w[0].2, w[1].1, "sections must abut");
+        }
+    }
+
+    #[test]
+    fn floor_char_boundary_snaps_down_to_a_codepoint_start() {
+        let s = "aé🜨b"; // bytes: a(1) é(2) 🜨(4) b(1) => len 8
+        assert_eq!(floor_char_boundary(s, 0), 0);
+        assert_eq!(floor_char_boundary(s, 1), 1); // boundary before 'é'
+        assert_eq!(floor_char_boundary(s, 2), 1); // mid-'é' -> back to 1
+        assert_eq!(floor_char_boundary(s, 3), 3); // boundary before '🜨'
+        assert_eq!(floor_char_boundary(s, 5), 3); // mid-'🜨' -> back to 3
+        assert_eq!(floor_char_boundary(s, 7), 7); // boundary before 'b'
+        assert_eq!(floor_char_boundary(s, 99), s.len()); // clamps to len
     }
 
     #[test]
