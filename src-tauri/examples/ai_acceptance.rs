@@ -271,7 +271,7 @@ fn demo_ephemeral_then_approve(
         created_at: "2026-05-24".to_string(),
         last_opened_at: None,
     };
-    let md_path = export::export_note(&book, &note)?;
+    let md_path = export::export_note(&export::root_for(&conn), &book, &note)?;
     conn.execute(
         "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
         params![md_path.to_string_lossy().to_string(), note_id],

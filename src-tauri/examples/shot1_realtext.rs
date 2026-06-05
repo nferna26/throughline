@@ -234,7 +234,7 @@ fn main() -> anyhow::Result<()> {
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?12, ?13)",
         params![tutor.id, tutor.book_id, tutor.session_id, tutor.note_type, tutor.locator, tutor.chapter_label, tutor.body, tutor.short_quote, tutor.created_at, tutor.updated_at, tutor.anchor_start, tutor.anchor_end, tutor.anchored_text],
     )?;
-    let md_path = export::export_note(&book, &tutor)?;
+    let md_path = export::export_note(&export::root_for(&conn), &book, &tutor)?;
     let md = std::fs::read_to_string(&md_path)?;
     furthest = "exported";
 

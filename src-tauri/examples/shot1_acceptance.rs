@@ -192,7 +192,7 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     // ── 6. Export safe Markdown + assert the frontmatter contract ──────────
-    let md_path = export::export_note(&book, &note)?;
+    let md_path = export::export_note(&export::root_for(&conn), &book, &note)?;
     let md = std::fs::read_to_string(&md_path)?;
     println!("    note exported → {}", md_path.display());
 
