@@ -147,7 +147,9 @@ fn detect_chapters(body: &str) -> Vec<(String, usize, usize)> {
             *k = false;
         }
         let last_key = heading_key(&headings[run - 1].2);
-        let recurs_in_body = headings[run..].iter().any(|h| heading_key(&h.2) == last_key);
+        let recurs_in_body = headings[run..]
+            .iter()
+            .any(|h| heading_key(&h.2) == last_key);
         if !recurs_in_body {
             keep[run - 1] = true;
         }
@@ -175,7 +177,8 @@ fn detect_chapters(body: &str) -> Vec<(String, usize, usize)> {
     // preface, or the opening Letters in an epistolary novel. Keep it as its own
     // section so nothing is lost; label it from its first line.
     if first > toc_end + MIN_CHAPTER_GAP_CHARS {
-        let label = first_nonempty_line(&body[toc_end..first]).unwrap_or_else(|| "Opening".to_string());
+        let label =
+            first_nonempty_line(&body[toc_end..first]).unwrap_or_else(|| "Opening".to_string());
         sections.push((label, toc_end, first));
     }
 
@@ -223,11 +226,15 @@ fn detect_chapters(body: &str) -> Vec<(String, usize, usize)> {
     for (label, s, e) in sections {
         let len = e - s;
         if len > TARGET_SECTION_CHARS * 3 {
-            let parts = (len + TARGET_SECTION_CHARS - 1) / TARGET_SECTION_CHARS;
+            let parts = len.div_ceil(TARGET_SECTION_CHARS);
             let part_len = len / parts;
             for p in 0..parts {
                 let ps = s + p * part_len;
-                let pe = if p == parts - 1 { e } else { s + (p + 1) * part_len };
+                let pe = if p == parts - 1 {
+                    e
+                } else {
+                    s + (p + 1) * part_len
+                };
                 refined.push((format!("{} — pt {}", label, p + 1), ps, pe));
             }
         } else {
@@ -287,7 +294,9 @@ fn is_chapter_heading(line: &str) -> bool {
 /// to "chapter xxvii". Falls back to the lowercased label up to the first period.
 fn heading_key(label: &str) -> String {
     let l = label.trim().to_lowercase();
-    for kw in ["chapter ", "chap. ", "letter ", "book ", "part ", "canto ", "act ", "scene "] {
+    for kw in [
+        "chapter ", "chap. ", "letter ", "book ", "part ", "canto ", "act ", "scene ",
+    ] {
         if let Some(rest) = l.strip_prefix(kw) {
             let tok = rest
                 .split(|c: char| !c.is_alphanumeric())
@@ -303,8 +312,15 @@ fn heading_key(label: &str) -> String {
 /// spellings that happen to be made of roman letters).
 fn to_roman(mut n: u32) -> String {
     const T: &[(u32, &str)] = &[
-        (100, "C"), (90, "XC"), (50, "L"), (40, "XL"), (10, "X"),
-        (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
     ];
     let mut s = String::new();
     for &(v, r) in T {
@@ -325,10 +341,17 @@ fn parse_roman(raw: &str) -> Option<u32> {
         return None;
     }
     let val = |c: char| match c {
-        'I' => 1, 'V' => 5, 'X' => 10, 'L' => 50, 'C' => 100, 'D' => 500, 'M' => 1000, _ => 0,
+        'I' => 1,
+        'V' => 5,
+        'X' => 10,
+        'L' => 50,
+        'C' => 100,
+        'D' => 500,
+        'M' => 1000,
+        _ => 0,
     };
     let v: Vec<u32> = s.chars().map(val).collect();
-    if v.iter().any(|&x| x == 0) {
+    if v.contains(&0) {
         return None;
     }
     let mut total = 0i64;
@@ -339,7 +362,9 @@ fn parse_roman(raw: &str) -> Option<u32> {
             total += v[i] as i64;
         }
     }
-    let n = u32::try_from(total).ok().filter(|&n| (1..=100).contains(&n))?;
+    let n = u32::try_from(total)
+        .ok()
+        .filter(|&n| (1..=100).contains(&n))?;
     (to_roman(n) == s).then_some(n)
 }
 
@@ -359,14 +384,22 @@ fn chunk_evenly(body: &str) -> Vec<(String, usize, usize)> {
     if len == 0 {
         return Vec::new();
     }
-    let n = ((len + TARGET_SECTION_CHARS - 1) / TARGET_SECTION_CHARS).max(1);
+    let n = len.div_ceil(TARGET_SECTION_CHARS).max(1);
     let chunk = len / n;
     let mut out = Vec::with_capacity(n);
+    // Each section starts where the previous one ENDED (after snapping), not at the
+    // raw chunk boundary — otherwise the snap forward (up to ~500 bytes) duplicated
+    // that text into the next section. Carrying prev_end forward keeps coverage gap-
+    // and overlap-free: section[i].end == section[i+1].start, last end == len.
+    let mut prev_end = 0usize;
     for i in 0..n {
-        let s = i * chunk;
-        let e = if i == n - 1 { len } else { (i + 1) * chunk };
-        // Snap to paragraph boundary if possible
-        let snapped_end = snap_to_paragraph(body, e);
+        let s = prev_end;
+        let snapped_end = if i == n - 1 {
+            len
+        } else {
+            snap_to_paragraph(body, (i + 1) * chunk)
+        };
+        prev_end = snapped_end;
         out.push((format!("Part {}", i + 1), s, snapped_end));
     }
     out
@@ -398,7 +431,10 @@ pub fn import_any(src_path: &Path) -> Result<ImportResult> {
     match ext.as_str() {
         "txt" => import_txt(src_path),
         "epub" => crate::import_epub::import_epub(src_path),
-        other => Err(anyhow!("unsupported file type: .{} (supported: .txt, .epub)", other)),
+        other => Err(anyhow!(
+            "unsupported file type: .{} (supported: .txt, .epub)",
+            other
+        )),
     }
 }
 
@@ -516,7 +552,9 @@ mod tests {
     fn letter_headings_are_detected_but_not_prose() {
         assert!(is_chapter_heading("Letter 1"));
         assert!(is_chapter_heading("Letter the First"));
-        assert!(!is_chapter_heading("Letter to the editor about a small matter"));
+        assert!(!is_chapter_heading(
+            "Letter to the editor about a small matter"
+        ));
         // Existing behaviours stay intact.
         assert!(is_chapter_heading("Chapter 1"));
         assert!(is_chapter_heading("BOOK I"));
@@ -530,14 +568,22 @@ mod tests {
             "Contents\n\nChapter 1\nChapter 2\nChapter 3\n\nChapter 1\n\n{p}\n\nChapter 2\n\n{p}\n\nChapter 3\n\n{p}\n"
         );
         let secs = sectionize(&body);
-        let summary: Vec<(&str, usize)> = secs.iter().map(|(l, s, e)| (l.as_str(), e - s)).collect();
+        let summary: Vec<(&str, usize)> =
+            secs.iter().map(|(l, s, e)| (l.as_str(), e - s)).collect();
         assert_eq!(secs.len(), 3, "expected 3 real chapters, got {summary:?}");
         for (label, s, e) in &secs {
             assert!(label.starts_with("Chapter"), "unexpected label {label:?}");
-            assert!(e - s > MIN_CHAPTER_GAP_CHARS, "TOC stub leaked through: {label} = {} chars", e - s);
+            assert!(
+                e - s > MIN_CHAPTER_GAP_CHARS,
+                "TOC stub leaked through: {label} = {} chars",
+                e - s
+            );
         }
         // The first section is the real Chapter 1 body, not the 9-char TOC line.
-        assert!(secs[0].1 > 0, "first section should start after the dropped TOC");
+        assert!(
+            secs[0].1 > 0,
+            "first section should start after the dropped TOC"
+        );
     }
 
     #[test]
@@ -545,9 +591,15 @@ mod tests {
         // No chapter heading on the preface, but it must not be lost.
         let p = prose();
         let preface = "This edition was prepared with care over many quiet evenings. ".repeat(8);
-        let body = format!("Preface\n\n{preface}\n\nChapter 1\n\n{p}\n\nChapter 2\n\n{p}\n\nChapter 3\n\n{p}\n");
+        let body = format!(
+            "Preface\n\n{preface}\n\nChapter 1\n\n{p}\n\nChapter 2\n\n{p}\n\nChapter 3\n\n{p}\n"
+        );
         let secs = sectionize(&body);
-        assert!(secs.len() >= 4, "preface + 3 chapters expected, got {}", secs.len());
+        assert!(
+            secs.len() >= 4,
+            "preface + 3 chapters expected, got {}",
+            secs.len()
+        );
         assert_eq!(secs[0].0, "Preface");
         assert_eq!(secs[0].1, 0, "front matter should start at the body start");
         assert!(secs[1].0.starts_with("Chapter"));
@@ -560,7 +612,10 @@ mod tests {
             "Contents\n\nLetter 1\nLetter 2\nChapter 1\nChapter 2\n\nLetter 1\n\n{p}\n\nLetter 2\n\n{p}\n\nChapter 1\n\n{p}\n\nChapter 2\n\n{p}\n"
         );
         let labels: Vec<String> = sectionize(&body).into_iter().map(|(l, _, _)| l).collect();
-        assert_eq!(labels, vec!["Letter 1", "Letter 2", "Chapter 1", "Chapter 2"]);
+        assert_eq!(
+            labels,
+            vec!["Letter 1", "Letter 2", "Chapter 1", "Chapter 2"]
+        );
     }
 
     #[test]
@@ -570,7 +625,10 @@ mod tests {
         let secs = sectionize(&body);
         assert_eq!(secs.len(), 3);
         assert_eq!(secs[0].0, "Chapter 1");
-        assert_eq!(secs[0].1, 0, "no spurious front-matter section when chapter 1 is at the top");
+        assert_eq!(
+            secs[0].1, 0,
+            "no spurious front-matter section when chapter 1 is at the top"
+        );
     }
 
     #[test]
@@ -588,11 +646,21 @@ mod tests {
         );
         let labels: Vec<String> = sectionize(&body).into_iter().map(|(l, _, _)| l).collect();
         // The first section must NOT be the last chapter pulled from the contents.
-        assert_ne!(labels.first().map(String::as_str), Some("CHAPTER 3. The End."), "TOC last-entry leaked as section 0: {labels:?}");
+        assert_ne!(
+            labels.first().map(String::as_str),
+            Some("CHAPTER 3. The End."),
+            "TOC last-entry leaked as section 0: {labels:?}"
+        );
         // Real chapters appear once each, in order.
         let pos = |name: &str| labels.iter().position(|l| l == name);
-        assert!(pos("CHAPTER 1. Loomings.") < pos("CHAPTER 2. The Mat."), "out of order: {labels:?}");
-        assert!(pos("CHAPTER 2. The Mat.") < pos("CHAPTER 3. The End."), "out of order: {labels:?}");
+        assert!(
+            pos("CHAPTER 1. Loomings.") < pos("CHAPTER 2. The Mat."),
+            "out of order: {labels:?}"
+        );
+        assert!(
+            pos("CHAPTER 2. The Mat.") < pos("CHAPTER 3. The End."),
+            "out of order: {labels:?}"
+        );
         // The front-matter section is labelled from real content, not the stray
         // "Epilogue" contents line (which Epilogue-detection deduped away).
         assert_ne!(labels.first().map(String::as_str), Some("Epilogue"));
@@ -611,7 +679,10 @@ mod tests {
         assert_eq!(secs.len(), 4, "lost a volume or split wrong: {labels:?}");
         assert_eq!(secs[0].1, 0, "first volume's prefix was lost");
         // Book headings fold into their first chapter (volume context kept), no stubs.
-        assert!(labels[0].contains("BOOK ONE") && labels[0].contains("CHAPTER I"), "{labels:?}");
+        assert!(
+            labels[0].contains("BOOK ONE") && labels[0].contains("CHAPTER I"),
+            "{labels:?}"
+        );
         assert!(labels[2].contains("BOOK TWO"), "{labels:?}");
         for (l, s, e) in &secs {
             assert!(e - s > 120, "degenerate section {l}");
@@ -631,10 +702,44 @@ mod tests {
              CHAPTER I\n\n{p}\n\nCHAPTER II\n\n{p}\n\nCHAPTER III\n\n{p}\n"
         );
         let labels: Vec<String> = sectionize(&body).into_iter().map(|(l, _, _)| l).collect();
-        assert!(!labels[0].contains("The End"), "contents' last entry leaked as section 0: {labels:?}");
+        assert!(
+            !labels[0].contains("The End"),
+            "contents' last entry leaked as section 0: {labels:?}"
+        );
         let pos = |s: &str| labels.iter().position(|l| l == s);
         assert!(pos("CHAPTER I") < pos("CHAPTER II"), "{labels:?}");
         assert!(pos("CHAPTER II") < pos("CHAPTER III"), "{labels:?}");
+    }
+
+    #[test]
+    fn chunk_sections_do_not_overlap_and_cover_the_whole_body() {
+        // A chapterless body forces the even-chunk path. Each section must start
+        // exactly where the previous ended (no ~500-byte snap-forward duplication)
+        // and together they must cover the body with no gaps. This guards the
+        // overlap bug where the next section restarted at the un-snapped boundary.
+        let para =
+            "The river of paragraphs flows on without any chapter heading at all. ".repeat(6);
+        let body = std::iter::repeat_n(para.as_str(), 60)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let secs = chunk_evenly(&body);
+        assert!(
+            secs.len() >= 2,
+            "need multiple chunks to test boundaries, got {}",
+            secs.len()
+        );
+        assert_eq!(secs[0].1, 0, "first section starts at the body start");
+        assert_eq!(
+            secs.last().unwrap().2,
+            body.len(),
+            "last section ends at the body end"
+        );
+        for w in secs.windows(2) {
+            assert_eq!(w[0].2, w[1].1, "sections must abut: no overlap, no gap");
+        }
+        for (label, s, e) in &secs {
+            assert!(e > s, "degenerate empty section {label}: {s}..{e}");
+        }
     }
 
     #[test]
