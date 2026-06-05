@@ -52,6 +52,16 @@ The release workflow does both automatically **once the Apple secrets are set**
 it's **unsigned** and users must right-click → Open. Do not ship the unsigned
 one to customers.
 
+> **The `.dmg` container is notarized too, not just the app.** Tauri notarizes
+> and staples the `.app` (which is what the auto-updater ships), but it does *not*
+> notarize the `.dmg` itself — and a quarantined, un-notarized `.dmg` triggers
+> *"can't be opened because Apple cannot check it for malicious software"* on the
+> first double-click. So the workflow has a dedicated step that runs
+> `xcrun notarytool submit … --wait` + `xcrun stapler staple` on the `.dmg` and
+> replaces the release asset. Verify any release with
+> `xcrun stapler validate <dmg>` and `spctl -a -t open --context context:primary-signature -vvv <dmg>`
+> (want: `source=Notarized Developer ID`).
+
 ---
 
 ## Required CI secrets
