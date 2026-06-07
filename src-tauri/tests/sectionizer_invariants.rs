@@ -79,6 +79,34 @@ fn assert_sectionizer_invariants(ctx: &str, body: &str, sections: &[(String, usi
             w[0], w[1]
         );
     }
+
+    // (5) NO WORD SPLIT: no internal boundary cuts through a word. For each
+    // boundary b (a section's end == the next section's start), the char ending
+    // just before b and the char starting at b must not BOTH be word characters —
+    // every split must land on whitespace/punctuation, never inside a run of
+    // letters. This is the "Part 3 opens mid-word ('erant…')" bug.
+    for w in sections.windows(2) {
+        let b = w[0].2;
+        if b == 0 || b >= body.len() {
+            continue;
+        }
+        let before = body[..b].chars().next_back();
+        let after = body[b..].chars().next();
+        if let (Some(bc), Some(ac)) = (before, after) {
+            assert!(
+                !(is_word_char(bc) && is_word_char(ac)),
+                "[{ctx}] boundary at {b} splits a word ({bc:?}|{ac:?}): {:?} then {:?}",
+                w[0],
+                w[1]
+            );
+        }
+    }
+}
+
+/// A "word character" for the no-word-split invariant: any Unicode alphanumeric.
+/// A boundary falling between two of these cuts a word in half.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric()
 }
 
 // ----------------------------------------------------------------------------
@@ -109,6 +137,48 @@ const FIXTURES: &[(&str, &str)] = &[
         include_str!("fixtures/accented_multibyte.txt"),
     ),
 ];
+
+// ----------------------------------------------------------------------------
+// Real public-domain book corpus (committed; network-free). Each book is the
+// PG-header/footer-stripped body trimmed to ~80 KB — large, real, hard-wrapped
+// text that reliably produces the chunk_evenly / refine-split boundaries where
+// the word-splitting bug lives. Fetched once at build time, never at test time.
+// ----------------------------------------------------------------------------
+#[rustfmt::skip]
+const CORPUS: &[(&str, &str)] = &[
+    ("meditations", include_str!("fixtures/corpus/meditations.txt")),
+    ("confessions_augustine", include_str!("fixtures/corpus/confessions_augustine.txt")),
+    ("modest_proposal", include_str!("fixtures/corpus/modest_proposal.txt")),
+    ("moby_dick", include_str!("fixtures/corpus/moby_dick.txt")),
+    ("war_and_peace", include_str!("fixtures/corpus/war_and_peace.txt")),
+    ("pride_and_prejudice", include_str!("fixtures/corpus/pride_and_prejudice.txt")),
+    ("frankenstein", include_str!("fixtures/corpus/frankenstein.txt")),
+    ("dracula", include_str!("fixtures/corpus/dracula.txt")),
+    ("sherlock_holmes", include_str!("fixtures/corpus/sherlock_holmes.txt")),
+    ("don_quijote_es", include_str!("fixtures/corpus/don_quijote_es.txt")),
+    ("les_miserables", include_str!("fixtures/corpus/les_miserables.txt")),
+    ("the_prince", include_str!("fixtures/corpus/the_prince.txt")),
+];
+
+/// The bug this change targets: a section must never start or end in the middle
+/// of a word. Runs the full invariant set over 12 real public-domain books.
+/// Run with `-- --nocapture` to see each book's section count + which path it took.
+#[test]
+fn sectionize_never_splits_a_word_across_a_boundary() {
+    for (name, body) in CORPUS {
+        let sections = sectionize(body);
+        let labels: Vec<&str> = sections
+            .iter()
+            .take(3)
+            .map(|(l, _, _)| l.as_str())
+            .collect();
+        eprintln!(
+            "[corpus] {name}: {} sections; first labels {labels:?}",
+            sections.len()
+        );
+        assert_sectionizer_invariants(name, body, &sections);
+    }
+}
 
 #[test]
 fn sectionize_covers_body_without_overlap_or_gaps_for_fixtures() {
