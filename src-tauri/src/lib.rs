@@ -162,6 +162,7 @@ pub fn run() {
             commands::notes::cmd_quote_warns,
             // ── AI ──
             commands::ai::cmd_generate_prompt_preview,
+            commands::ai::cmd_ai_preview,
             commands::ai::cmd_save_ai_preview_as_note,
             commands::ai::cmd_ai_ask,
             commands::ai::cmd_list_ai_models,

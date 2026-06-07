@@ -202,21 +202,23 @@ describe("MarginTutorCard — provider gate", () => {
     });
   }
 
-  it("when no provider is chosen, does NOT call cmd_ai_ask and shows the choose-a-provider message", async () => {
+  it("when no provider is chosen, does NOT call cmd_ai_ask and shows the cold-start setup sheet", async () => {
     localStorage.setItem("rg.tutorEnabled", "true"); // would normally auto-start
     setNoProvider();
     render(card());
-    expect(await screen.findByText(/No AI provider is set up/i)).toBeInTheDocument();
+    // The dead-end "Choose one in Settings" message is replaced by setup-at-intent.
+    expect(await screen.findByText(/Tutor not connected/i)).toBeInTheDocument();
+    expect(screen.getByText(/Paste API key & ask/i)).toBeInTheDocument();
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_get_settings"));
     expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_ai_ask", expect.anything());
     expect(screen.queryByText(/nothing leaves your device/i)).toBeNull();
     expect(screen.queryByText(/^Local-only$/)).toBeNull();
   });
 
-  it("at the consent gate with no provider, shows the choose-a-provider message (no false on-device promise)", async () => {
+  it("at the consent gate with no provider, shows the setup sheet (no false on-device promise)", async () => {
     setNoProvider();
     render(card());
-    expect(await screen.findByText(/No AI provider is set up/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Tutor not connected/i)).toBeInTheDocument();
     expect(screen.queryByText(/nothing leaves your device/i)).toBeNull();
     expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_ai_ask", expect.anything());
   });

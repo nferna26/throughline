@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Channel } from "@tauri-apps/api/core";
 import TLIcon from "../components/TLIcon";
+import AiSetupSheet from "../components/AiSetupSheet";
 import { useDialog } from "../hooks/useDialog";
 import {
   AI_STUB_MODES,
@@ -143,8 +144,20 @@ export default function AiPanel({ bookId, chapter, locator, selection, onClose }
         ) : (
           <span className="tl-localtag off"><TLIcon name="arrowRight" size={13} /> Local-only OFF · sends your passage to {baseUrl}</span>
         )}
-        {!model.trim() && (
-          <p className="tl-warn-text">No model id set. Open Settings → AI and type the model id loaded in your local server.</p>
+        {!model.trim() && hasSelection && (
+          // Setup at the moment of intent rather than a dead-end pointer to
+          // Settings: paste a key / use a local model / copy the prompt.
+          <AiSetupSheet
+            ctx={{
+              mode,
+              selectedText: selection,
+              bookTitle: "",
+              author: null,
+              sectionLabel: chapter,
+            }}
+            initialState="not_connected"
+            onConnected={() => { invoke<SettingsDto>("cmd_get_settings").then(setSettings).catch(() => {}); }}
+          />
         )}
 
         {!hasSelection ? (

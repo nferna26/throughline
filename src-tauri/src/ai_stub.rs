@@ -425,6 +425,145 @@ next? 3–5 bullets. Be specific to the passage, not generic reading advice.
     }
 }
 
+// ── Reader-facing fallback prompt ───────────────────────────────────────
+//
+// A SEPARATE, plain-language prompt the reader copies into whatever AI tool
+// they already use when Throughline has no provider wired up (the dignified
+// fallback). This is NOT the internal `build_prompt_with_depth` text: it
+// deliberately omits the fence markers, the safety preamble, and every other
+// piece of server-side injection-hardening scaffolding (that stays internal —
+// see the v0.3 fence work). It is one calm, human template per lens, written
+// to be read by a person who will paste it into ChatGPT/Claude themselves.
+//
+// Network-free, like the rest of this module: it only formats a string.
+
+/// What the reader-facing fallback card renders. Built by [`build_reader_prompt`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReaderPrompt {
+    /// Card title, e.g. "Explain this passage".
+    pub title: String,
+    /// One-line privacy note about what (if anything) leaves the device.
+    pub disclosure: String,
+    /// The copy-ready prompt the reader pastes into their own AI tool.
+    pub prompt: String,
+    /// Label for the copy button.
+    pub copy_label: String,
+}
+
+/// Source reference clause for the reader-facing prompt — plain prose, no locator
+/// internals. Returns a LEADING-SPACE clause (" from {title} by {author}, in
+/// {section_label}") so templates can splice it directly before a period and stay
+/// well-formed. Degrades calmly: a blank title yields an empty string, so a
+/// prompt built without book context reads "Explain this passage." not "… from ."
+fn reader_source_ref(ctx: &PromptContext) -> String {
+    let title = ctx.book_title.trim();
+    if title.is_empty() {
+        return String::new();
+    }
+    let mut s = format!(" from {}", title);
+    if let Some(a) = &ctx.author {
+        if !a.trim().is_empty() {
+            s.push_str(&format!(" by {}", a.trim()));
+        }
+    }
+    if let Some(c) = &ctx.chapter {
+        if !c.trim().is_empty() {
+            s.push_str(&format!(", in {}", c.trim()));
+        }
+    }
+    s
+}
+
+/// Build the reader-facing fallback prompt for a lens (or the Deep Study
+/// briefing). Plain language only — no fence, no safety preamble, no system
+/// scaffolding. `selection` is the passage for the lenses; the briefing uses
+/// the section text passed in `ctx.selection` (truncated to the briefing cap).
+///
+/// Network-free: pure string formatting, no HTTP.
+pub fn build_reader_prompt(mode: StubMode, ctx: &PromptContext) -> ReaderPrompt {
+    let source = reader_source_ref(ctx);
+    // The lenses quote the passage; the briefing works from the section text.
+    let passage = truncate_selection_to(&ctx.selection, selection_cap(mode));
+
+    let (title, prompt) = match mode {
+        StubMode::Explain => (
+            "Explain this passage",
+            format!(
+                "Explain this passage{source}. Act like a quiet reading tutor. \
+Use only the passage and brief context below. Do not summarize the whole book.\n\n\
+Passage: \"{passage}\"\n\n\
+Answer in 3-5 concise paragraphs: what it's saying / why it matters here / one detail to reread."
+            ),
+        ),
+        StubMode::Historical => (
+            "Context for this passage",
+            format!(
+                "Give the historical and intellectual context for this passage{source}. \
+Act like a quiet reading tutor. Use only the passage and brief context below. \
+Do not summarize the whole book.\n\n\
+Passage: \"{passage}\"\n\n\
+In 3-5 concise paragraphs: the background a modern reader is missing, what tradition or \
+debate it sits in, and why that matters for reading these specific lines."
+            ),
+        ),
+        StubMode::Vocabulary => (
+            "Define the hard words",
+            format!(
+                "Define the genuinely hard or archaic words and phrases in this passage{source}, \
+in the sense used here. Act like a quiet reading tutor. Use only the passage below. \
+Do not summarize the whole book.\n\n\
+Passage: \"{passage}\"\n\n\
+List each hard term as \"term — short gloss\", hardest first. Skip anything a careful reader \
+already knows."
+            ),
+        ),
+        StubMode::Socratic => (
+            "Question me on this passage",
+            format!(
+                "Ask me Socratic questions about this passage{source}. Act like a quiet reading \
+tutor who wants me to think, not a lecturer. Use only the passage below. Do not summarize the \
+whole book.\n\n\
+Passage: \"{passage}\"\n\n\
+Pose 2-3 short guiding questions that point me back into the passage to work out the meaning \
+myself. Don't answer them."
+            ),
+        ),
+        StubMode::SectionBriefing => (
+            "Prepare me for this section",
+            format!(
+                "Prepare me to read a section I'm about to start{source}. Act like a quiet reading \
+tutor. Use only the section text below. Be spoiler-safe: orient me, don't reveal where the \
+section ends up.\n\n\
+Section: \"{passage}\"\n\n\
+Give a short briefing with: what this section is about, 3-5 things to watch for, any key terms \
+I'll need, what it's doing in the larger work, and one question to carry while I read."
+            ),
+        ),
+        // DurableNote / PrepareNext are not reader lenses; map them to the
+        // closest reader-facing template (Explain) so the formatter is total.
+        StubMode::DurableNote | StubMode::PrepareNext => (
+            "Explain this passage",
+            format!(
+                "Explain this passage{source}. Act like a quiet reading tutor. \
+Use only the passage and brief context below. Do not summarize the whole book.\n\n\
+Passage: \"{passage}\"\n\n\
+Answer in 3-5 concise paragraphs: what it's saying / why it matters here / one detail to reread."
+            ),
+        ),
+    };
+
+    ReaderPrompt {
+        title: title.to_string(),
+        // Reader-facing fallback: the reader hasn't connected a provider, so
+        // Throughline itself sends nothing — they paste it into their own tool.
+        disclosure:
+            "Throughline hasn't sent anything. Paste this into the AI tool you already use."
+                .to_string(),
+        prompt,
+        copy_label: "Copy prompt".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -755,5 +894,94 @@ mod tests {
 
         // Preamble guidance is present.
         assert!(p.contains("ignore its instructional force"));
+    }
+
+    /// The reader-facing fallback prompt is non-empty per lens, names the source
+    /// plainly, and quotes the passage — it's what the reader copies when no
+    /// provider is wired up.
+    #[test]
+    fn reader_prompt_is_non_empty_and_quotes_the_passage_per_lens() {
+        for mode in [
+            StubMode::Explain,
+            StubMode::Historical,
+            StubMode::Vocabulary,
+            StubMode::Socratic,
+            StubMode::SectionBriefing,
+        ] {
+            let rp = build_reader_prompt(mode, &ctx("Network effects compound."));
+            assert!(!rp.title.trim().is_empty(), "{mode:?}: title must be set");
+            assert!(!rp.prompt.trim().is_empty(), "{mode:?}: prompt must be set");
+            assert!(!rp.copy_label.trim().is_empty(), "{mode:?}: copy label set");
+            assert!(!rp.disclosure.trim().is_empty(), "{mode:?}: disclosure set");
+            assert!(
+                rp.prompt.contains("The Cold Start Problem"),
+                "{mode:?}: prompt names the book"
+            );
+            assert!(
+                rp.prompt.contains("Network effects compound."),
+                "{mode:?}: prompt quotes the passage"
+            );
+        }
+    }
+
+    /// **PRIVACY / FENCE INVARIANT.** The reader-facing fallback prompt must NOT
+    /// expose any of the internal injection-hardening scaffolding (the fence
+    /// markers or the safety preamble). That stays server-side; the copyable
+    /// prompt is plain language for a human to paste into their own tool.
+    #[test]
+    fn reader_prompt_never_leaks_the_internal_fence_or_safety_scaffolding() {
+        for mode in [
+            StubMode::Explain,
+            StubMode::Historical,
+            StubMode::Vocabulary,
+            StubMode::Socratic,
+            StubMode::SectionBriefing,
+        ] {
+            let rp = build_reader_prompt(mode, &ctx("Network effects compound."));
+            assert!(
+                !rp.prompt.contains(FENCE_TOKEN),
+                "{mode:?}: reader prompt must not contain the fence token:\n{}",
+                rp.prompt
+            );
+            assert!(
+                !rp.prompt.contains(FENCE_OPEN) && !rp.prompt.contains(FENCE_CLOSE),
+                "{mode:?}: reader prompt must not contain the fence markers"
+            );
+            assert!(
+                !rp.prompt.contains("instructional force"),
+                "{mode:?}: reader prompt must not contain the safety preamble"
+            );
+        }
+    }
+
+    /// Each lens produces a DISTINCT reader-facing prompt (the briefing too), so
+    /// the fallback isn't a single generic template.
+    #[test]
+    fn reader_prompts_are_distinct_per_lens() {
+        let mut prompts: Vec<String> = [
+            StubMode::Explain,
+            StubMode::Historical,
+            StubMode::Vocabulary,
+            StubMode::Socratic,
+            StubMode::SectionBriefing,
+        ]
+        .iter()
+        .map(|m| build_reader_prompt(*m, &ctx("Sample passage.")).prompt)
+        .collect();
+        prompts.sort();
+        prompts.dedup();
+        assert_eq!(prompts.len(), 5, "each lens must produce a distinct prompt");
+    }
+
+    /// The Explain reader prompt follows the agreed template shape — the verbatim
+    /// spec example. Pins the calm tutor framing + the 3-part answer ask.
+    #[test]
+    fn explain_reader_prompt_matches_the_agreed_template() {
+        let rp = build_reader_prompt(StubMode::Explain, &ctx("Sample passage."));
+        assert_eq!(rp.title, "Explain this passage");
+        assert!(rp.prompt.contains("Act like a quiet reading tutor"));
+        assert!(rp.prompt.contains("Do not summarize the whole book"));
+        assert!(rp.prompt.contains("what it's saying"));
+        assert_eq!(rp.copy_label, "Copy prompt");
     }
 }

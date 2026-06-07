@@ -49,6 +49,17 @@ pub struct ConnTestResult {
     pub message: String,
 }
 
+/// The dignified-fallback payload: a reader-facing prompt to copy into whatever
+/// AI tool they already use, returned WITHOUT calling any model. Mirrors
+/// `ai_stub::ReaderPrompt` for the frontend.
+#[derive(Serialize)]
+pub struct AiPreviewCard {
+    pub title: String,
+    pub disclosure: String,
+    pub prompt: String,
+    pub copy_label: String,
+}
+
 // ── Commands ───────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -101,6 +112,53 @@ pub fn cmd_generate_prompt_preview(
         prompt,
         wrote_to_memory: false,
         provider: None,
+    })
+}
+
+/// Build the reader-facing fallback prompt for a lens (or the Deep Study
+/// briefing) WITHOUT calling any model. This is the dignified fallback: when no
+/// provider is wired up (or the reader prefers to use their own tool), the UI
+/// shows this calm, copy-ready prompt instead of a dead end.
+///
+/// Network-free by construction: it returns straight from the `ai_stub`
+/// formatter (which carries no HTTP client) and never touches `ai_client` /
+/// `ai_providers`. The internal fence + safety scaffolding is NOT exposed — the
+/// formatter emits plain language for a human to paste.
+#[tauri::command]
+pub fn cmd_ai_preview(
+    mode: String,
+    selected_text: String,
+    book_title: String,
+    author: Option<String>,
+    section_label: Option<String>,
+    // For the Deep Study briefing the reader prepares for a whole section, so the
+    // briefing prompt works from this instead of a small selection.
+    section_text: Option<String>,
+) -> Result<AiPreviewCard, AppError> {
+    let stub_mode = ai_stub::StubMode::from_str(&mode)
+        .ok_or_else(|| AppError::validation(format!("unknown AI mode: {}", mode)))?;
+
+    // The briefing quotes the whole section; the lenses quote the selection.
+    let body = if matches!(stub_mode, ai_stub::StubMode::SectionBriefing) {
+        section_text.unwrap_or(selected_text)
+    } else {
+        selected_text
+    };
+
+    let ctx = ai_stub::PromptContext {
+        book_title,
+        author,
+        chapter: section_label,
+        locator: None,
+        selection: body,
+        user_note: None,
+    };
+    let rp = ai_stub::build_reader_prompt(stub_mode, &ctx);
+    Ok(AiPreviewCard {
+        title: rp.title,
+        disclosure: rp.disclosure,
+        prompt: rp.prompt,
+        copy_label: rp.copy_label,
     })
 }
 
@@ -607,6 +665,75 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `cmd_ai_preview` returns a non-empty reader-facing prompt for every lens
+    /// and performs NO network call — it takes no DB/HTTP path, returning straight
+    /// from the pure `ai_stub` formatter. (The no-network posture is also enforced
+    /// statically by `lib::tests::no_unaudited_network_plugins`, which asserts
+    /// `ai_stub.rs` pulls in no HTTP client.) We exercise the command boundary so
+    /// the wiring (mode parsing, briefing/selection routing, payload shape) is
+    /// pinned, then assert against the formatter for the privacy invariant.
+    #[test]
+    fn cmd_ai_preview_returns_a_non_empty_prompt_with_no_network_call() {
+        for mode in ["explain", "historical", "vocabulary", "socratic"] {
+            let card = cmd_ai_preview(
+                mode.to_string(),
+                "Network effects compound.".to_string(),
+                "The Cold Start Problem".to_string(),
+                Some("Andrew Chen".to_string()),
+                Some("3. Cold Start Theory".to_string()),
+                None,
+            )
+            .expect("cmd_ai_preview should succeed for a known lens");
+            assert!(!card.title.trim().is_empty(), "{mode}: title set");
+            assert!(!card.prompt.trim().is_empty(), "{mode}: prompt set");
+            assert!(!card.copy_label.trim().is_empty(), "{mode}: copy label set");
+            assert!(
+                card.prompt.contains("The Cold Start Problem"),
+                "{mode}: prompt names the book"
+            );
+            assert!(
+                card.prompt.contains("Network effects compound."),
+                "{mode}: prompt quotes the selection"
+            );
+            // Privacy invariant: the internal fence/safety scaffolding never leaks
+            // into the reader-facing copyable prompt.
+            assert!(
+                !card.prompt.contains("UNTRUSTED_PASSAGE")
+                    && !card.prompt.contains("instructional force"),
+                "{mode}: reader prompt must not expose internal scaffolding"
+            );
+        }
+
+        // The Deep Study briefing prefers the section text over the selection.
+        let briefing = cmd_ai_preview(
+            "section_briefing".to_string(),
+            "(small selection)".to_string(),
+            "The Cold Start Problem".to_string(),
+            None,
+            Some("3. Cold Start Theory".to_string()),
+            Some("A whole section of prose to prepare for.".to_string()),
+        )
+        .expect("cmd_ai_preview should succeed for the briefing");
+        assert!(briefing
+            .prompt
+            .contains("A whole section of prose to prepare for."));
+        assert!(
+            !briefing.prompt.contains("(small selection)"),
+            "briefing uses section_text"
+        );
+
+        // An unknown mode is a validation error, not a panic.
+        assert!(cmd_ai_preview(
+            "not_a_mode".to_string(),
+            "x".to_string(),
+            "Book".to_string(),
+            None,
+            None,
+            None,
+        )
+        .is_err());
     }
 
     #[test]
