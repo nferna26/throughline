@@ -68,6 +68,7 @@ fn main() -> anyhow::Result<()> {
         let body = &raw[body_start..body_end];
 
         let new_secs = import::sectionize(body);
+        let assignable_flags = import::classify_assignable(&new_secs, body);
         let before: i64 = conn.query_row(
             "SELECT COUNT(*) FROM book_sections WHERE book_id = ?1",
             params![id],
@@ -90,7 +91,7 @@ fn main() -> anyhow::Result<()> {
                 end_locator: Some(e.to_string()),
                 estimated_units: Some((e - s) as i64),
                 sort_order: i as i64,
-                assignable: true,
+                assignable: assignable_flags[i],
             };
             commands::db_helpers::insert_section(&tx, &sec)?;
         }

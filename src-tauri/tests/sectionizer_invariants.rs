@@ -158,7 +158,66 @@ const CORPUS: &[(&str, &str)] = &[
     ("don_quijote_es", include_str!("fixtures/corpus/don_quijote_es.txt")),
     ("les_miserables", include_str!("fixtures/corpus/les_miserables.txt")),
     ("the_prince", include_str!("fixtures/corpus/the_prince.txt")),
+    ("beyond_good_and_evil", include_str!("fixtures/corpus/beyond_good_and_evil.txt")),
 ];
+
+/// A section reads as real reading content (not a title page / contents list /
+/// dedication / short verse): substantial flowing prose after its heading line.
+fn looks_like_real_prose(section_body: &str) -> bool {
+    let after = section_body
+        .trim_start()
+        .split_once('\n')
+        .map(|(_, r)| r)
+        .unwrap_or("");
+    let chars = after.chars().filter(|c| !c.is_whitespace()).count();
+    let terms = after
+        .bytes()
+        .filter(|b| matches!(b, b'.' | b'!' | b'?'))
+        .count();
+    let long_line = after.lines().any(|l| l.trim().chars().count() > 60);
+    chars >= 250 && terms >= 2 && long_line
+}
+
+/// The reading plan's day-1 (first assignable section) must be real content, never
+/// a dedication / TOC / title page / title-poem.
+#[test]
+fn plan_day_one_is_real_content_not_front_matter() {
+    for (name, body) in CORPUS {
+        let raw = sectionize(body);
+        let flags = throughline_lib::import::classify_assignable(&raw, body);
+        let day1 = flags
+            .iter()
+            .position(|&a| a)
+            .unwrap_or_else(|| panic!("[{name}] no assignable section — plan would be empty"));
+        let (label, s, e) = &raw[day1];
+        eprintln!("[day1] {name}: section {day1} {label:?}");
+        assert!(
+            looks_like_real_prose(&body[*s..*e]),
+            "[{name}] day-1 section {label:?} is not real prose (likely front matter): {:?}",
+            body[*s..*e].chars().take(80).collect::<String>()
+        );
+    }
+}
+
+/// The reported case: Beyond Good and Evil's day-1 must be the Preface (real
+/// Nietzsche), not the "FROM THE HEIGHTS" dedication poem.
+#[test]
+fn beyond_good_and_evil_day_one_is_the_preface_not_the_dedication_poem() {
+    let body = CORPUS
+        .iter()
+        .find(|(n, _)| *n == "beyond_good_and_evil")
+        .unwrap()
+        .1;
+    let raw = sectionize(body);
+    let flags = throughline_lib::import::classify_assignable(&raw, body);
+    let day1 = flags.iter().position(|&a| a).unwrap();
+    let (_, s, e) = &raw[day1];
+    assert!(
+        body[*s..*e].contains("Truth is a woman"),
+        "BG&E day-1 should be the Preface, got: {:?}",
+        body[*s..*e].chars().take(80).collect::<String>()
+    );
+}
 
 /// The bug this change targets: a section must never start or end in the middle
 /// of a word. Runs the full invariant set over 12 real public-domain books.

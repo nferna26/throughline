@@ -95,6 +95,17 @@ pub fn sectionize(body: &str) -> Vec<(String, usize, usize)> {
     chunk_evenly(body)
 }
 
+/// Per-section "assignable" flags (true = part of the reading plan). Front matter —
+/// a LEADING run of dedication / title page / table of contents / copyright /
+/// epigraph / translator title-poem — is marked non-assignable so the plan's
+/// day-1 starts on real content (Preface/Foreword/Introduction/Prologue/chapters
+/// are kept). `raw` is the output of `sectionize`; `body` is the same text.
+pub fn classify_assignable(raw: &[(String, usize, usize)], _body: &str) -> Vec<bool> {
+    // STUB (RED): everything assignable — exactly today's behavior, so the
+    // front-matter tests fail until the GREEN commit implements real classification.
+    vec![true; raw.len()]
+}
+
 fn detect_chapters(body: &str) -> Vec<(String, usize, usize)> {
     // Heading lines, as (line_start, line_end_before_newline, trimmed_label).
     let mut headings: Vec<(usize, usize, String)> = Vec::new();
@@ -541,6 +552,7 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
 
     // Sectionize
     let raw_sections = sectionize(body);
+    let assignable_flags = classify_assignable(&raw_sections, body);
     let now = Utc::now().to_rfc3339();
     let mut sections: Vec<BookSection> = Vec::with_capacity(raw_sections.len());
     for (i, (label, s, e)) in raw_sections.iter().enumerate() {
@@ -555,7 +567,7 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
             end_locator: Some(e.to_string()),
             estimated_units: Some((e - s) as i64),
             sort_order: i as i64,
-            assignable: true,
+            assignable: assignable_flags[i],
         });
     }
 

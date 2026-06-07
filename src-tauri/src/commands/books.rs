@@ -1198,6 +1198,24 @@ mod tests {
         );
     }
 
+    /// A section's own heading/title — even a long, all-caps, parenthetical one
+    /// like a translated dedication poem — must never become the teaser's opening
+    /// line; the first real prose sentence should.
+    #[test]
+    fn teaser_excerpt_skips_the_section_heading() {
+        let text = "FROM THE HEIGHTS (POEM TRANSLATED BY L.A. MAGNUS)\n\nSUPPOSING that Truth is a woman--what then? Is there not ground for suspecting that all philosophers have failed to understand women?";
+        let ex = super::extract_teaser_excerpt(text, None, super::TEASER_MAX_CHARS)
+            .expect("prose follows the title");
+        assert!(
+            !ex.to_uppercase().starts_with("FROM THE HEIGHTS"),
+            "teaser echoed the section's own title: {ex:?}"
+        );
+        assert!(
+            ex.starts_with("SUPPOSING"),
+            "teaser must open on the first real prose sentence, got {ex:?}"
+        );
+    }
+
     /// A short opening clause should pull in the second sentence so the teaser
     /// carries a thought rather than a bare fragment.
     #[test]
