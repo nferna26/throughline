@@ -228,11 +228,11 @@ fn detect_chapters(body: &str) -> Vec<(String, usize, usize)> {
         if len > TARGET_SECTION_CHARS * 3 {
             let parts = len.div_ceil(TARGET_SECTION_CHARS);
             let part_len = len / parts;
-            // Snap each interior split DOWN to a char boundary. The same snapped
-            // value is reused as this part's end and the next part's start, so
-            // the parts stay abutting (no overlap/gap) and never slice a
-            // multibyte codepoint.
-            let split = |p: usize| floor_char_boundary(body, s + p * part_len);
+            // Snap each interior split to a clean reading boundary (paragraph /
+            // sentence / word — never mid-word, always a char boundary). The same
+            // snapped value is reused as this part's end and the next part's
+            // start, so the parts stay abutting (no overlap/gap).
+            let split = |p: usize| snap_to_boundary(body, s + p * part_len);
             for p in 0..parts {
                 let ps = if p == 0 { s } else { split(p) };
                 let pe = if p == parts - 1 { e } else { split(p + 1) };
@@ -398,7 +398,7 @@ fn chunk_evenly(body: &str) -> Vec<(String, usize, usize)> {
         let snapped_end = if i == n - 1 {
             len
         } else {
-            snap_to_paragraph(body, (i + 1) * chunk)
+            snap_to_boundary(body, (i + 1) * chunk)
         };
         prev_end = snapped_end;
         out.push((format!("Part {}", i + 1), s, snapped_end));
@@ -419,18 +419,68 @@ fn floor_char_boundary(body: &str, idx: usize) -> usize {
     idx
 }
 
-fn snap_to_paragraph(body: &str, idx: usize) -> usize {
+/// Snap a byte index FORWARD to a clean reading boundary so a section never
+/// starts or ends in the middle of a word. Preference, nearest-first within a
+/// bounded window: a PARAGRAPH break (blank line) > a SENTENCE end (`.?!` then
+/// whitespace) > a WORD boundary (the start of the next word, after whitespace).
+/// The result is always a valid UTF-8 char boundary, and the char just before it
+/// is never a word character abutting a word character at it — so `body[..b]` and
+/// `body[b..]` split cleanly. All windows are far below TARGET_SECTION_CHARS
+/// (9_000), so a snap can never collapse a section into the next one.
+fn snap_to_boundary(body: &str, idx: usize) -> usize {
+    let len = body.len();
+    if idx == 0 || idx >= len {
+        return floor_char_boundary(body, idx);
+    }
     let bytes = body.as_bytes();
-    let max_skip = 500.min(bytes.len() - idx);
-    for j in 0..max_skip {
+
+    // 1. Paragraph break (blank line) -> first real char of the next paragraph.
+    let para_window = 1_000.min(len - idx);
+    for j in 0..para_window {
         let pos = idx + j;
-        if pos + 1 < bytes.len() && bytes[pos] == b'\n' && bytes[pos + 1] == b'\n' {
-            return pos + 2;
+        if bytes[pos] == b'\n' && pos + 1 < len && bytes[pos + 1] == b'\n' {
+            let mut k = pos + 2;
+            while k < len && bytes[k].is_ascii_whitespace() {
+                k += 1;
+            }
+            return floor_char_boundary(body, k);
         }
     }
-    // No paragraph break within reach: fall back to the raw chunk boundary, but
-    // snap it onto a char boundary so a multibyte body never yields a locator
-    // that slices through a codepoint.
+
+    // 2. Sentence end (`.`/`!`/`?` then whitespace) -> next sentence's first char.
+    let sent_window = 400.min(len - idx);
+    for j in 0..sent_window {
+        let pos = idx + j;
+        if matches!(bytes[pos], b'.' | b'!' | b'?')
+            && pos + 1 < len
+            && bytes[pos + 1].is_ascii_whitespace()
+        {
+            let mut k = pos + 1;
+            while k < len && bytes[k].is_ascii_whitespace() {
+                k += 1;
+            }
+            if k < len {
+                return floor_char_boundary(body, k);
+            }
+        }
+    }
+
+    // 3. Word boundary: advance to the first whitespace at/after idx, then to the
+    //    start of the next word. The char before the split is then whitespace, so
+    //    no word is ever cut. (Prose has whitespace within a few chars; bounded by len.)
+    let mut pos = idx;
+    while pos < len && !bytes[pos].is_ascii_whitespace() {
+        pos += 1;
+    }
+    while pos < len && bytes[pos].is_ascii_whitespace() {
+        pos += 1;
+    }
+    if pos < len {
+        return floor_char_boundary(body, pos);
+    }
+
+    // 4. No whitespace ahead (a pathological single-token tail): a word split is
+    //    unavoidable, so fall back to a codepoint-safe split.
     floor_char_boundary(body, idx)
 }
 
@@ -762,7 +812,7 @@ mod tests {
     #[test]
     fn chunk_locators_are_char_boundaries_for_dense_multibyte_body() {
         // A long run of multibyte glyphs with NO paragraph break forces
-        // snap_to_paragraph onto its raw-index fallback. Before the fix that
+        // snap_to_boundary onto its word/char-boundary fallback. Before the fix that
         // fallback returned a byte offset that could slice through a codepoint,
         // so body[start..end] (used to read the section) would panic. Every
         // locator must now land on a UTF-8 char boundary.
