@@ -661,6 +661,8 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
                 <SectionBriefingCard
                   key={currentSection.id}
                   bookId={book.id}
+                  bookTitle={book.title}
+                  author={book.author}
                   sectionId={currentSection.id}
                   sourceSha={book.source_sha256}
                   mode="deep_study"
@@ -694,6 +696,8 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
                 <MarginTutorCard
                   key={d.draftId}
                   bookId={book.id}
+                  bookTitle={book.title}
+                  author={book.author}
                   draft={d}
                   active={activeNoteId === d.draftId}
                   onActivate={() => setActiveNoteId(d.draftId)}
