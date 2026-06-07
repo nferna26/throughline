@@ -100,10 +100,52 @@ pub fn sectionize(body: &str) -> Vec<(String, usize, usize)> {
 /// epigraph / translator title-poem — is marked non-assignable so the plan's
 /// day-1 starts on real content (Preface/Foreword/Introduction/Prologue/chapters
 /// are kept). `raw` is the output of `sectionize`; `body` is the same text.
-pub fn classify_assignable(raw: &[(String, usize, usize)], _body: &str) -> Vec<bool> {
-    // STUB (RED): everything assignable — exactly today's behavior, so the
-    // front-matter tests fail until the GREEN commit implements real classification.
-    vec![true; raw.len()]
+pub fn classify_assignable(raw: &[(String, usize, usize)], body: &str) -> Vec<bool> {
+    let mut flags = vec![true; raw.len()];
+    for (i, (label, s, e)) in raw.iter().enumerate() {
+        let sec = body.get(*s..*e).unwrap_or("");
+        if is_leading_front_matter(label, sec) {
+            flags[i] = false;
+        } else {
+            break; // first real-content section; everything after stays assignable
+        }
+    }
+    // Never emit an empty plan (e.g. an all-verse book): if the heuristic would
+    // drop every section, keep them all assignable.
+    if flags.iter().all(|f| !f) {
+        return vec![true; raw.len()];
+    }
+    flags
+}
+
+/// A LEADING section is front matter when its label is a known marker (reusing the
+/// EPUB classifier — dedication / contents / title page / copyright / epigraph /
+/// "about the author" …) OR it lacks substantial flowing prose (a title page,
+/// contents list, dedication, or short title-poem). Preface / Foreword /
+/// Introduction / Prologue carry real prose, so they pass and become day-1.
+fn is_leading_front_matter(label: &str, section_body: &str) -> bool {
+    if crate::epub_classify::is_front_back_matter(Some(label), label, true) {
+        return true;
+    }
+    !section_has_substantial_prose(section_body)
+}
+
+/// True when a section's body (after its first/heading line) reads as real flowing
+/// prose: enough text, several sentence terminators, and at least one prose-length
+/// line. Verse, contents lists, and title pages all fail this.
+fn section_has_substantial_prose(section_body: &str) -> bool {
+    let after = section_body
+        .trim_start()
+        .split_once('\n')
+        .map(|(_, rest)| rest)
+        .unwrap_or("");
+    let prose_chars = after.chars().filter(|c| !c.is_whitespace()).count();
+    let terminators = after
+        .bytes()
+        .filter(|b| matches!(b, b'.' | b'!' | b'?'))
+        .count();
+    let has_long_line = after.lines().any(|l| l.trim().chars().count() > 60);
+    prose_chars >= 300 && terminators >= 2 && has_long_line
 }
 
 fn detect_chapters(body: &str) -> Vec<(String, usize, usize)> {

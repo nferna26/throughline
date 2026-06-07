@@ -415,8 +415,11 @@ fn is_prose_line(line: &str) -> bool {
     // Very-short all-caps lines are running heads / section labels ("PREFACE",
     // "PART ONE", "THE END"), not prose. We only reject SHORT ones so a normal
     // sentence that merely happens to be shouted isn't lost.
-    let words = line.split_whitespace().count();
-    if words <= 5 && is_all_caps(line) {
+    // All-caps lines are headings / titles / running heads, never prose paragraphs
+    // (real sentences carry lowercase). Reject regardless of length so a long titled
+    // heading — e.g. "FROM THE HEIGHTS (POEM TRANSLATED BY L.A. MAGNUS)" — never
+    // becomes the teaser's opening line.
+    if is_all_caps(line) {
         return false;
     }
     // A line with no letters at all (rule of asterisks, page number) isn't prose.
