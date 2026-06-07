@@ -207,6 +207,10 @@ export interface TodayCard {
   forecast: FinishForecast | null;
   /** "Last time" memory for calm re-entry; fields empty when nothing captured. */
   memory: TodayMemory;
+  /** "Before you read" teaser (book's own first/resume sentences + a prompt);
+   *  null when there's no readable section text. Optional in the type so existing
+   *  TodayCard fixtures stay valid; the backend always sends it (possibly null). */
+  teaser?: TodayTeaser | null;
 }
 
 /** The reader's own most recent durable capture (their words, never a passage). */
@@ -221,6 +225,17 @@ export interface TodayMemory {
   last_capture: LastCapture | null;
   highlight_count: number;
   note_count: number;
+}
+
+/** "Before you read" teaser on Today: the book's OWN first (or resume-adjacent)
+ *  sentence(s) plus a hand-written reading prompt. Sourced from the already-
+ *  imported local text — never AI, never network. `is_resume_excerpt` is true
+ *  when the excerpt is taken near the reader's mid-section resume position. */
+export interface TodayTeaser {
+  excerpt: string;
+  prompt: string;
+  locator: string;
+  is_resume_excerpt: boolean;
 }
 
 export const NOTE_TYPES = [
