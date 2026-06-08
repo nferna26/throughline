@@ -34,3 +34,9 @@ dist-ssr
 local-only/
 .claude/
 .codex/
+
+# Self-verify UI harness artifacts
+e2e/shots/
+e2e/.output/
+test-results/
+playwright-report/
