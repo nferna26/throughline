@@ -76,6 +76,10 @@ rate limiting, optional response caching, and analytics out of the box — purpo
 this, and already in our Cloudflare stack, so it's a force-multiplier not a new dependency.
 The Worker still owns license validation + the cap + auth; AI Gateway absorbs observability
 and provider rate-limit burden. (Alternatives if ever needed: Fly.io + Axum.)
+**Caveat — disable AI Gateway *response caching* for the tutor.** Caching book-derived
+responses server-side would store copyrighted content, violating the stateless-forwarder
+guardrail (§1.1). Use AI Gateway for rate-limiting + analytics + zero-retention forwarding
+only; metering (token counts) is fine, response bodies are never cached or logged.
 
 Responsibilities, in order, per request:
 1. **Auth** — read the license token (Authorization: Bearer …); look up its Durable Object.
