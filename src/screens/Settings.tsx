@@ -164,11 +164,11 @@ export default function Settings() {
             <ul className="tl-trust-list">
               <li><TLIcon name="shield" size={15} /> Your book files stay on this Mac. They are never uploaded or exported.</li>
               <li><TLIcon name="shield" size={15} /> Exports contain your own words — paraphrases, reflections, short quotes, and locators. The raw book text is never written out.</li>
-              <li><TLIcon name="shield" size={15} /> AI answers are based only on the passage or section you choose, and run on a {dto?.ai_remote_allowed ? "remote" : "local"} model. Nothing is sent until you act.</li>
+              <li><TLIcon name="shield" size={15} /> AI answers are based only on the passage or section you choose{dto?.ai_remote_allowed ? " — which is the only thing sent to the cloud provider, never the whole book" : ", and run on a local model on this Mac. Nothing is sent until you act"}.</li>
               <li><TLIcon name="shield" size={15} /> AI output becomes a saved note only when you choose to keep it.</li>
             </ul>
             {dto?.ai_remote_allowed && (
-              <p className="tl-trust-warn"><TLIcon name="behind" size={14} /> AI is set to <strong>{aiProviderLabel(dto.ai_provider)}</strong> — your selected passage or section is sent to {aiProviderLabel(dto.ai_provider)} (never the whole book). Switch to Local below to keep everything on this Mac.</p>
+              <p className="tl-trust-warn"><TLIcon name="behind" size={14} /> AI is set to <strong>{aiProviderLabel(dto.ai_provider)}</strong> — {dto.ai_posture}. Only that selection leaves this Mac; your book file never does. Switch to Local below to keep everything on-device.</p>
             )}
             {dto?.ai_provider === "none" && (
               <p className="tl-trust-warn"><TLIcon name="behind" size={14} /> AI is turned off. Choose a provider below to enable the tutor and Deep Study.</p>

@@ -134,6 +134,16 @@ test("model-picker-with-price-chip", async ({ page }) => {
   await shoot(page, "10-model-picker");
 });
 
+test("cloud-trust-copy", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_CLOUD__ = true; });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  // With a cloud provider active, the trust card names the host + reassures.
+  await expect(page.getByText(/api\.anthropic\.com/i).first()).toBeVisible();
+  await expect(page.getByText(/your book file never does/i)).toBeVisible();
+  await shoot(page, "15-cloud-trust");
+});
+
 test("ai-usage-card", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();

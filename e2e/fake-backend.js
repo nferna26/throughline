@@ -118,7 +118,10 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
           });
         }
         return TODAY;
-      case "cmd_get_settings": return SETTINGS;
+      case "cmd_get_settings":
+        return window.__TL_FAKE_CLOUD__
+          ? Object.assign({}, SETTINGS, { ai_provider: "anthropic", ai_remote_allowed: true, ai_local_only: false, ai_posture: "Sends your selection to api.anthropic.com" })
+          : SETTINGS;
       case "cmd_list_books": return window.__TL_FAKE_EMPTY__ ? [] : [BOOK];
       case "cmd_assignable_sections": return SECTIONS;
       case "cmd_list_notes": return NOTES.slice();
