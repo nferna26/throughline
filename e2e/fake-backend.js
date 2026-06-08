@@ -170,6 +170,7 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
           by_lens: [{ key: "explain", calls: 18, cost_micros: 360000 }, { key: "historical", calls: 9, cost_micros: 180000 }],
         };
       case "cmd_set_monthly_spend_cap": return null;
+      case "cmd_confirm_cloud_send": window.__cloud_confirmed__ = true; return null;
       case "cmd_model_catalog": {
         const cat = {
           anthropic: [
@@ -223,6 +224,10 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
 
   // cmd_ai_ask streams via the Channel passed as args.onEvent, then resolves a handle.
   function handleAsk(args) {
+    // C2: first cloud send gated until confirmed (cmd_confirm_cloud_send).
+    if (window.__TL_FAKE_NEEDS_CONSENT__ && !window.__cloud_confirmed__) {
+      return Promise.reject({ kind: "NeedsCloudConsent", host: "api.anthropic.com" });
+    }
     const ch = args && args.onEvent;
     const emit = (ev) => { try { if (ch && typeof ch.onmessage === "function") ch.onmessage(ev); } catch (_) {} };
     const words = TUTOR_REPLY.split(" ");

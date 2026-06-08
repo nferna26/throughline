@@ -12,6 +12,9 @@ pub const KEY_LOCAL_ONLY: &str = "ai_local_only";
 pub const KEY_AI_RETENTION_DAYS: &str = "ai_requests_retention_days";
 /// Optional monthly cloud-AI spend ceiling in whole cents (0 = off). Epic B4.
 pub const KEY_AI_SPEND_CAP_CENTS: &str = "ai_spend_cap_cents";
+/// RFC3339 timestamp of the reader's first-cloud-call consent (Epic C2). Unset =
+/// the consent sheet still gates the first cloud send.
+pub const KEY_FIRST_CLOUD_CONFIRMED_AT: &str = "first_cloud_confirmed_at";
 pub const KEY_READING_RHYTHM_MINUTES: &str = "reading_rhythm_minutes";
 pub const KEY_MARGIN_HELP: &str = "margin_help";
 // Cloud-AI provider selection (added with the opt-in cloud providers). The

@@ -155,6 +155,8 @@ export default function MarginTutorCard(props: {
   const [deepAnswer, setDeepAnswer] = useState("");
   const [deepRequested, setDeepRequested] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  // First-cloud-call consent (C2): set when cmd_ai_ask returns NeedsCloudConsent.
+  const [cloudConsent, setCloudConsent] = useState<{ host: string; which: TutorMode; tier: Depth } | null>(null);
   const [modelName, setModelName] = useState("the local model");
   // Provider posture, loaded from settings. Drives the badge + consent copy
   // (WHERE the passage goes). Disabled only when no provider is chosen. null =
@@ -281,7 +283,13 @@ export default function MarginTutorCard(props: {
       if (channelRef.current === channel) aiReqRef.current = handle.ai_request_id;
     } catch (e) {
       if (channelRef.current === channel) {
-        setErrorMsg(humanizeError(String((e as { message?: string })?.message ?? e)));
+        const err = e as { kind?: string; host?: string; message?: string };
+        if (err?.kind === "NeedsCloudConsent") {
+          // First cloud send — pause and ask once before anything leaves the Mac.
+          setCloudConsent({ host: err.host ?? "the cloud provider", which, tier });
+          return;
+        }
+        setErrorMsg(humanizeError(String(err?.message ?? e)));
         setPhase("error");
       }
     }
@@ -570,6 +578,46 @@ export default function MarginTutorCard(props: {
             </div>
           )}
         </>
+      )}
+
+      {cloudConsent && (
+        <div
+          className="tl-scrim"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm cloud AI"
+          onClick={() => { setCloudConsent(null); setPhase("error"); setErrorMsg("Cloud AI wasn't confirmed — enable it anytime in Settings."); }}
+        >
+          <div className="tl-replan-sheet" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h3>Send this passage to {cloudConsent.host}?</h3>
+            <p className="ctx">
+              Your selected passage (below) goes to <b>{cloudConsent.host}</b> under your API key so the
+              tutor can answer. Your book file never leaves this Mac. Asked once, then remembered.
+            </p>
+            <blockquote style={{ margin: "0 0 var(--tl-4)", padding: "8px 12px", borderLeft: "2px solid var(--tl-line)", color: "var(--tl-muted)", fontSize: 13, fontStyle: "italic" }}>
+              "{draft.anchoredText.length > 220 ? draft.anchoredText.slice(0, 220) + "…" : draft.anchoredText}"
+            </blockquote>
+            <div className="tl-replan-foot">
+              <span className="keep">→ {cloudConsent.host}</span>
+              <span className="right">
+                <button className="tl-btn tl-btn-ghost" onClick={() => { setCloudConsent(null); setPhase("error"); setErrorMsg("Cloud AI wasn't confirmed — enable it anytime in Settings."); }}>
+                  Not now
+                </button>
+                <button
+                  className="tl-btn tl-btn-primary"
+                  onClick={async () => {
+                    const c = cloudConsent;
+                    setCloudConsent(null);
+                    await invoke("cmd_confirm_cloud_send");
+                    startStream(c.which, c.tier);
+                  }}
+                >
+                  Send to {cloudConsent.host}
+                </button>
+              </span>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

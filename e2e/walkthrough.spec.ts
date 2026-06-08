@@ -112,6 +112,30 @@ test("reader-margin-and-tutor", async ({ page }) => {
   await expect.soft(page.getByText(/Aurelius is bracing himself|telling himself|Stoic|cooperation/).first()).toBeVisible();
 });
 
+test("cloud-consent-gate", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_NEEDS_CONSENT__ = true; });
+  await page.goto("/");
+  await page.getByRole("button", { name: /session/i }).first().click();
+  await expect(page.locator(".tl-readcol p").first()).toBeVisible();
+  await page.evaluate(() => {
+    const ps = document.querySelectorAll(".tl-readcol p");
+    const p = ps[1] || ps[0];
+    if (!p) return;
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const sel = window.getSelection();
+    sel!.removeAllRanges();
+    sel!.addRange(range);
+    document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  await page.getByRole("button", { name: /^Explain/ }).click();
+  // The first cloud send is gated by the consent sheet (nothing left the Mac yet).
+  await expect(page.getByRole("dialog", { name: /confirm cloud ai/i })).toBeVisible();
+  await expect(page.getByText(/api\.anthropic\.com/i).first()).toBeVisible();
+  await expect(page.getByText(/book file never leaves this Mac/i)).toBeVisible();
+  await shoot(page, "16-cloud-consent");
+});
+
 test("export-warning", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EXPORT_BROKEN__ = true; });
   await page.goto("/");

@@ -399,6 +399,15 @@ pub async fn cmd_ai_ask(
             _ => String::new(),
         };
 
+        // First-cloud-call consent (C2): a remote provider must be confirmed once
+        // before the first send. The frontend catches this, shows a consent sheet,
+        // then retries after cmd_confirm_cloud_send.
+        if provider.is_remote()
+            && settings::get_string(&conn, settings::KEY_FIRST_CLOUD_CONFIRMED_AT).is_none()
+        {
+            return Err(AppError::needs_cloud_consent(provider_host.clone()));
+        }
+
         let ctx = ai_stub::PromptContext {
             book_title: book.title.clone(),
             author: book.author.clone(),
@@ -621,6 +630,19 @@ pub fn cmd_set_monthly_spend_cap(cents: i64, state: State<DbState>) -> Result<()
         &conn,
         settings::KEY_AI_SPEND_CAP_CENTS,
         &cents.max(0).to_string(),
+    )
+    .map_err(AppError::from)
+}
+
+/// Record the reader's first-cloud-call consent (Epic C2). After this, cmd_ai_ask
+/// no longer gates cloud calls behind the consent sheet.
+#[tauri::command]
+pub fn cmd_confirm_cloud_send(state: State<DbState>) -> Result<(), AppError> {
+    let conn = state.0.lock()?;
+    settings::set_string(
+        &conn,
+        settings::KEY_FIRST_CLOUD_CONFIRMED_AT,
+        &Utc::now().to_rfc3339(),
     )
     .map_err(AppError::from)
 }
@@ -861,6 +883,21 @@ mod tests {
             )
             .unwrap();
         assert_eq!((it, ot, cm), (4750, 400, 20_250));
+    }
+
+    #[test]
+    fn cloud_consent_gate_blocks_until_confirmed() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        let confirmed =
+            |c: &Connection| settings::get_string(c, settings::KEY_FIRST_CLOUD_CONFIRMED_AT).is_some();
+        // Remote providers gate (until confirmed); local never gates.
+        assert!(settings::AiProvider::Anthropic.is_remote());
+        assert!(!settings::AiProvider::Local.is_remote());
+        assert!(!confirmed(&conn), "unconfirmed by default → the gate fires");
+        settings::set_string(&conn, settings::KEY_FIRST_CLOUD_CONFIRMED_AT, "2026-06-08T00:00:00Z")
+            .unwrap();
+        assert!(confirmed(&conn), "confirmed after cmd_confirm_cloud_send → gate clears");
     }
 
     /// The brevity contract is cross-provider: the cap that `cmd_ai_ask` threads
