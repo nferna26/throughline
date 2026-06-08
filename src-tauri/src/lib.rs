@@ -126,6 +126,12 @@ pub fn run() {
             Err(e) => eprintln!("[tl] ai_retention: sweep failed: {}", e),
         }
     }
+    // Purge plans "let go" longer than 30 days ago, with their sessions + notes.
+    match commands::plans::sweep_deleted_plans(&conn, 30) {
+        Ok(n) if n > 0 => eprintln!("[tl] plan_retention: purged {} let-go plan(s)", n),
+        Ok(_) => {}
+        Err(e) => eprintln!("[tl] plan_retention: sweep failed: {}", e),
+    }
     let state = DbState(Mutex::new(conn));
 
     tauri::Builder::default()
@@ -189,6 +195,7 @@ pub fn run() {
             commands::plans::cmd_resume_plan,
             commands::plans::cmd_archive_plan,
             commands::plans::cmd_delete_plan,
+            commands::plans::cmd_restore_plan,
             commands::settings_cmds::cmd_set_ai_settings,
             commands::settings_cmds::cmd_set_ai_key,
             commands::settings_cmds::cmd_clear_ai_key,
