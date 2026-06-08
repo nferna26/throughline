@@ -253,7 +253,7 @@ export const AI_STUB_MODES = [
   { value: "explain",      label: "Explain this passage" },
   { value: "historical",   label: "Historical context" },
   { value: "vocabulary",   label: "Vocabulary / reference" },
-  { value: "socratic",     label: "Socratic questions" },
+  { value: "socratic",     label: "Ask questions" },
   { value: "durable_note", label: "Extract durable note" },
   { value: "prepare_next", label: "Prepare tomorrow's reading" },
 ] as const;

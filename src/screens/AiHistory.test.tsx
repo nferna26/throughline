@@ -40,14 +40,14 @@ describe("AiHistory", () => {
     expect(screen.getByText("Local")).toBeInTheDocument();
     expect(screen.getByText(/never leave this Mac/i)).toBeInTheDocument();
     // Mode labels are humanized and the saved-as-note row is marked.
-    expect(screen.getByText("Socratic questions")).toBeInTheDocument();
+    expect(screen.getByText("Ask questions")).toBeInTheDocument();
     expect(screen.getByText(/saved as note/)).toBeInTheDocument();
   });
 
   it("runs the retention sweep via a confirm step when Forget now is used", async () => {
     const user = userEvent.setup();
     render(<AiHistory retentionDays={90} onSettingsChanged={() => {}} />);
-    await screen.findByText("Socratic questions");
+    await screen.findByText("Ask questions");
 
     await user.click(screen.getByRole("button", { name: /Forget now/ }));
     await user.click(await screen.findByRole("button", { name: /Yes, forget them/ }));
