@@ -81,6 +81,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "reading_plans.lifecycle + paused_* + parent_plan_id; sessions.plan_id (A1)",
         up: v008_plan_lifecycle,
     },
+    Migration {
+        version: "v009_plan_name_softdelete",
+        description: "reading_plans.name + deleted_at (soft-delete) + reached_percent (frontispiece)",
+        up: v009_plan_name_softdelete,
+    },
 ];
 
 /// Apply every migration that is not already recorded in `schema_migrations`.
@@ -326,6 +331,16 @@ fn v008_plan_lifecycle(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_plans_book_lifecycle ON reading_plans(book_id, lifecycle);",
     )?;
+    Ok(())
+}
+
+/// Frontispiece redesign: reader-named plans, soft-delete ("Let go" keeps the row
+/// + its sessions/notes until a 30-day retention sweep), and a progress snapshot
+/// for the back-matter entries.
+fn v009_plan_name_softdelete(conn: &Connection) -> Result<()> {
+    add_column_if_missing(conn, "reading_plans", "name", "TEXT")?;
+    add_column_if_missing(conn, "reading_plans", "deleted_at", "TEXT")?;
+    add_column_if_missing(conn, "reading_plans", "reached_percent", "INTEGER")?;
     Ok(())
 }
 
