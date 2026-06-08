@@ -37,6 +37,17 @@ test("recovery-when-behind", async ({ page }) => {
   await shoot(page, "09-recovery");
 });
 
+test("plans-management", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /manage reading plans/i }).click();
+  await expect(page.getByRole("dialog", { name: /reading plans/i })).toBeVisible();
+  // See every plan with its lifecycle + counts, and act on it (the blocker).
+  await expect(page.getByText(/4 sessions · 2 notes/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Delete" }).first()).toBeVisible();
+  await shoot(page, "12-plans");
+});
+
 test("today", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Meditations" })).toBeVisible();
@@ -88,6 +99,29 @@ test("export-warning", async ({ page }) => {
   await expect(page.getByText(/can't save notes/i)).toBeVisible();
   await expect(page.getByRole("button", { name: /choose a folder/i })).toBeVisible();
   await shoot(page, "08-export-warning");
+});
+
+test("model-picker-with-price-chip", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  // Choose a cloud provider → the model picker + price chip appear (Epic B2).
+  await page.getByLabel("AI provider").selectOption("anthropic");
+  const modelSel = page.getByLabel("AI model");
+  await expect(modelSel).toBeVisible();
+  // The bundled default is Sonnet, and its per-Mtok price is shown.
+  await expect(modelSel).toHaveValue("claude-sonnet-4-6");
+  await expect(page.getByText(/\$3 \/ \$15/).first()).toBeVisible();
+  await shoot(page, "10-model-picker");
+});
+
+test("ai-usage-card", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByText("AI usage").first()).toBeVisible();
+  await expect(page.getByText("all time").first()).toBeVisible();
+  await expect(page.getByLabel(/spend cap in dollars/i)).toBeVisible();
+  await page.getByText("AI usage").first().scrollIntoViewIfNeeded();
+  await shoot(page, "11-ai-usage");
 });
 
 test("settings", async ({ page }) => {

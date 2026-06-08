@@ -2,6 +2,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import TLIcon, { type IconName } from "../components/TLIcon";
 import TodayTeaser from "../components/TodayTeaser";
+import PlansSheet from "../components/PlansSheet";
 import type { TodayCard, PaceState, RecoveryOption, RecomputedPlan, FinishForecast } from "../types";
 
 interface Props {
@@ -76,6 +77,7 @@ function describeOption(o: RecoveryOption): { primary: string; detail?: string }
 }
 
 export default function Today({ today, onDiscover, onImport, onStart, onStartRescue, onRefresh }: Props) {
+  const [showPlans, setShowPlans] = useState(false);
   if (!today) {
     return (
       <div className="tl-welcome">
@@ -128,6 +130,9 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
       <div className="tl-kicker">
         <span className="dot" />
         {planReady ? "Today — plan ready" : `Today — day ${day_index} of ${total_days}`}
+        <button className="tl-plan-pill" onClick={() => setShowPlans(true)} aria-label="Manage reading plans">
+          Plans ›
+        </button>
       </div>
 
       <h1 className="tl-today-title">{book.title}</h1>
@@ -201,6 +206,8 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
       <button className="tl-btn-quiet" style={{ marginTop: "var(--tl-3)" }} onClick={onDiscover}>
         <TLIcon name="plus" size={16} /> Find another book
       </button>
+
+      {showPlans && <PlansSheet bookId={book.id} bookTitle={book.title} onClose={() => setShowPlans(false)} />}
     </div>
   );
 }

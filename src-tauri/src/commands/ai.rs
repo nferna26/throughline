@@ -362,6 +362,20 @@ pub async fn cmd_ai_ask(
             _ => {}
         }
 
+        // Monthly spend cap (Epic B4): refuse a cloud call once month-to-date cost
+        // reaches the reader's ceiling. Local has no spend, so it's never capped.
+        if provider.is_remote() {
+            let cap = settings::get_string(&conn, settings::KEY_AI_SPEND_CAP_CENTS)
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0);
+            if spend_cap_exceeded(cap, month_to_date_micros(&conn)) {
+                return Err(AppError::config(format!(
+                    "You've reached your monthly AI spend cap (${:.2}). Raise or clear it in Settings → Assistance to keep using cloud AI.",
+                    cap as f64 / 100.0
+                )));
+            }
+        }
+
         let model = settings::get_ai_model_for(&conn, provider);
         if model.trim().is_empty() {
             return Err(AppError::config(
@@ -479,6 +493,160 @@ pub async fn cmd_ai_ask(
         );
     });
     Ok(handle)
+}
+
+/// Static per-provider model catalogue (id + label + $/Mtok + tier) for the model
+/// picker and the cost UI. Local models are detected live (cmd_list_ai_models).
+#[tauri::command]
+pub fn cmd_model_catalog(provider: String) -> Vec<crate::ai_providers::ModelInfo> {
+    crate::ai_providers::model_catalog(crate::settings::AiProvider::from_str(&provider))
+}
+
+/// One grouped row of the usage summary (by provider or by lens/mode).
+#[derive(serde::Serialize)]
+pub struct UsageRow {
+    pub key: String,
+    pub calls: i64,
+    pub cost_micros: i64,
+}
+
+/// Spend summary for the Settings "AI usage" card (Epic B4).
+#[derive(serde::Serialize)]
+pub struct UsageSummary {
+    pub total_calls: i64,
+    pub total_cost_micros: i64,
+    pub month_cost_micros: i64,
+    pub spend_cap_cents: i64,
+    pub by_provider: Vec<UsageRow>,
+    pub by_lens: Vec<UsageRow>,
+    pub pricing_verified_at: String,
+}
+
+/// Whether the monthly spend cap (whole cents; 0 = off) is reached, given
+/// month-to-date spend in micro-dollars. 1 cent = 10,000 micro-dollars.
+fn spend_cap_exceeded(cap_cents: i64, mtd_micros: i64) -> bool {
+    cap_cents > 0 && mtd_micros >= cap_cents * 10_000
+}
+
+/// Month-to-date cloud-AI spend in micro-dollars (for the spend cap).
+fn month_to_date_micros(conn: &rusqlite::Connection) -> i64 {
+    conn.query_row(
+        "SELECT COALESCE(SUM(cost_usd_micros), 0) FROM ai_request_usage
+         WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap_or(0)
+}
+
+/// Aggregate recorded usage for the Settings AI-usage card.
+#[tauri::command]
+pub fn cmd_get_usage_summary(state: State<DbState>) -> Result<UsageSummary, AppError> {
+    let conn = state.0.lock()?;
+    let (total_calls, total_cost_micros): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(cost_usd_micros), 0) FROM ai_request_usage",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((0, 0));
+    let group = |sql: &str| -> Vec<UsageRow> {
+        let mut out = Vec::new();
+        if let Ok(mut stmt) = conn.prepare(sql) {
+            if let Ok(rows) = stmt.query_map([], |r| {
+                Ok(UsageRow {
+                    key: r.get(0)?,
+                    calls: r.get(1)?,
+                    cost_micros: r.get(2)?,
+                })
+            }) {
+                out = rows.filter_map(|x| x.ok()).collect();
+            }
+        }
+        out
+    };
+    let by_provider = group(
+        "SELECT COALESCE(provider,'?'), COUNT(*), COALESCE(SUM(cost_usd_micros),0)
+         FROM ai_request_usage GROUP BY provider ORDER BY 3 DESC",
+    );
+    let by_lens = group(
+        "SELECT COALESCE(r.mode,'?'), COUNT(*), COALESCE(SUM(u.cost_usd_micros),0)
+         FROM ai_request_usage u JOIN ai_requests r ON r.id = u.request_id
+         GROUP BY r.mode ORDER BY 3 DESC",
+    );
+    let spend_cap_cents = settings::get_string(&conn, settings::KEY_AI_SPEND_CAP_CENTS)
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+    Ok(UsageSummary {
+        total_calls,
+        total_cost_micros,
+        month_cost_micros: month_to_date_micros(&conn),
+        spend_cap_cents,
+        by_provider,
+        by_lens,
+        pricing_verified_at: crate::ai_providers::PRICING_VERIFIED_AT.to_string(),
+    })
+}
+
+/// Set the monthly cloud-AI spend ceiling in whole cents (0 = off, clamped ≥ 0).
+#[tauri::command]
+pub fn cmd_set_monthly_spend_cap(cents: i64, state: State<DbState>) -> Result<(), AppError> {
+    let conn = state.0.lock()?;
+    settings::set_string(
+        &conn,
+        settings::KEY_AI_SPEND_CAP_CENTS,
+        &cents.max(0).to_string(),
+    )
+    .map_err(AppError::from)
+}
+
+/// Record token usage + computed cost for a finished AI request (Epic B3). The
+/// streaming layer accumulates the provider's usage block; this persists it as
+/// the COGS row the usage panel (B4) reads. Idempotent per request_id.
+#[tauri::command]
+pub fn cmd_finalize_ai_request(
+    request_id: String,
+    provider: String,
+    model: String,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: Option<u64>,
+    cache_creation_tokens: Option<u64>,
+    state: State<DbState>,
+) -> Result<i64, AppError> {
+    use crate::ai_providers::{cost_micros, TokenUsage};
+    let usage = TokenUsage {
+        input_tokens,
+        output_tokens,
+        cache_read_tokens: cache_read_tokens.unwrap_or(0),
+        cache_creation_tokens: cache_creation_tokens.unwrap_or(0),
+    };
+    let cost = cost_micros(settings::AiProvider::from_str(&provider), &model, &usage);
+    let conn = state.0.lock()?;
+    conn.execute(
+        "INSERT INTO ai_request_usage
+           (request_id, provider, model, input_tokens, output_tokens,
+            cache_read_tokens, cache_creation_tokens, cost_usd_micros, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
+         ON CONFLICT(request_id) DO UPDATE SET
+           input_tokens = excluded.input_tokens,
+           output_tokens = excluded.output_tokens,
+           cache_read_tokens = excluded.cache_read_tokens,
+           cache_creation_tokens = excluded.cache_creation_tokens,
+           cost_usd_micros = excluded.cost_usd_micros",
+        rusqlite::params![
+            request_id,
+            provider,
+            model,
+            input_tokens as i64,
+            output_tokens as i64,
+            usage.cache_read_tokens as i64,
+            usage.cache_creation_tokens as i64,
+            cost,
+        ],
+    )
+    .map_err(AppError::from)?;
+    Ok(cost)
 }
 
 /// List selectable models for a provider. Local lists the server's `/models`;
@@ -614,6 +782,16 @@ pub fn cmd_codex_logout(state: State<DbState>) -> Result<settings::SettingsDto, 
 mod tests {
     use super::*;
     use rusqlite::Connection;
+
+    #[test]
+    fn spend_cap_only_bites_when_set_and_reached() {
+        // cap off (0) never blocks, whatever the spend.
+        assert!(!spend_cap_exceeded(0, 999_999_999));
+        // $5.00 cap = 500 cents = 5,000,000 micro-dollars.
+        assert!(!spend_cap_exceeded(500, 4_999_999)); // just under
+        assert!(spend_cap_exceeded(500, 5_000_000)); // exactly at the cap
+        assert!(spend_cap_exceeded(500, 9_000_000)); // over
+    }
 
     /// The brevity contract is cross-provider: the cap that `cmd_ai_ask` threads
     /// into the `ProviderCall` (and thus every provider body) must be exactly the

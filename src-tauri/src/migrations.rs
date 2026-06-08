@@ -71,6 +71,16 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "notes.anchor_start + anchor_end + anchored_text (marginalia anchoring)",
         up: v006_notes_anchor,
     },
+    Migration {
+        version: "v007_ai_request_usage",
+        description: "ai_request_usage: per-request token counts + computed cost (B3 COGS)",
+        up: v007_ai_request_usage,
+    },
+    Migration {
+        version: "v008_plan_lifecycle",
+        description: "reading_plans.lifecycle + paused_* + parent_plan_id; sessions.plan_id (A1)",
+        up: v008_plan_lifecycle,
+    },
 ];
 
 /// Apply every migration that is not already recorded in `schema_migrations`.
@@ -265,6 +275,60 @@ fn v006_notes_anchor(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn v007_ai_request_usage(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS ai_request_usage (
+          request_id TEXT PRIMARY KEY,
+          provider TEXT,
+          model TEXT,
+          input_tokens INTEGER,
+          output_tokens INTEGER,
+          cache_read_tokens INTEGER DEFAULT 0,
+          cache_creation_tokens INTEGER DEFAULT 0,
+          cost_usd_micros INTEGER,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (request_id) REFERENCES ai_requests(id)
+        );
+        "#,
+    )?;
+    Ok(())
+}
+
+/// Plan lifecycle (A1). `lifecycle` is a NEW axis, orthogonal to the existing
+/// `status` (pace: plan_ready/active/rebalanced): active | paused | completed |
+/// archived | superseded. `sessions.plan_id` ties each session to its plan;
+/// legacy sessions backfill to their book's most-recent plan.
+fn v008_plan_lifecycle(conn: &Connection) -> Result<()> {
+    add_column_if_missing(
+        conn,
+        "reading_plans",
+        "lifecycle",
+        "TEXT NOT NULL DEFAULT 'active'",
+    )?;
+    add_column_if_missing(conn, "reading_plans", "paused_at", "TEXT")?;
+    add_column_if_missing(
+        conn,
+        "reading_plans",
+        "paused_days_total",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(conn, "reading_plans", "parent_plan_id", "TEXT")?;
+    add_column_if_missing(conn, "reading_sessions", "plan_id", "TEXT")?;
+    conn.execute(
+        "UPDATE reading_sessions SET plan_id = (
+            SELECT p.id FROM reading_plans p
+            WHERE p.book_id = reading_sessions.book_id
+            ORDER BY p.start_date DESC LIMIT 1
+         ) WHERE plan_id IS NULL",
+        [],
+    )?;
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_plans_book_lifecycle ON reading_plans(book_id, lifecycle);",
+    )?;
+    Ok(())
+}
+
 /// Idempotent ALTER ADD COLUMN. Used inside migration bodies so a DB that
 /// already has the column (because it was migrated via the pre-Shot-6a
 /// `add_column_if_missing` path) doesn't error.
@@ -313,6 +377,43 @@ mod tests {
             .collect();
         let expected: Vec<&str> = MIGRATIONS.iter().map(|m| m.version).collect();
         assert_eq!(recorded, expected);
+    }
+
+    #[test]
+    fn v008_backfills_session_plan_id_to_most_recent_plan() {
+        let conn = fresh();
+        apply_pending(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO books (id,title,source_type,source_path,source_sha256,created_at)
+               VALUES ('b1','T','txt','/p','h','2026-01-01');
+             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date)
+               VALUES ('p_old','b1','2026-01-01','2026-02-01');
+             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date)
+               VALUES ('p_new','b1','2026-03-01','2026-04-01');
+             INSERT INTO reading_sessions (id,book_id,started_at) VALUES ('s1','b1','2026-03-02');",
+        )
+        .unwrap();
+        // Re-running the idempotent lifecycle migration backfills the orphan session.
+        v008_plan_lifecycle(&conn).unwrap();
+        let pid: String = conn
+            .query_row(
+                "SELECT plan_id FROM reading_sessions WHERE id='s1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            pid, "p_new",
+            "session attaches to the book's most-recent plan"
+        );
+        let lc: String = conn
+            .query_row(
+                "SELECT lifecycle FROM reading_plans WHERE id='p_new'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(lc, "active", "new plans default to the 'active' lifecycle");
     }
 
     #[test]

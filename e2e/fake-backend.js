@@ -159,6 +159,29 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_test_ai_connection":
         return { reachable: true, first_model_id: "gemma-4-31b-it-mlx", message: "ok" };
       case "cmd_list_ai_models": return ["gemma-4-31b-it-mlx", "qwen2.5-14b"];
+      case "cmd_get_usage_summary":
+        return {
+          total_calls: 27, total_cost_micros: 540000, month_cost_micros: 180000,
+          spend_cap_cents: 0, pricing_verified_at: "2026-06-08",
+          by_provider: [{ key: "anthropic", calls: 27, cost_micros: 540000 }],
+          by_lens: [{ key: "explain", calls: 18, cost_micros: 360000 }, { key: "historical", calls: 9, cost_micros: 180000 }],
+        };
+      case "cmd_set_monthly_spend_cap": return null;
+      case "cmd_model_catalog": {
+        const cat = {
+          anthropic: [
+            { id: "claude-sonnet-4-6", label: "Sonnet 4.6 — best value", input_per_mtok: 3, output_per_mtok: 15, tier: "default" },
+            { id: "claude-haiku-4-5", label: "Haiku 4.5 — fastest, cheapest", input_per_mtok: 1, output_per_mtok: 5, tier: "fast" },
+            { id: "claude-opus-4-8", label: "Opus 4.8 — most capable (~5× cost)", input_per_mtok: 15, output_per_mtok: 75, tier: "power" },
+          ],
+          openai: [
+            { id: "gpt-5.5", label: "GPT-5.5", input_per_mtok: 1.25, output_per_mtok: 10, tier: "default" },
+            { id: "gpt-5-mini", label: "GPT-5 mini — cheapest", input_per_mtok: 0.25, output_per_mtok: 2, tier: "fast" },
+          ],
+          codex: [{ id: "gpt-5.5", label: "GPT-5.5 (via Codex login)", input_per_mtok: 1.25, output_per_mtok: 10, tier: "default" }],
+        };
+        return cat[(args && args.provider) || "anthropic"] || [];
+      }
       case "cmd_list_ai_requests": return [];
       case "cmd_discover_seed": return DISCOVER_PAGE;
       case "cmd_discover_search": return DISCOVER_PAGE;
@@ -166,6 +189,15 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
         return window.__TL_FAKE_EXPORT_BROKEN__
           ? { path: "/Volumes/USB/GBrain/Reading", writable: false, message: "Throughline can't save notes to this folder (No such file or directory)." }
           : { path: SETTINGS.export_path, writable: true, message: null };
+      case "cmd_list_plans_for_book":
+        return [
+          { id: "p_live", book_id: BOOK.id, lifecycle: "active", status: "active", start_date: "2026-05-20", target_finish_date: "2026-06-19", paused_days_total: 0, session_count: 4, note_count: 2 },
+          { id: "p_old", book_id: BOOK.id, lifecycle: "archived", status: "rebalanced", start_date: "2026-04-01", target_finish_date: "2026-05-01", paused_days_total: 3, session_count: 1, note_count: 0 },
+        ];
+      case "cmd_get_active_plan":
+        return { id: "p_live", book_id: BOOK.id, lifecycle: "active", status: "active", start_date: "2026-05-20", target_finish_date: "2026-06-19", paused_days_total: 0, session_count: 4, note_count: 2 };
+      case "cmd_pause_plan": case "cmd_resume_plan": case "cmd_archive_plan": case "cmd_delete_plan":
+        return null;
       case "cmd_set_ai_settings": case "cmd_set_ai_key": case "cmd_clear_ai_key":
       case "cmd_set_export_path": case "cmd_forget_ai_history": case "cmd_codex_logout":
         return null;

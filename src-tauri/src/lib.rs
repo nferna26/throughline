@@ -69,7 +69,7 @@ use crate::db::DbState;
 ///   new imports) — a return-shape change.
 /// - 2 → 3: cloud AI command surface (provider keys, model listing, Codex device
 ///   login, request history) reshaped the AI args/returns.
-pub const COMMAND_API_VERSION: u32 = 3;
+pub const COMMAND_API_VERSION: u32 = 4;
 
 /// Open the database, recovering from a CORRUPT file rather than crash-looping on
 /// launch (a permanently-unusable app — the worst outcome for a paying user). A
@@ -166,6 +166,10 @@ pub fn run() {
             commands::ai::cmd_save_ai_preview_as_note,
             commands::ai::cmd_ai_ask,
             commands::ai::cmd_list_ai_models,
+            commands::ai::cmd_model_catalog,
+            commands::ai::cmd_finalize_ai_request,
+            commands::ai::cmd_get_usage_summary,
+            commands::ai::cmd_set_monthly_spend_cap,
             commands::ai::cmd_test_ai_connection,
             commands::ai::cmd_codex_device_start,
             commands::ai::cmd_codex_device_poll,
@@ -179,6 +183,12 @@ pub fn run() {
             commands::settings_cmds::cmd_get_settings,
             commands::settings_cmds::cmd_set_export_path,
             commands::settings_cmds::cmd_check_export_path,
+            commands::plans::cmd_list_plans_for_book,
+            commands::plans::cmd_get_active_plan,
+            commands::plans::cmd_pause_plan,
+            commands::plans::cmd_resume_plan,
+            commands::plans::cmd_archive_plan,
+            commands::plans::cmd_delete_plan,
             commands::settings_cmds::cmd_set_ai_settings,
             commands::settings_cmds::cmd_set_ai_key,
             commands::settings_cmds::cmd_clear_ai_key,

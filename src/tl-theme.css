@@ -437,6 +437,51 @@
 .tl-export-warning svg { color: var(--tl-warn); flex-shrink: 0; }
 .tl-export-warning span { flex: 1; }
 
+/* Cloud model picker + price chip (Epic B2) — choose a model with cost in view. */
+.tl-modelselect { display: flex; align-items: center; gap: var(--tl-3); flex-wrap: wrap; }
+.tl-price-chip {
+  font-size: 12px; color: var(--tl-muted); white-space: nowrap;
+  padding: 2px 8px; border: 1px solid var(--tl-line); border-radius: 999px; background: var(--tl-surface);
+}
+.tl-price-chip .unit { opacity: 0.7; }
+
+/* AI usage card (Epic B4) */
+.tl-usage-figures { display: flex; gap: var(--tl-5); text-align: right; }
+.tl-usage-figures > div { display: flex; flex-direction: column; }
+.tl-usage-figures strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+.tl-usage-figures span { font-size: 11px; color: var(--tl-muted); }
+.tl-usage-breakdown { display: flex; flex-wrap: wrap; gap: var(--tl-2); margin-top: var(--tl-2); }
+
+/* Plan pill + plans management sheet (Epic A3) */
+.tl-plan-pill {
+  margin-left: var(--tl-2); padding: 1px 8px; font-size: 11px; border-radius: 999px;
+  border: 1px solid var(--tl-line); background: var(--tl-surface); color: var(--tl-muted); cursor: pointer;
+}
+.tl-plan-pill:hover { color: var(--tl-ink); }
+.tl-sheet-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.32);
+  display: flex; align-items: center; justify-content: center; z-index: 50; padding: var(--tl-6);
+}
+.tl-plans-sheet {
+  background: var(--tl-bg); border: 1px solid var(--tl-line); border-radius: 14px;
+  width: min(560px, 92vw); max-height: 80vh; overflow: auto; padding: var(--tl-6);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+}
+.tl-plans-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--tl-4); }
+.tl-plans-head h3 { margin: 0; font-family: var(--tl-serif); font-weight: 500; }
+.tl-plans-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--tl-3); }
+.tl-plan-row { border: 1px solid var(--tl-line); border-radius: 10px; padding: var(--tl-3); display: flex; flex-direction: column; gap: var(--tl-2); }
+.tl-plan-main { display: flex; align-items: center; gap: var(--tl-3); flex-wrap: wrap; font-size: 13px; }
+.tl-plan-badge { text-transform: capitalize; font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--tl-surface); border: 1px solid var(--tl-line); }
+.tl-plan-badge.is-active { color: var(--tl-accent); border-color: var(--tl-accent); }
+.tl-plan-badge.is-paused { color: var(--tl-warn); }
+.tl-plan-badge.is-archived { color: var(--tl-muted); }
+.tl-plan-dates { font-variant-numeric: tabular-nums; }
+.tl-plan-counts { color: var(--tl-muted); }
+.tl-plan-actions { display: flex; gap: var(--tl-2); align-items: center; flex-wrap: wrap; }
+.tl-plan-confirm { display: flex; gap: var(--tl-2); align-items: center; font-size: 12px; color: var(--tl-warn); }
+.tl-danger { color: var(--tl-danger, #b3261e); }
+
 /* ── Book Setup Sheet ─────────────────────────────────────────────────── */
 .tl-setup { flex: 1; display: flex; justify-content: center; padding: var(--tl-7) var(--tl-7) var(--tl-8); overflow-y: auto; }
 .tl-setup-card { width: 100%; max-width: 560px; }

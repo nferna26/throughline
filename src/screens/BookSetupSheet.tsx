@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import TLIcon from "../components/TLIcon";
-import type { Book, BookSection } from "../types";
+import type { Book, BookSection, PlanSummary } from "../types";
 
 interface Props {
   book: Book;
@@ -78,6 +78,8 @@ export default function BookSetupSheet({ book, onDone }: Props) {
   const [marginHelp, setMarginHelp] = useState<"guided" | "quiet" | "deep_study">("guided");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // If the book already has an active plan, prompt before making a second one.
+  const [existingPlan, setExistingPlan] = useState<PlanSummary | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,21 +120,61 @@ export default function BookSetupSheet({ book, onDone }: Props) {
     return { minsSlow, minsFast, feasible, neededPerSession, weeks };
   }, [sections, targetDate, daysPerWeek, sessionMinutes]);
 
+  async function doConfigure() {
+    await invoke("cmd_configure_plan", {
+      bookId: book.id,
+      targetFinishDate: targetDate,
+      daysPerWeek,
+      sessionMinutes,
+      marginHelp,
+    });
+    onDone();
+  }
+
   async function startPlan() {
     setSubmitting(true);
     setError(null);
     try {
-      await invoke("cmd_configure_plan", {
-        bookId: book.id,
-        targetFinishDate: targetDate,
-        daysPerWeek,
-        sessionMinutes,
-        marginHelp,
-      });
-      onDone();
+      // Don't silently stack a second plan: if one is already active, ask first.
+      let active: PlanSummary | null = null;
+      try {
+        active = await invoke<PlanSummary | null>("cmd_get_active_plan", { bookId: book.id });
+      } catch {
+        active = null;
+      }
+      if (active) {
+        setExistingPlan(active);
+        setSubmitting(false);
+        return;
+      }
+      await doConfigure();
     } catch (e: any) {
       setError(e?.message ?? String(e));
       setSubmitting(false);
+    }
+  }
+
+  // Resolve the "this book already has a plan" prompt.
+  async function resolveReplan(choice: "continue" | "replace" | "pause") {
+    setSubmitting(true);
+    setError(null);
+    try {
+      if (choice === "continue") {
+        setExistingPlan(null);
+        onDone();
+        return;
+      }
+      if (existingPlan) {
+        await invoke(choice === "replace" ? "cmd_archive_plan" : "cmd_pause_plan", {
+          planId: existingPlan.id,
+        });
+      }
+      setExistingPlan(null);
+      await doConfigure();
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+      setSubmitting(false);
+      setExistingPlan(null);
     }
   }
 
@@ -249,6 +291,35 @@ export default function BookSetupSheet({ book, onDone }: Props) {
           </span>
         </div>
       </div>
+
+      {existingPlan && (
+        <div className="tl-sheet-backdrop" role="dialog" aria-label="This book already has a plan">
+          <div className="tl-plans-sheet" style={{ maxWidth: 460 }}>
+            <h3 style={{ marginTop: 0, fontFamily: "var(--tl-serif)", fontWeight: 500 }}>
+              This book already has a plan
+            </h3>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Started {existingPlan.start_date}, finishing {existingPlan.target_finish_date} ·{" "}
+              {existingPlan.session_count} sessions, {existingPlan.note_count} notes. How do you want to
+              handle it?
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--tl-2)", marginTop: "var(--tl-3)" }}>
+              <button className="tl-btn tl-btn-primary" disabled={submitting} onClick={() => resolveReplan("continue")}>
+                Keep the current plan
+              </button>
+              <button className="tl-btn tl-btn-ghost" disabled={submitting} onClick={() => resolveReplan("pause")}>
+                Pause it and start fresh
+              </button>
+              <button className="tl-btn tl-btn-ghost" disabled={submitting} onClick={() => resolveReplan("replace")}>
+                Replace it (archives the current plan)
+              </button>
+              <button className="tl-btn-quiet" disabled={submitting} onClick={() => setExistingPlan(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

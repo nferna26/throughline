@@ -344,6 +344,45 @@ export interface ExportPathStatus {
   message: string | null;
 }
 
+/** A pickable cloud model + its published per-Mtok price (cmd_model_catalog). */
+export interface ModelInfo {
+  id: string;
+  label: string;
+  input_per_mtok: number;
+  output_per_mtok: number;
+  tier: string; // "default" | "power" | "fast"
+}
+
+export interface UsageRow {
+  key: string;
+  calls: number;
+  cost_micros: number;
+}
+
+/** One reading plan with its lifecycle + attached counts (cmd_list_plans_for_book). */
+export interface PlanSummary {
+  id: string;
+  book_id: string;
+  lifecycle: string; // active | paused | completed | archived | superseded
+  status: string;
+  start_date: string;
+  target_finish_date: string;
+  paused_days_total: number;
+  session_count: number;
+  note_count: number;
+}
+
+/** AI spend summary for the Settings usage card (cmd_get_usage_summary). */
+export interface UsageSummary {
+  total_calls: number;
+  total_cost_micros: number;
+  month_cost_micros: number;
+  spend_cap_cents: number;
+  by_provider: UsageRow[];
+  by_lens: UsageRow[];
+  pricing_verified_at: string;
+}
+
 /** Typed error shape emitted by Tauri commands (see src-tauri/src/error.rs).
  *  All command rejections deserialize to one of these. Frontends can either
  *  branch on `kind` for special handling or pull `message` for display. */
