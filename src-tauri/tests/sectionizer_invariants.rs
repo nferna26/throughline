@@ -217,6 +217,85 @@ fn beyond_good_and_evil_day_one_is_the_preface_not_the_dedication_poem() {
         "BG&E day-1 should be the Preface, got: {:?}",
         body[*s..*e].chars().take(80).collect::<String>()
     );
+    // …and it must NOT be labelled with the leaked TOC entry ("WHAT IS NOBLE")
+    // nor the dedication poem ("FROM THE HEIGHTS … POEM").
+    let label = raw[day1].0.to_uppercase();
+    assert!(
+        !label.contains("NOBLE") && !label.contains("HEIGHTS") && !label.contains("POEM"),
+        "BG&E day-1 label is a leaked TOC entry / dedication poem: {:?}",
+        raw[day1].0
+    );
+}
+
+/// Parse a numbered-chapter ordinal: "CHAPTER XXVII. …" → 27, "CHAPTER 3" → 3.
+/// None for unnumbered labels (Preface, a title, folded multi-chapter labels).
+fn chapter_ordinal(label: &str) -> Option<u32> {
+    let up = label.trim().to_uppercase();
+    let rest = up.strip_prefix("CHAPTER ")?;
+    let tok = rest
+        .split(|c: char| !c.is_alphanumeric())
+        .find(|t| !t.is_empty())?;
+    if let Ok(n) = tok.parse::<u32>() {
+        return Some(n);
+    }
+    roman_to_u32(tok)
+}
+
+fn roman_to_u32(s: &str) -> Option<u32> {
+    let val = |c: char| match c {
+        'I' => 1,
+        'V' => 5,
+        'X' => 10,
+        'L' => 50,
+        'C' => 100,
+        'D' => 500,
+        'M' => 1000,
+        _ => 0,
+    };
+    let cs: Vec<i64> = s.chars().map(val).collect();
+    if cs.is_empty() || cs.contains(&0) {
+        return None;
+    }
+    let mut total = 0i64;
+    for i in 0..cs.len() {
+        if i + 1 < cs.len() && cs[i] < cs[i + 1] {
+            total -= cs[i];
+        } else {
+            total += cs[i];
+        }
+    }
+    u32::try_from(total).ok().filter(|&n| n > 0)
+}
+
+/// No leaked table-of-contents entry as a section label. A contents list's tail
+/// (the highest chapter number, or a terminal label like "Epilogue") must never
+/// become day-1 sitting BEFORE the real opening chapters. Over every corpus book:
+/// the first assignable section must not be a back-matter label, and if it's a
+/// numbered chapter its ordinal must not exceed a later section's chapter ordinal.
+#[test]
+fn sectionize_does_not_leak_a_toc_entry_as_a_section_label() {
+    for (name, body) in CORPUS {
+        let raw = sectionize(body);
+        let flags = throughline_lib::import::classify_assignable(&raw, body);
+        let day1 = flags.iter().position(|&a| a).unwrap();
+        let (label, _, _) = &raw[day1];
+        eprintln!("[toc] {name}: day-1 = {label:?}");
+        assert!(
+            !label.to_uppercase().starts_with("EPILOGUE"),
+            "[{name}] day-1 is a leaked back-matter label: {label:?}"
+        );
+        if let Some(d1) = chapter_ordinal(label) {
+            if let Some(next) = raw[day1 + 1..]
+                .iter()
+                .find_map(|(l, _, _)| chapter_ordinal(l))
+            {
+                assert!(
+                    d1 <= next,
+                    "[{name}] day-1 chapter {d1} ({label:?}) is out of order before a later CHAPTER {next} — a leaked TOC entry"
+                );
+            }
+        }
+    }
 }
 
 /// The bug this change targets: a section must never start or end in the middle

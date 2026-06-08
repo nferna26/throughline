@@ -55,6 +55,7 @@ fn matches(needle: &str, idref: &str) -> bool {
         "about the publisher",
         "newsletter sign",
         "ad card",
+        "transcriber",
     ];
     if ALWAYS_SKIP_SUBSTRINGS.iter().any(|s| needle.contains(s)) {
         return true;
