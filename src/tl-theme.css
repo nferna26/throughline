@@ -110,6 +110,18 @@
   transition: none !important;
 }
 
+/* Respect the OS "reduce motion" setting app-wide (a11y floor) — near-instant
+   transitions/animations, no smooth-scroll. Per-surface motion (e.g. the tutor
+   stream) layers its own reduced-motion rules on top. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ════════ titlebar (in-app top bar; native window provides traffic lights) ════════ */
 .tl-titlebar {
   flex-shrink: 0;
