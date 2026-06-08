@@ -9,7 +9,7 @@ import { segmentParagraph, blockRoleFor, type StyleRange } from "../paragraphStr
 import { useDialog } from "../hooks/useDialog";
 import type { BookSection, Note, ReadingSession, TodayCard, ReaderMode, SettingsDto } from "../types";
 import { NOTE_TYPES, makeCharLocator, parseLocator } from "../types";
-import { reduceMargin, initialMarginState } from "../marginPanel";
+import { reduceMargin, initialMarginState, marginVisible } from "../marginPanel";
 
 interface Props {
   today: TodayCard;
@@ -412,6 +412,10 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   // pinned panel the reader deliberately opened.
   const marginContentCount =
     sectionNotes.length + sectionDrafts.length + (briefingVisible ? 1 : 0);
+  // Whether the panel actually shows: opened this session, or pinned WITH content.
+  // A pinned-but-empty margin on load stays collapsed — the reader opens to a
+  // clean column, never an empty half-panel.
+  const marginIsVisible = marginVisible(marginState, marginContentCount > 0);
   const prevMarginContent = useRef(marginContentCount);
   useEffect(() => {
     if (panelOpen && !pinned && prevMarginContent.current > 0 && marginContentCount === 0) {
@@ -612,14 +616,14 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         <button className="tl-iconbtn" disabled={currentIdx >= assignableSections.length - 1} aria-label="Next section" onClick={goNext}><TLIcon name="chevronRight" size={18} /></button>
         <div className="tl-tb-div" />
         <button
-          className={panelOpen ? "tl-iconbtn tl-paneltoggle active" : "tl-iconbtn tl-paneltoggle"}
-          aria-label={panelOpen ? "Hide notes panel" : "Show notes panel"}
-          aria-pressed={panelOpen}
-          title={panelOpen ? "Hide notes panel" : "Show notes panel"}
-          onClick={() => dispatchMargin("togglePin")}
+          className={marginIsVisible ? "tl-iconbtn tl-paneltoggle active" : "tl-iconbtn tl-paneltoggle"}
+          aria-label={marginIsVisible ? "Hide notes panel" : "Show notes panel"}
+          aria-pressed={marginIsVisible}
+          title={marginIsVisible ? "Hide notes panel" : "Show notes panel"}
+          onClick={() => dispatchMargin(marginIsVisible ? "hide" : "show")}
         >
           <TLIcon name="columns" size={18} />
-          {!panelOpen && (sectionNotes.length + sectionDrafts.length) > 0 && (
+          {!marginIsVisible && (sectionNotes.length + sectionDrafts.length) > 0 && (
             <span className="tl-panelcount">{sectionNotes.length + sectionDrafts.length}</span>
           )}
         </button>
@@ -659,7 +663,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
           </div>
         </div>
 
-        {panelOpen && (
+        {marginIsVisible && (
           <>
             <div
               className={draggingRef.current ? "tl-panel-resizer dragging" : "tl-panel-resizer"}
@@ -675,7 +679,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
             >
               <div className="tl-sidepanel-head">
                 <span>Margin</span>
-                <button className="tl-iconbtn" aria-label="Hide notes panel" title="Hide notes panel" onClick={() => dispatchMargin("close")}>
+                <button className="tl-iconbtn" aria-label="Hide notes panel" title="Hide notes panel" onClick={() => dispatchMargin("hide")}>
                   <TLIcon name="x" size={15} />
                 </button>
               </div>
