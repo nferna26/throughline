@@ -481,6 +481,13 @@ pub async fn cmd_ai_ask(
     Ok(handle)
 }
 
+/// Static per-provider model catalogue (id + label + $/Mtok + tier) for the model
+/// picker and the cost UI. Local models are detected live (cmd_list_ai_models).
+#[tauri::command]
+pub fn cmd_model_catalog(provider: String) -> Vec<crate::ai_providers::ModelInfo> {
+    crate::ai_providers::model_catalog(crate::settings::AiProvider::from_str(&provider))
+}
+
 /// List selectable models for a provider. Local lists the server's `/models`;
 /// cloud providers return a small curated set (the model field is also free-text).
 #[tauri::command]

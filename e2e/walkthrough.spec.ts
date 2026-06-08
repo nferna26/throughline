@@ -90,6 +90,19 @@ test("export-warning", async ({ page }) => {
   await shoot(page, "08-export-warning");
 });
 
+test("model-picker-with-price-chip", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  // Choose a cloud provider → the model picker + price chip appear (Epic B2).
+  await page.getByLabel("AI provider").selectOption("anthropic");
+  const modelSel = page.getByLabel("AI model");
+  await expect(modelSel).toBeVisible();
+  // The bundled default is Sonnet, and its per-Mtok price is shown.
+  await expect(modelSel).toHaveValue("claude-sonnet-4-6");
+  await expect(page.getByText(/\$3 \/ \$15/).first()).toBeVisible();
+  await shoot(page, "10-model-picker");
+});
+
 test("settings", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();

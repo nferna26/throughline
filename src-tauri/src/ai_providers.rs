@@ -23,6 +23,57 @@ use tokio::sync::mpsc;
 use crate::ai_client::{run_chat_call, ChatCallOpts, StreamEvent};
 use crate::settings::AiProvider;
 
+/// A model the reader can pick, with its published per-Mtok price so the UI can
+/// show a cost chip and the usage meter (Epic B3/B4) computes spend locally.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub label: String,
+    pub input_per_mtok: f64,
+    pub output_per_mtok: f64,
+    pub tier: String, // "default" | "power" | "fast"
+}
+
+/// When the prices below were last verified against the providers' pricing pages.
+/// Re-verify before trusting the cost UI past ~90 days.
+pub const PRICING_VERIFIED_AT: &str = "2026-06-08";
+
+fn mi(id: &str, label: &str, inp: f64, out: f64, tier: &str) -> ModelInfo {
+    ModelInfo { id: id.into(), label: label.into(), input_per_mtok: inp, output_per_mtok: out, tier: tier.into() }
+}
+
+/// Per-provider model catalogue ($/Mtok). Anthropic prices are exact (the
+/// company-paid path); OpenAI/Codex are best-effort and bounded by
+/// PRICING_VERIFIED_AT. Local (LM Studio) models are detected live and free, so
+/// they are not in this static table. The first entry is each provider's default.
+pub fn model_catalog(provider: AiProvider) -> Vec<ModelInfo> {
+    match provider {
+        AiProvider::Anthropic => vec![
+            mi("claude-sonnet-4-6", "Sonnet 4.6 — best value", 3.0, 15.0, "default"),
+            mi("claude-haiku-4-5", "Haiku 4.5 — fastest, cheapest", 1.0, 5.0, "fast"),
+            mi("claude-opus-4-8", "Opus 4.8 — most capable (~5× cost)", 15.0, 75.0, "power"),
+        ],
+        AiProvider::OpenAi => vec![
+            mi("gpt-5.5", "GPT-5.5", 1.25, 10.0, "default"),
+            mi("gpt-5.5-pro", "GPT-5.5 Pro", 2.5, 20.0, "power"),
+            mi("gpt-5-mini", "GPT-5 mini — cheapest", 0.25, 2.0, "fast"),
+        ],
+        AiProvider::Codex => vec![mi("gpt-5.5", "GPT-5.5 (via Codex login)", 1.25, 10.0, "default")],
+        _ => Vec::new(),
+    }
+}
+
+/// Per-Mtok (input, output) prices for a (provider, model), for cost computation.
+/// Falls back to the provider's default model price when the exact id isn't
+/// catalogued (e.g. a hand-typed model) so the usage meter never reports $0.
+pub fn model_price(provider: AiProvider, model: &str) -> Option<(f64, f64)> {
+    let cat = model_catalog(provider);
+    cat.iter()
+        .find(|m| m.id == model)
+        .or_else(|| cat.first())
+        .map(|m| (m.input_per_mtok, m.output_per_mtok))
+}
+
 const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
@@ -977,6 +1028,29 @@ mod tests {
 
     fn is_delta(o: SseOutcome, expect: &str) -> bool {
         matches!(o, SseOutcome::Delta(t) if t == expect)
+    }
+
+    #[test]
+    fn anthropic_catalog_defaults_to_sonnet_and_prices_opus_higher() {
+        let cat = model_catalog(AiProvider::Anthropic);
+        // First entry is the default tier and must match settings' DEFAULT_ANTHROPIC_MODEL.
+        assert_eq!(cat[0].id, crate::settings::DEFAULT_ANTHROPIC_MODEL);
+        assert_eq!(cat[0].tier, "default");
+        assert!(cat[0].id.contains("sonnet"));
+        // Opus is the dear option — its input price is well above Sonnet's (~5×).
+        let opus = cat.iter().find(|m| m.id.contains("opus")).unwrap();
+        let sonnet = cat.iter().find(|m| m.id.contains("sonnet")).unwrap();
+        assert!(opus.input_per_mtok >= sonnet.input_per_mtok * 4.0);
+    }
+
+    #[test]
+    fn model_price_falls_back_to_default_never_zero() {
+        // An uncatalogued (hand-typed) Anthropic model still gets a non-zero price
+        // (the provider default), so the usage meter never reports $0 silently.
+        let (inp, out) = model_price(AiProvider::Anthropic, "claude-some-future-model").unwrap();
+        assert!(inp > 0.0 && out > 0.0);
+        // Local has no catalogue → no price.
+        assert!(model_price(AiProvider::Local, "whatever").is_none());
     }
 
     #[test]

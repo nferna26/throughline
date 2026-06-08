@@ -437,6 +437,14 @@
 .tl-export-warning svg { color: var(--tl-warn); flex-shrink: 0; }
 .tl-export-warning span { flex: 1; }
 
+/* Cloud model picker + price chip (Epic B2) — choose a model with cost in view. */
+.tl-modelselect { display: flex; align-items: center; gap: var(--tl-3); flex-wrap: wrap; }
+.tl-price-chip {
+  font-size: 12px; color: var(--tl-muted); white-space: nowrap;
+  padding: 2px 8px; border: 1px solid var(--tl-line); border-radius: 999px; background: var(--tl-surface);
+}
+.tl-price-chip .unit { opacity: 0.7; }
+
 /* ── Book Setup Sheet ─────────────────────────────────────────────────── */
 .tl-setup { flex: 1; display: flex; justify-content: center; padding: var(--tl-7) var(--tl-7) var(--tl-8); overflow-y: auto; }
 .tl-setup-card { width: 100%; max-width: 560px; }

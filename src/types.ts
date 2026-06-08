@@ -344,6 +344,15 @@ export interface ExportPathStatus {
   message: string | null;
 }
 
+/** A pickable cloud model + its published per-Mtok price (cmd_model_catalog). */
+export interface ModelInfo {
+  id: string;
+  label: string;
+  input_per_mtok: number;
+  output_per_mtok: number;
+  tier: string; // "default" | "power" | "fast"
+}
+
 /** Typed error shape emitted by Tauri commands (see src-tauri/src/error.rs).
  *  All command rejections deserialize to one of these. Frontends can either
  *  branch on `kind` for special handling or pull `message` for display. */

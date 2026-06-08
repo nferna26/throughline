@@ -159,6 +159,21 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_test_ai_connection":
         return { reachable: true, first_model_id: "gemma-4-31b-it-mlx", message: "ok" };
       case "cmd_list_ai_models": return ["gemma-4-31b-it-mlx", "qwen2.5-14b"];
+      case "cmd_model_catalog": {
+        const cat = {
+          anthropic: [
+            { id: "claude-sonnet-4-6", label: "Sonnet 4.6 — best value", input_per_mtok: 3, output_per_mtok: 15, tier: "default" },
+            { id: "claude-haiku-4-5", label: "Haiku 4.5 — fastest, cheapest", input_per_mtok: 1, output_per_mtok: 5, tier: "fast" },
+            { id: "claude-opus-4-8", label: "Opus 4.8 — most capable (~5× cost)", input_per_mtok: 15, output_per_mtok: 75, tier: "power" },
+          ],
+          openai: [
+            { id: "gpt-5.5", label: "GPT-5.5", input_per_mtok: 1.25, output_per_mtok: 10, tier: "default" },
+            { id: "gpt-5-mini", label: "GPT-5 mini — cheapest", input_per_mtok: 0.25, output_per_mtok: 2, tier: "fast" },
+          ],
+          codex: [{ id: "gpt-5.5", label: "GPT-5.5 (via Codex login)", input_per_mtok: 1.25, output_per_mtok: 10, tier: "default" }],
+        };
+        return cat[(args && args.provider) || "anthropic"] || [];
+      }
       case "cmd_list_ai_requests": return [];
       case "cmd_discover_seed": return DISCOVER_PAGE;
       case "cmd_discover_search": return DISCOVER_PAGE;

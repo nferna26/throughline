@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import TLIcon from "./TLIcon";
+import ModelSelect from "./ModelSelect";
 import CodexLogin from "./CodexLogin";
 import {
   aiProviderLabel,
@@ -109,6 +110,8 @@ export default function AiSetupSheet(props: {
   const [key, setKey] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [verifyErr, setVerifyErr] = useState("");
+  // Model chosen at key setup (empty = the provider's default, set by ModelSelect).
+  const [modelDraft, setModelDraft] = useState("");
 
   // LM Studio detect
   const [detect, setDetect] = useState<LocalDetect>("checking");
@@ -151,7 +154,10 @@ export default function AiSetupSheet(props: {
         return;
       }
       await invoke<SettingsDto>("cmd_set_ai_key", { provider: keyProvider, key: key.trim() });
-      await invoke<SettingsDto>("cmd_set_ai_settings", { provider: keyProvider });
+      await invoke<SettingsDto>("cmd_set_ai_settings", {
+        provider: keyProvider,
+        model: modelDraft || undefined,
+      });
       setKey("");
       props.onConnected(keyProvider);
     } catch (e: unknown) {
@@ -162,7 +168,7 @@ export default function AiSetupSheet(props: {
     } finally {
       setVerifying(false);
     }
-  }, [keyProvider, key, props]);
+  }, [keyProvider, key, modelDraft, props]);
 
   // ── Probe localhost:1234 (reusing the connection-test command, same as the
   //    Settings local-detect/refresh path). reachable + a model id ⇒ found;
@@ -321,6 +327,12 @@ export default function AiSetupSheet(props: {
                 spellCheck={false}
                 aria-label={`${aiProviderLabel(keyProvider)} API key`}
               />
+              <label style={{ display: "block", fontSize: 13, color: "var(--tl-muted)", marginTop: "var(--tl-2)" }}>
+                Model
+                <div style={{ marginTop: 4 }}>
+                  <ModelSelect provider={keyProvider} value={modelDraft} onChange={setModelDraft} />
+                </div>
+              </label>
               <p style={sx.disclosure}>
                 Stored in macOS Keychain. Throughline sends only the passage or section you ask
                 about. You pay your provider directly.

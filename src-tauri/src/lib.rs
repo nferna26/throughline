@@ -166,6 +166,7 @@ pub fn run() {
             commands::ai::cmd_save_ai_preview_as_note,
             commands::ai::cmd_ai_ask,
             commands::ai::cmd_list_ai_models,
+            commands::ai::cmd_model_catalog,
             commands::ai::cmd_test_ai_connection,
             commands::ai::cmd_codex_device_start,
             commands::ai::cmd_codex_device_poll,

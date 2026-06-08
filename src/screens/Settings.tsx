@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import TLIcon from "../components/TLIcon";
+import ModelSelect from "../components/ModelSelect";
 import CodexLogin from "../components/CodexLogin";
 import AiHistory from "./AiHistory";
 import UpdateChecker from "../components/UpdateChecker";
@@ -297,9 +298,9 @@ export default function Settings() {
                 <div className="tl-set-row col">
                   <div className="lhs">
                     <div className="name">Model</div>
-                    <div className="desc">Defaults to the best model; override if you like.</div>
+                    <div className="desc">Defaults to the best-value model; the chip shows its price per million tokens.</div>
                   </div>
-                  <input className="tl-input" type="text" value={modelDraft} onChange={(e) => setModelDraft(e.target.value)} spellCheck={false} placeholder={providerDraft === "openai" ? "gpt-5.5" : "claude-opus-4-8"} />
+                  <ModelSelect provider={providerDraft} value={modelDraft} onChange={setModelDraft} />
                 </div>
               </>
             )}
