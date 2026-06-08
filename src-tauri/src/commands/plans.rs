@@ -13,6 +13,7 @@ use crate::error::AppError;
 pub struct PlanSummary {
     pub id: String,
     pub book_id: String,
+    pub name: String,
     pub lifecycle: String,
     pub status: String,
     pub start_date: String,
@@ -20,27 +21,70 @@ pub struct PlanSummary {
     pub paused_days_total: i64,
     pub session_count: i64,
     pub note_count: i64,
+    /// Progress snapshot taken when the plan was paused/archived (back-matter).
+    /// The live plan's current day/percent/pace comes from cmd_today instead.
+    pub reached_percent: Option<i64>,
 }
 
-const PLAN_SELECT: &str = "SELECT p.id, p.book_id, p.lifecycle, p.status, p.start_date,
-        p.target_finish_date, p.paused_days_total,
+const PLAN_SELECT: &str = "SELECT p.id, p.book_id, COALESCE(p.name, ''), p.lifecycle, p.status,
+        p.start_date, p.target_finish_date, p.paused_days_total,
         (SELECT COUNT(*) FROM reading_sessions s WHERE s.plan_id = p.id),
         (SELECT COUNT(*) FROM notes n WHERE n.session_id IN
-           (SELECT id FROM reading_sessions s WHERE s.plan_id = p.id))
+           (SELECT id FROM reading_sessions s WHERE s.plan_id = p.id)),
+        p.reached_percent
      FROM reading_plans p";
 
 fn row_to_summary(r: &rusqlite::Row) -> rusqlite::Result<PlanSummary> {
     Ok(PlanSummary {
         id: r.get(0)?,
         book_id: r.get(1)?,
-        lifecycle: r.get(2)?,
-        status: r.get(3)?,
-        start_date: r.get(4)?,
-        target_finish_date: r.get(5)?,
-        paused_days_total: r.get(6)?,
-        session_count: r.get(7)?,
-        note_count: r.get(8)?,
+        name: r.get(2)?,
+        lifecycle: r.get(3)?,
+        status: r.get(4)?,
+        start_date: r.get(5)?,
+        target_finish_date: r.get(6)?,
+        paused_days_total: r.get(7)?,
+        session_count: r.get(8)?,
+        note_count: r.get(9)?,
+        reached_percent: r.get(10)?,
     })
+}
+
+/// Snapshot the book's current progress % onto a plan (for back-matter display)
+/// at the moment it stops being live — pause or archive.
+fn snapshot_reached_percent(conn: &rusqlite::Connection, plan_id: &str) -> rusqlite::Result<()> {
+    let book_id: String = match conn.query_row(
+        "SELECT book_id FROM reading_plans WHERE id = ?1",
+        [plan_id],
+        |r| r.get(0),
+    ) {
+        Ok(b) => b,
+        Err(_) => return Ok(()),
+    };
+    let assignable: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM book_sections WHERE book_id = ?1 AND assignable = 1",
+            [&book_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let completed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM section_progress WHERE book_id = ?1 AND completed_at IS NOT NULL",
+            [&book_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let pct = if assignable > 0 {
+        (completed * 100 / assignable).clamp(0, 100)
+    } else {
+        0
+    };
+    conn.execute(
+        "UPDATE reading_plans SET reached_percent = ?1 WHERE id = ?2",
+        rusqlite::params![pct, plan_id],
+    )?;
+    Ok(())
 }
 
 /// Every plan for a book, active first, with attached session + note counts so the
@@ -87,6 +131,7 @@ pub fn cmd_pause_plan(plan_id: String, state: State<DbState>) -> Result<(), AppE
         [&plan_id],
     )
     .map_err(AppError::from)?;
+    snapshot_reached_percent(&conn, &plan_id).ok();
     Ok(())
 }
 
@@ -119,6 +164,7 @@ pub fn cmd_archive_plan(plan_id: String, state: State<DbState>) -> Result<(), Ap
         [&plan_id],
     )
     .map_err(AppError::from)?;
+    snapshot_reached_percent(&conn, &plan_id).ok();
     Ok(())
 }
 
