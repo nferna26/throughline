@@ -61,9 +61,9 @@ describe("Settings — Your data trust summary", () => {
     wire({ ai_provider: "openai", ai_remote_allowed: true });
     render(<Settings />);
     // The scope line flips to "remote" — never a false on-device claim.
-    await waitFor(() => expect(screen.getByText(/run on a remote model/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/the only thing sent to the cloud provider/i)).toBeInTheDocument());
     // A cloud provider is ENABLED (not disabled); the warning names the provider + what's sent.
-    expect(screen.getByText(/your selected passage or section is sent to OpenAI/i)).toBeInTheDocument();
+    expect(screen.getByText(/Only that selection leaves this Mac/i)).toBeInTheDocument();
     expect(screen.queryByText(/disabled until you re-enable/i)).toBeNull();
   });
 
@@ -79,7 +79,7 @@ describe("Settings — Your data trust summary", () => {
   it("does not flag OpenAI as experimental", async () => {
     wire({ ai_provider: "openai", ai_remote_allowed: true });
     render(<Settings />);
-    await waitFor(() => expect(screen.getByText(/run on a remote model/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/the only thing sent to the cloud provider/i)).toBeInTheDocument());
     // The experimental marker is specific to Codex's unofficial endpoint.
     expect(screen.queryByText(/^Experimental\.$/i)).toBeNull();
   });
