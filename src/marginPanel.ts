@@ -29,8 +29,31 @@ export function initialMarginState(pinned: boolean): MarginState {
   return { open: pinned, pinned };
 }
 
-// STUB (RED): every event is a no-op, so the behavior tests fail until the GREEN
-// commit implements the real transitions.
-export function reduceMargin(state: MarginState, _event: MarginEvent): MarginState {
-  return state;
+export function reduceMargin(state: MarginState, event: MarginEvent): MarginState {
+  switch (event) {
+    case "select":
+      // A bare selection only raises the floating action toolbar — the margin
+      // stays as it was (closed by default), so the text is never crowded by an
+      // empty panel just for selecting a passage.
+      return state;
+    case "capture":
+      // The reader made/opened something the margin should hold.
+      return { ...state, open: true };
+    case "emptied":
+      // The last item is gone. Collapse back to the single column — unless the
+      // reader explicitly pinned the margin open.
+      return state.pinned ? state : { ...state, open: false };
+    case "togglePin":
+      // The toolbar toggle keys on what the reader SEES: if the margin is open
+      // (whether pinned, or just opened by a capture), one click hides it;
+      // otherwise it pins the margin open. Keying on `open` — not `pinned` —
+      // means the post-capture {open:true, pinned:false} state hides in a single
+      // click, matching the button's "Hide notes panel" label.
+      return state.open ? { open: false, pinned: false } : { open: true, pinned: true };
+    case "close":
+      // The panel's × closes it and clears any pin.
+      return { open: false, pinned: false };
+    default:
+      return state;
+  }
 }

@@ -38,6 +38,12 @@ describe("companion-margin reducer", () => {
     expect(reduceMargin(openPinned, "togglePin")).toEqual({ open: false, pinned: false });
   });
 
+  it("the toggle hides a margin opened by a capture in one click (the common state)", () => {
+    // After a capture the margin is open-but-unpinned; the toolbar reads "Hide
+    // notes panel", so one click must actually hide it — not re-pin it open.
+    expect(reduceMargin(openUnpinned, "togglePin")).toEqual({ open: false, pinned: false });
+  });
+
   it("close hides the margin and clears any pin", () => {
     expect(reduceMargin(openPinned, "close")).toEqual({ open: false, pinned: false });
   });

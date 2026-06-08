@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import TLIcon from "../components/TLIcon";
 import MarginNoteCard from "../components/MarginNoteCard";
@@ -9,6 +9,7 @@ import { segmentParagraph, blockRoleFor, type StyleRange } from "../paragraphStr
 import { useDialog } from "../hooks/useDialog";
 import type { BookSection, Note, ReadingSession, TodayCard, ReaderMode, SettingsDto } from "../types";
 import { NOTE_TYPES, makeCharLocator, parseLocator } from "../types";
+import { reduceMargin, initialMarginState } from "../marginPanel";
 
 interface Props {
   today: TodayCard;
@@ -77,9 +78,16 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   // (balanced at any window size). The panel auto-opens the instant the reader
   // captures something (highlight / note / tutor), and the toolbar toggle shows
   // a count badge when the section has notes. The open/closed choice persists.
-  const [panelOpen, setPanelOpen] = useState<boolean>(
-    () => localStorage.getItem("rg.panelOpen") === "true"
+  // Companion-margin visibility is a tiny reducer (see ../marginPanel): the reader
+  // opens to a single clean column and the margin is brought in only when it holds
+  // something. `pinned` (the toolbar toggle) persists; a bare selection never opens it.
+  const [marginState, dispatchMargin] = useReducer(
+    reduceMargin,
+    localStorage.getItem("rg.panelOpen") === "true",
+    initialMarginState,
   );
+  const panelOpen = marginState.open;
+  const pinned = marginState.pinned;
   const [panelWidth, setPanelWidth] = useState<number>(
     () => clampPanelWidth(parseInt(localStorage.getItem("rg.panelWidth") || "320", 10))
   );
@@ -115,7 +123,8 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
 
   useEffect(() => { localStorage.setItem("rg.fontSize", String(fontSize)); }, [fontSize]);
   useEffect(() => { localStorage.setItem("rg.lineWidth", String(lineWidth)); }, [lineWidth]);
-  useEffect(() => { localStorage.setItem("rg.panelOpen", String(panelOpen)); }, [panelOpen]);
+  // Persist the reader's open-preference (the pin) under the long-standing key.
+  useEffect(() => { localStorage.setItem("rg.panelOpen", String(pinned)); }, [pinned]);
   useEffect(() => { localStorage.setItem("rg.panelWidth", String(panelWidth)); }, [panelWidth]);
 
   // Drag the resizer: panel width = window-right-edge minus pointer x, clamped.
@@ -352,7 +361,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   useEffect(() => {
     if (briefingVisible && currentSection && deepOpenedFor.current !== currentSection.id) {
       deepOpenedFor.current = currentSection.id;
-      setPanelOpen(true);
+      dispatchMargin("capture");
     }
   }, [briefingVisible, currentSection]);
 
@@ -396,6 +405,20 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   // Cards render in document order inside the side panel (notes first by anchor,
   // then any live tutor drafts) — no absolute positioning, so they can never be
   // clipped or land in an invisible rail.
+
+  // Collapse the margin when its last item is removed (a real >0 → 0 transition),
+  // re-centering the reading column — unless the reader pinned it open. Guarding on
+  // the transition avoids fighting the open-on-capture path (0 → 1) or the empty
+  // pinned panel the reader deliberately opened.
+  const marginContentCount =
+    sectionNotes.length + sectionDrafts.length + (briefingVisible ? 1 : 0);
+  const prevMarginContent = useRef(marginContentCount);
+  useEffect(() => {
+    if (panelOpen && !pinned && prevMarginContent.current > 0 && marginContentCount === 0) {
+      dispatchMargin("emptied");
+    }
+    prevMarginContent.current = marginContentCount;
+  }, [marginContentCount, panelOpen, pinned]);
 
   // Dismiss the floating selection toolbar: clear our state AND the native
   // selection (so it doesn't immediately reappear on the next render).
@@ -448,9 +471,9 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       end: secBase + Math.max(start, end),
       text,
     });
-    // Guided margin-help gently surfaces the panel on selection, so help is one
-    // glance away. Quiet stays out of the way; Deep Study is already open.
-    if (marginHelp === "guided") setPanelOpen(true);
+    // A bare selection raises only the floating action toolbar (rendered below) —
+    // never the margin panel. The margin opens when the reader actually captures
+    // something, so selecting a passage never crowds the text with an empty panel.
   }
 
   async function createAnchoredNote(noteType: string): Promise<Note | null> {
@@ -478,16 +501,16 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     }
   }
 
-  async function onHighlight() { setPanelOpen(true); await createAnchoredNote("Highlight"); }
+  async function onHighlight() { dispatchMargin("capture"); await createAnchoredNote("Highlight"); }
   async function onMarginNote() {
-    setPanelOpen(true);
+    dispatchMargin("capture");
     const n = await createAnchoredNote("MarginNote");
     if (n) setActiveNoteId(n.id);
   }
   // Mark a confusing passage as a Question in one tap — same anchored-note path,
   // typed Question. The reader can elaborate (or re-tag) in the margin card.
   async function onQuestion() {
-    setPanelOpen(true);
+    dispatchMargin("capture");
     const n = await createAnchoredNote("Question");
     if (n) setActiveNoteId(n.id);
   }
@@ -507,7 +530,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     };
     setTutorDrafts((d) => [...d, draft]);
     setActiveNoteId(draft.draftId);
-    setPanelOpen(true); // make sure the new draft card is visible
+    dispatchMargin("capture"); // make sure the new draft card is visible
     window.getSelection?.()?.removeAllRanges();
     setSel(null);
   }
@@ -528,7 +551,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     };
     setTutorDrafts((d) => [...d, draft]);
     setActiveNoteId(draft.draftId);
-    setPanelOpen(true);
+    dispatchMargin("capture");
   }
   async function onTutorSaved(draftId: string, noteId: string) {
     setTutorDrafts((d) => d.filter((x) => x.draftId !== draftId));
@@ -593,7 +616,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
           aria-label={panelOpen ? "Hide notes panel" : "Show notes panel"}
           aria-pressed={panelOpen}
           title={panelOpen ? "Hide notes panel" : "Show notes panel"}
-          onClick={() => setPanelOpen((o) => !o)}
+          onClick={() => dispatchMargin("togglePin")}
         >
           <TLIcon name="columns" size={18} />
           {!panelOpen && (sectionNotes.length + sectionDrafts.length) > 0 && (
@@ -652,7 +675,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
             >
               <div className="tl-sidepanel-head">
                 <span>Margin</span>
-                <button className="tl-iconbtn" aria-label="Hide notes panel" title="Hide notes panel" onClick={() => setPanelOpen(false)}>
+                <button className="tl-iconbtn" aria-label="Hide notes panel" title="Hide notes panel" onClick={() => dispatchMargin("close")}>
                   <TLIcon name="x" size={15} />
                 </button>
               </div>
