@@ -37,6 +37,17 @@ test("recovery-when-behind", async ({ page }) => {
   await shoot(page, "09-recovery");
 });
 
+test("plans-management", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /manage reading plans/i }).click();
+  await expect(page.getByRole("dialog", { name: /reading plans/i })).toBeVisible();
+  // See every plan with its lifecycle + counts, and act on it (the blocker).
+  await expect(page.getByText(/4 sessions · 2 notes/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Delete" }).first()).toBeVisible();
+  await shoot(page, "12-plans");
+});
+
 test("today", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Meditations" })).toBeVisible();

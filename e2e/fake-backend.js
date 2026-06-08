@@ -189,6 +189,15 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
         return window.__TL_FAKE_EXPORT_BROKEN__
           ? { path: "/Volumes/USB/GBrain/Reading", writable: false, message: "Throughline can't save notes to this folder (No such file or directory)." }
           : { path: SETTINGS.export_path, writable: true, message: null };
+      case "cmd_list_plans_for_book":
+        return [
+          { id: "p_live", book_id: BOOK.id, lifecycle: "active", status: "active", start_date: "2026-05-20", target_finish_date: "2026-06-19", paused_days_total: 0, session_count: 4, note_count: 2 },
+          { id: "p_old", book_id: BOOK.id, lifecycle: "archived", status: "rebalanced", start_date: "2026-04-01", target_finish_date: "2026-05-01", paused_days_total: 3, session_count: 1, note_count: 0 },
+        ];
+      case "cmd_get_active_plan":
+        return { id: "p_live", book_id: BOOK.id, lifecycle: "active", status: "active", start_date: "2026-05-20", target_finish_date: "2026-06-19", paused_days_total: 0, session_count: 4, note_count: 2 };
+      case "cmd_pause_plan": case "cmd_resume_plan": case "cmd_archive_plan": case "cmd_delete_plan":
+        return null;
       case "cmd_set_ai_settings": case "cmd_set_ai_key": case "cmd_clear_ai_key":
       case "cmd_set_export_path": case "cmd_forget_ai_history": case "cmd_codex_logout":
         return null;

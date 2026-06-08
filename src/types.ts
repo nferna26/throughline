@@ -359,6 +359,19 @@ export interface UsageRow {
   cost_micros: number;
 }
 
+/** One reading plan with its lifecycle + attached counts (cmd_list_plans_for_book). */
+export interface PlanSummary {
+  id: string;
+  book_id: string;
+  lifecycle: string; // active | paused | completed | archived | superseded
+  status: string;
+  start_date: string;
+  target_finish_date: string;
+  paused_days_total: number;
+  session_count: number;
+  note_count: number;
+}
+
 /** AI spend summary for the Settings usage card (cmd_get_usage_summary). */
 export interface UsageSummary {
   total_calls: number;
