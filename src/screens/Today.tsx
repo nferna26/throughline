@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import TLIcon, { type IconName } from "../components/TLIcon";
 import TodayTeaser from "../components/TodayTeaser";
-import PlansSheet from "../components/PlansSheet";
-import type { TodayCard, PaceState, RecoveryOption, RecomputedPlan, FinishForecast } from "../types";
+import PlansView from "../components/PlansView";
+import RePlanDialog from "../components/RePlanDialog";
+import type { TodayCard, PaceState, RecoveryOption, RecomputedPlan, FinishForecast, Book, PlanSummary } from "../types";
 
 interface Props {
   today: TodayCard | null;
@@ -15,6 +16,8 @@ interface Props {
   /** The calm "I only have 10 minutes" path — opens the reader in rescue mode. */
   onStartRescue: (t: TodayCard) => void;
   onRefresh: () => Promise<void> | void;
+  /** Create a fresh plan for the book and open its setup (the new-plan flow). */
+  onNewPlan?: (book: Book) => void;
 }
 
 // Honest, low-drama forecast caption for an active plan. `on_track` needs no
@@ -76,8 +79,22 @@ function describeOption(o: RecoveryOption): { primary: string; detail?: string }
   }
 }
 
-export default function Today({ today, onDiscover, onImport, onStart, onStartRescue, onRefresh }: Props) {
+export default function Today({ today, onDiscover, onImport, onStart, onStartRescue, onRefresh, onNewPlan }: Props) {
   const [showPlans, setShowPlans] = useState(false);
+  const [plansCount, setPlansCount] = useState(0);
+  const [replanActive, setReplanActive] = useState<PlanSummary | null>(null);
+  const bookId = today?.book.id;
+  // How many plans this book has — drives the "Plans · N earlier" pill (only >1).
+  useEffect(() => {
+    if (!bookId) {
+      setPlansCount(0);
+      return;
+    }
+    Promise.resolve()
+      .then(() => invoke<PlanSummary[]>("cmd_list_plans_for_book", { bookId }))
+      .then((p) => setPlansCount(Array.isArray(p) ? p.length : 0))
+      .catch(() => setPlansCount(0));
+  }, [bookId, showPlans]);
   if (!today) {
     return (
       <div className="tl-welcome">
@@ -130,9 +147,11 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
       <div className="tl-kicker">
         <span className="dot" />
         {planReady ? "Today — plan ready" : `Today — day ${day_index} of ${total_days}`}
-        <button className="tl-plan-pill" onClick={() => setShowPlans(true)} aria-label="Manage reading plans">
-          Plans ›
-        </button>
+        {plansCount > 1 && (
+          <button className="tl-plans-link" onClick={() => setShowPlans(true)} aria-label="See plans for this book">
+            <TLIcon name="swap" size={14} /> Plans <span className="cnt">· {plansCount - 1} earlier</span>
+          </button>
+        )}
       </div>
 
       <h1 className="tl-today-title">{book.title}</h1>
@@ -207,7 +226,38 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
         <TLIcon name="plus" size={16} /> Find another book
       </button>
 
-      {showPlans && <PlansSheet bookId={book.id} bookTitle={book.title} onClose={() => setShowPlans(false)} />}
+      {showPlans && (
+        <PlansView
+          bookId={book.id}
+          bookTitle={book.title}
+          bookAuthor={book.author}
+          today={today}
+          onClose={() => setShowPlans(false)}
+          onContinueReading={() => { setShowPlans(false); onStart(today); }}
+          onStartNewPlan={async () => {
+            const active = await invoke<PlanSummary | null>("cmd_get_active_plan", { bookId: book.id }).catch(() => null);
+            if (active) setReplanActive(active);
+            else onNewPlan?.(book);
+          }}
+          onChanged={() => { onRefresh(); }}
+        />
+      )}
+      {replanActive && (
+        <RePlanDialog
+          bookTitle={book.title}
+          planName={replanActive.name}
+          progressLine={`day ${today.day_index} of ${today.total_days}`}
+          onCancel={() => setReplanActive(null)}
+          onResolve={async (choice) => {
+            const active = replanActive;
+            setReplanActive(null);
+            if (choice === "keep") { setShowPlans(false); return; }
+            if (choice === "pause") await invoke("cmd_pause_plan", { planId: active.id });
+            else await invoke("cmd_archive_plan", { planId: active.id });
+            onNewPlan?.(book);
+          }}
+        />
+      )}
     </div>
   );
 }

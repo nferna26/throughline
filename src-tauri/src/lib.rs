@@ -191,6 +191,7 @@ pub fn run() {
             commands::settings_cmds::cmd_check_export_path,
             commands::plans::cmd_list_plans_for_book,
             commands::plans::cmd_get_active_plan,
+            commands::plans::cmd_start_new_plan,
             commands::plans::cmd_pause_plan,
             commands::plans::cmd_resume_plan,
             commands::plans::cmd_archive_plan,

@@ -189,14 +189,18 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
         return window.__TL_FAKE_EXPORT_BROKEN__
           ? { path: "/Volumes/USB/GBrain/Reading", writable: false, message: "Throughline can't save notes to this folder (No such file or directory)." }
           : { path: SETTINGS.export_path, writable: true, message: null };
-      case "cmd_list_plans_for_book":
-        return [
-          { id: "p_live", book_id: BOOK.id, lifecycle: "active", status: "active", start_date: "2026-05-20", target_finish_date: "2026-06-19", paused_days_total: 0, session_count: 4, note_count: 2 },
-          { id: "p_old", book_id: BOOK.id, lifecycle: "archived", status: "rebalanced", start_date: "2026-04-01", target_finish_date: "2026-05-01", paused_days_total: 3, session_count: 1, note_count: 0 },
+      case "cmd_list_plans_for_book": {
+        const live = { id: "p_live", book_id: BOOK.id, name: "Slow mornings", lifecycle: "active", status: "active", start_date: "2026-05-28", target_finish_date: "2026-06-28", paused_days_total: 0, session_count: 9, note_count: 4, reached_percent: null };
+        const past = [
+          { id: "p3", book_id: BOOK.id, name: "Winter read", lifecycle: "paused", status: "rebalanced", start_date: "2026-01-03", target_finish_date: "2026-02-12", paused_days_total: 0, session_count: 14, note_count: 7, reached_percent: 34 },
+          { id: "p1", book_id: BOOK.id, name: "First attempt", lifecycle: "archived", status: "rebalanced", start_date: "2025-11-04", target_finish_date: "2025-12-01", paused_days_total: 3, session_count: 6, note_count: 2, reached_percent: 22 },
         ];
+        return window.__TL_FAKE_RESTING__ ? past : [live, ...past];
+      }
       case "cmd_get_active_plan":
-        return { id: "p_live", book_id: BOOK.id, lifecycle: "active", status: "active", start_date: "2026-05-20", target_finish_date: "2026-06-19", paused_days_total: 0, session_count: 4, note_count: 2 };
+        return window.__TL_FAKE_RESTING__ ? null : { id: "p_live", book_id: BOOK.id, name: "Slow mornings", lifecycle: "active", status: "active", start_date: "2026-05-28", target_finish_date: "2026-06-28", paused_days_total: 0, session_count: 9, note_count: 4, reached_percent: null };
       case "cmd_pause_plan": case "cmd_resume_plan": case "cmd_archive_plan": case "cmd_delete_plan":
+      case "cmd_restore_plan": case "cmd_start_new_plan":
         return null;
       case "cmd_set_ai_settings": case "cmd_set_ai_key": case "cmd_clear_ai_key":
       case "cmd_set_export_path": case "cmd_forget_ai_history": case "cmd_codex_logout":

@@ -106,6 +106,18 @@ pub fn cmd_list_plans_for_book(
     Ok(rows.filter_map(|x| x.ok()).collect())
 }
 
+/// Create a fresh plan-ready plan for a book (a new "attempt"). The caller decides
+/// what happens to any existing live plan (keep / pause / replace) first; this just
+/// inserts the new one, which becomes the live plan (lifecycle defaults to active).
+#[tauri::command]
+pub fn cmd_start_new_plan(book_id: String, state: State<DbState>) -> Result<(), AppError> {
+    let conn = state.0.lock()?;
+    let sections = crate::commands::db_helpers::list_sections(&conn, &book_id).map_err(AppError::from)?;
+    let plan = crate::plan::build_default_plan(&book_id, &sections);
+    crate::commands::db_helpers::insert_plan(&conn, &plan).map_err(AppError::from)?;
+    Ok(())
+}
+
 /// The book's live plan (the most recent `lifecycle = 'active'`), if any.
 #[tauri::command]
 pub fn cmd_get_active_plan(

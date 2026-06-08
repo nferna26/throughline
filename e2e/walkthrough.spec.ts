@@ -37,15 +37,35 @@ test("recovery-when-behind", async ({ page }) => {
   await shoot(page, "09-recovery");
 });
 
-test("plans-management", async ({ page }) => {
+test("plans-frontispiece", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /manage reading plans/i }).click();
-  await expect(page.getByRole("dialog", { name: /reading plans/i })).toBeVisible();
-  // See every plan with its lifecycle + counts, and act on it (the blocker).
-  await expect(page.getByText(/4 sessions · 2 notes/i)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Delete" }).first()).toBeVisible();
-  await shoot(page, "12-plans");
+  await page.getByRole("button", { name: /see plans for this book/i }).click();
+  // The live plan is the focal plate; earlier attempts are quiet back-matter.
+  await expect(page.getByText("Slow mornings")).toBeVisible();
+  await expect(page.getByText("Live").first()).toBeVisible();
+  await expect(page.getByText(/Earlier attempts/i)).toBeVisible();
+  await expect(page.getByText("Winter read")).toBeVisible();
+  await shoot(page, "12-plans-frontispiece");
+});
+
+test("plans-resting", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_RESTING__ = true; });
+  await page.goto("/");
+  await page.getByRole("button", { name: /see plans for this book/i }).click();
+  await expect(page.getByText(/No live plan right now/i)).toBeVisible();
+  await shoot(page, "13-plans-resting");
+});
+
+test("replan-decision", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /see plans for this book/i }).click();
+  // "Start a new plan" while a live plan exists → the shame-free decision dialog.
+  await page.getByRole("button", { name: /start a new plan/i }).first().click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByText(/already have a plan/i)).toBeVisible();
+  await expect(page.getByRole("radio", { name: /Keep my current plan/i })).toBeVisible();
+  await expect(page.getByRole("radio", { name: /Replace it/i })).toBeVisible();
+  await shoot(page, "14-replan-decision");
 });
 
 test("today", async ({ page }) => {

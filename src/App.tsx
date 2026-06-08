@@ -140,6 +140,19 @@ export default function App() {
     setView({ kind: "reader", today: t, mode: "full" });
   }
 
+  // "Start a new plan" (from the Plans view): create a fresh plan for the book —
+  // the caller has already handled the old one (keep / pause / replace) — and open
+  // its setup so the reader sets the pace + names it.
+  async function newPlan(book: Book) {
+    try {
+      await invoke("cmd_start_new_plan", { bookId: book.id });
+    } catch (e: any) {
+      alert(`Could not start a new plan: ${e?.message ?? e}`);
+      return;
+    }
+    setView({ kind: "setup", book });
+  }
+
   // The "I only have 10 minutes" path — same reader, calm framing, no pace
   // pressure. Opens at the saved resume position (the next paragraph).
   function startRescue(t: TodayCard) {
@@ -221,7 +234,7 @@ export default function App() {
         {view.kind === "today" && (
           today === null ? (
             // No books yet — the welcome card owns book acquisition; no book chrome.
-            <Today today={null} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onStartRescue={startRescue} onRefresh={refreshToday} />
+            <Today today={null} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onStartRescue={startRescue} onRefresh={refreshToday} onNewPlan={newPlan} />
           ) : (
             <>
               <div className="tl-bookhead">
@@ -252,7 +265,7 @@ export default function App() {
                 aria-labelledby={tab === "today" ? "tab-today" : "tab-notes"}
               >
                 {tab === "today" ? (
-                  <Today today={today} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onStartRescue={startRescue} onRefresh={refreshToday} />
+                  <Today today={today} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onStartRescue={startRescue} onRefresh={refreshToday} onNewPlan={newPlan} />
                 ) : (
                   <NotesBrowser book={today.book} />
                 )}
