@@ -18,6 +18,25 @@ async function shoot(page: Page, name: string) {
   await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: true });
 }
 
+test("welcome-first-run", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EMPTY__ = true; });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: /Welcome to Throughline/i })).toBeVisible();
+  // The privacy + durability promise (the switching-anxiety answer) is stated plainly.
+  await expect(page.getByText(/never leave this Mac/i)).toBeVisible();
+  await expect(page.getByText(/Markdown that outlives the app/i)).toBeVisible();
+  await shoot(page, "00-welcome");
+});
+
+test("recovery-when-behind", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_BEHIND__ = true; });
+  await page.goto("/");
+  // Falling behind must never dead-end: a visible recovery panel with options.
+  await expect(page.getByText(/calm way back|behind/i).first()).toBeVisible();
+  await expect(page.getByText(/extend|re-pace|finish by/i).first()).toBeVisible();
+  await shoot(page, "09-recovery");
+});
+
 test("today", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Meditations" })).toBeVisible();
@@ -60,6 +79,15 @@ test("reader-margin-and-tutor", async ({ page }) => {
   await page.waitForTimeout(2000);
   await shoot(page, "04-margin-tutor");
   await expect.soft(page.getByText(/Aurelius is bracing himself|telling himself|Stoic|cooperation/).first()).toBeVisible();
+});
+
+test("export-warning", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EXPORT_BROKEN__ = true; });
+  await page.goto("/");
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByText(/can't save notes/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /choose a folder/i })).toBeVisible();
+  await shoot(page, "08-export-warning");
 });
 
 test("settings", async ({ page }) => {

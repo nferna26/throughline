@@ -253,7 +253,7 @@ export const AI_STUB_MODES = [
   { value: "explain",      label: "Explain this passage" },
   { value: "historical",   label: "Historical context" },
   { value: "vocabulary",   label: "Vocabulary / reference" },
-  { value: "socratic",     label: "Socratic questions" },
+  { value: "socratic",     label: "Ask questions" },
   { value: "durable_note", label: "Extract durable note" },
   { value: "prepare_next", label: "Prepare tomorrow's reading" },
 ] as const;
@@ -334,6 +334,14 @@ export interface ConnTestResult {
   reachable: boolean;
   first_model_id: string | null;
   message: string;
+}
+
+/** Preflight of the Markdown export folder (cmd_check_export_path): can notes
+ *  actually be written there right now? `message` is a human reason when not. */
+export interface ExportPathStatus {
+  path: string;
+  writable: boolean;
+  message: string | null;
 }
 
 /** Typed error shape emitted by Tauri commands (see src-tauri/src/error.rs).

@@ -265,7 +265,7 @@ export default function Settings() {
                     <div className="desc">The model id loaded in your server. Pick a detected one or type it.</div>
                   </div>
                   <div style={{ display: "flex", gap: "var(--tl-2)" }}>
-                    <select className="tl-select" value={models?.includes(modelDraft) ? modelDraft : ""} onChange={(e) => { if (e.target.value) setModelDraft(e.target.value); }} disabled={!models || models.length === 0}>
+                    <select className="tl-select" aria-label="AI model" value={models?.includes(modelDraft) ? modelDraft : ""} onChange={(e) => { if (e.target.value) setModelDraft(e.target.value); }} disabled={!models || models.length === 0}>
                       <option value="">{loadingModels ? "Loading…" : models && models.length > 0 ? "Pick a detected model…" : "No models detected"}</option>
                       {(models ?? []).map((m) => <option key={m} value={m}>{m}</option>)}
                     </select>

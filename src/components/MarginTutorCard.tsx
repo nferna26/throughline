@@ -45,7 +45,7 @@ const LENS: Record<TutorMode, { label: string; verbs: string[] }> = {
   explain: { label: "Explain", verbs: ["Reading the passage", "Thinking", "Connecting ideas", "Writing"] },
   historical: { label: "Context", verbs: ["Placing it in time", "Recalling the work", "Thinking", "Writing"] },
   vocabulary: { label: "Define", verbs: ["Finding the word", "Checking usage", "Writing"] },
-  socratic: { label: "Socratic", verbs: ["Reading closely", "Forming a question", "Writing"] },
+  socratic: { label: "Ask questions", verbs: ["Reading closely", "Forming a question", "Writing"] },
 };
 /** Order of the "Ask another way" chips (Socratic only ever appears here). */
 const LENS_ORDER: TutorMode[] = ["explain", "historical", "vocabulary", "socratic"];

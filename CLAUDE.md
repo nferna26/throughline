@@ -30,6 +30,12 @@ If you think something outside this list is needed, STOP and ask in plain text b
 - Exported notes carry `source_private: true` in frontmatter.
 - Warn (don't block) when a quote field exceeds ~300 characters.
 
+### AI copyright-safety (counsel-reviewed 2026-06-08 — binding)
+Outside counsel's risk framework. The tutor must stay on the low-risk side; the planned company-paid AI proxy must enforce these server-side.
+- **Stay safe (do all):** the *reader initiates* the call; only the *selected passage or a narrow surrounding excerpt* is sent; the lenses *explain / contextualize / define / ask Socratic questions*; the app **never uploads, stores, indexes, summarizes, or processes the full book** in the cloud; outputs **don't reproduce long passages**.
+- **Never (hard non-goals):** send whole chapters/books to a provider; auto-summarize every section; build a searchable cloud copy of a book; market it as "upload any copyrighted book → complete AI study guide"; preserve or share copyrighted passages **server-side**; produce outputs that **substitute for the book**.
+- **The company-paid proxy is a stateless forwarder:** forward → stream back → drop. No logging/persisting/indexing/disk-caching/summarizing of book text. Usage metering counts **tokens, not content**. Deep Study / "prepare next" / section briefing stay reader-initiated, section-scoped, non-persistent.
+
 ## Tech constraints
 - Shell: **Tauri v2**. Frontend: **React + TypeScript + Vite**. Rust commands for FS, hashing, SQLite, export.
 - Operational state: SQLite at `~/Library/Application Support/Throughline/reading.db` using the exact tables in the PRD (`books`, `book_sections`, `reading_plans`, `reading_sessions`, `notes`, `ai_requests`).

@@ -178,6 +178,7 @@ pub fn run() {
             commands::settings_cmds::cmd_paths_info,
             commands::settings_cmds::cmd_get_settings,
             commands::settings_cmds::cmd_set_export_path,
+            commands::settings_cmds::cmd_check_export_path,
             commands::settings_cmds::cmd_set_ai_settings,
             commands::settings_cmds::cmd_set_ai_key,
             commands::settings_cmds::cmd_clear_ai_key,
