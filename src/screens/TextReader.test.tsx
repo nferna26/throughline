@@ -270,26 +270,29 @@ describe("clampPanelWidth (companion side panel)", () => {
 describe("TextReader companion panel toggle", () => {
   beforeEach(() => vi.mocked(invoke).mockReset());
 
-  it("defaults CLOSED (clean centered reading) and the toolbar toggle opens/closes it", async () => {
+  it("defaults to a clean column and the toolbar toggle shows/hides the margin (kept mounted)", async () => {
     mockBackend([note({ body: "my thought" })]);
     const { container } = render(<TextReader today={card()} onExit={() => {}} />);
     // Wait for the section text + highlight to paint (effects settled). The
     // fixture text is the "quick brown fox" string, not Augustine.
     await waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
 
-    // Default is CLOSED: no panel, but the inline highlight is still painted and
-    // the toolbar toggle shows a count badge so notes aren't hidden silently.
-    expect(container.querySelector(".tl-sidepanel")).toBeNull();
+    const aside = () => container.querySelector(".tl-sidepanel") as HTMLElement | null;
+    // Default CLOSED: the margin is MOUNTED but hidden (no layout space, display:none),
+    // the inline highlight is still painted, and the toggle shows a count badge.
+    expect(aside()!.style.display).toBe("none");
     expect(container.querySelector(".tl-panelcount")?.textContent).toBe("1");
 
-    // Toggle opens it → the note's editable body becomes visible.
+    // Toggle SHOWS it → the note's editable body is visible.
     fireEvent.click(container.querySelector(".tl-paneltoggle")!);
-    await waitFor(() => expect(screen.getByDisplayValue("my thought")).toBeInTheDocument());
-    expect(container.querySelector(".tl-sidepanel")).not.toBeNull();
+    await waitFor(() => expect(aside()!.style.display).not.toBe("none"));
+    expect(screen.getByDisplayValue("my thought")).toBeInTheDocument();
 
-    // Toggle again closes it.
+    // Toggle HIDES it again — but the card stays MOUNTED inside the hidden margin,
+    // so a tutor card's in-flight stream/answer is never lost or re-run on reopen.
     fireEvent.click(container.querySelector(".tl-paneltoggle")!);
-    expect(container.querySelector(".tl-sidepanel")).toBeNull();
+    expect(aside()!.style.display).toBe("none");
+    expect(screen.getByDisplayValue("my thought")).toBeInTheDocument();
   });
 });
 

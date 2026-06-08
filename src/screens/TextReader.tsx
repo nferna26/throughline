@@ -663,20 +663,28 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
           </div>
         </div>
 
+        {/* The margin stays MOUNTED when collapsed (hidden via display:none), so a
+            tutor card's in-flight stream finishes and its answer persists — reopening
+            shows it instantly with NO re-call to the model. Only visibility toggles. */}
         {marginIsVisible && (
-          <>
-            <div
-              className={draggingRef.current ? "tl-panel-resizer dragging" : "tl-panel-resizer"}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize notes panel"
-              onMouseDown={startPanelDrag}
-            />
-            <aside
-              className="tl-sidepanel"
-              style={{ flexBasis: `${panelWidth}px`, width: `${panelWidth}px` }}
-              aria-label="Notes, highlights, and tutor cards"
-            >
+          <div
+            className={draggingRef.current ? "tl-panel-resizer dragging" : "tl-panel-resizer"}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize notes panel"
+            onMouseDown={startPanelDrag}
+          />
+        )}
+        <aside
+          className="tl-sidepanel"
+          style={{
+            flexBasis: `${panelWidth}px`,
+            width: `${panelWidth}px`,
+            display: marginIsVisible ? undefined : "none",
+          }}
+          aria-hidden={!marginIsVisible}
+          aria-label="Notes, highlights, and tutor cards"
+        >
               <div className="tl-sidepanel-head">
                 <span>Margin</span>
                 <button className="tl-iconbtn" aria-label="Hide notes panel" title="Hide notes panel" onClick={() => dispatchMargin("hide")}>
@@ -703,8 +711,9 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
                 />
               )}
 
-              {/* Empty-state hint: Guided/Deep Study guide gently; Quiet stays silent. */}
-              {sectionNotes.length === 0 && sectionDrafts.length === 0 && !briefingVisible && marginHelp !== "quiet" && (
+              {/* Empty-state hint: only when the margin is actually shown (it has no
+                  state to preserve, so it's safe to drop from the DOM when hidden). */}
+              {marginIsVisible && sectionNotes.length === 0 && sectionDrafts.length === 0 && !briefingVisible && marginHelp !== "quiet" && (
                 <p className="tl-sidepanel-empty">
                   Select a passage to highlight, add a note, or open a tutor prompt. Anything you capture collects here, beside the text.
                 </p>
@@ -732,9 +741,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
                   onDiscard={() => onTutorDiscard(d.draftId)}
                 />
               ))}
-            </aside>
-          </>
-        )}
+        </aside>
       </div>
 
       {sel && (
