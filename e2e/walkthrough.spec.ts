@@ -68,6 +68,24 @@ test("replan-decision", async ({ page }) => {
   await shoot(page, "14-replan-decision");
 });
 
+test("finished-book", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_DONE__ = true; });
+  await page.goto("/");
+  // The finishing moment is a calm card, not silence (Epic E1).
+  await expect(page.getByText(/You finished Meditations/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /Review your notes/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Find another book/i })).toBeVisible();
+  await shoot(page, "17-finished-book");
+});
+
+test("teaser-on-plan-ready", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_PLAN_READY__ = true; });
+  await page.goto("/");
+  // E2: the "Before you read" teaser shows even on a freshly-ready plan.
+  await expect(page.getByText(/BEFORE YOU READ/i)).toBeVisible();
+  await expect(page.getByText(/Begin the morning by saying to thyself/).first()).toBeVisible();
+});
+
 test("today", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Meditations" })).toBeVisible();

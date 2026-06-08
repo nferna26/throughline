@@ -18,6 +18,8 @@ interface Props {
   onRefresh: () => Promise<void> | void;
   /** Create a fresh plan for the book and open its setup (the new-plan flow). */
   onNewPlan?: (book: Book) => void;
+  /** Jump to the Notes tab (the finished-book "Review your notes" action). */
+  onReviewNotes?: () => void;
 }
 
 // Honest, low-drama forecast caption for an active plan. `on_track` needs no
@@ -79,7 +81,7 @@ function describeOption(o: RecoveryOption): { primary: string; detail?: string }
   }
 }
 
-export default function Today({ today, onDiscover, onImport, onStart, onStartRescue, onRefresh, onNewPlan }: Props) {
+export default function Today({ today, onDiscover, onImport, onStart, onStartRescue, onRefresh, onNewPlan, onReviewNotes }: Props) {
   const [showPlans, setShowPlans] = useState(false);
   const [plansCount, setPlansCount] = useState(0);
   const [replanActive, setReplanActive] = useState<PlanSummary | null>(null);
@@ -182,9 +184,29 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
           )}
           {fcNote && <p className="tl-forecast-note">{fcNote}</p>}
         </>
+      ) : pace.kind === "done" ? (
+        <div className="tl-finished-card">
+          <span className="mark"><TLIcon name="flag" size={22} /></span>
+          <h2>You finished {book.title}</h2>
+          <p>
+            {memory.note_count} note{memory.note_count === 1 ? "" : "s"} · {memory.highlight_count} highlight
+            {memory.highlight_count === 1 ? "" : "s"} · {total_days} day{total_days === 1 ? "" : "s"}.
+            Beautifully done — sit with it, or pick up something new.
+          </p>
+          <div className="tl-finished-actions">
+            {onReviewNotes && (
+              <button className="tl-btn tl-btn-ghost" onClick={onReviewNotes}>
+                <TLIcon name="note" size={16} /> Review your notes
+              </button>
+            )}
+            <button className="tl-btn tl-btn-primary" onClick={onDiscover}>
+              <TLIcon name="search" size={16} /> Find another book
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="tl-section-label" style={{ fontStyle: "normal", color: "var(--tl-muted)" }}>
-          {pace.kind === "done" ? "You finished the book." : "No section assigned."}
+          No section assigned.
         </div>
       )}
 
@@ -199,14 +221,18 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
           <TLIcon name="book" size={14} /> You left off about {Math.round(resumePct)}% into {section!.label}. It opens right where you stopped.
         </p>
       )}
-      <button className="tl-btn tl-btn-primary block" disabled={!section} onClick={() => onStart(today)}>
-        <TLIcon name="book" size={18} /> {primaryLabel}
-      </button>
-      {/* Always offered, never the loud option: a 10-minute "just stay
-          connected" sitting. Same reader, calm framing, no pace pressure. */}
-      <button className="tl-btn tl-btn-ghost tl-rescue-btn" disabled={!section} onClick={() => onStartRescue(today)}>
-        <TLIcon name="clock" size={16} /> I only have 10 minutes
-      </button>
+      {pace.kind !== "done" && (
+        <>
+          <button className="tl-btn tl-btn-primary block" disabled={!section} onClick={() => onStart(today)}>
+            <TLIcon name="book" size={18} /> {primaryLabel}
+          </button>
+          {/* Always offered, never the loud option: a 10-minute "just stay
+              connected" sitting. Same reader, calm framing, no pace pressure. */}
+          <button className="tl-btn tl-btn-ghost tl-rescue-btn" disabled={!section} onClick={() => onStartRescue(today)}>
+            <TLIcon name="clock" size={16} /> I only have 10 minutes
+          </button>
+        </>
+      )}
 
       <div className="tl-streak">
         <span className="tl-dots" aria-hidden="true">
@@ -221,10 +247,14 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
 
       {recovery && <RecoveryPanel bundle={recovery} bookId={book.id} sectionId={section?.id ?? null} onRefresh={onRefresh} />}
 
-      <hr className="tl-divline" style={{ marginTop: "calc(var(--tl-7) * var(--tl-density))" }} />
-      <button className="tl-btn-quiet" style={{ marginTop: "var(--tl-3)" }} onClick={onDiscover}>
-        <TLIcon name="plus" size={16} /> Find another book
-      </button>
+      {pace.kind !== "done" && (
+        <>
+          <hr className="tl-divline" style={{ marginTop: "calc(var(--tl-7) * var(--tl-density))" }} />
+          <button className="tl-btn-quiet" style={{ marginTop: "var(--tl-3)" }} onClick={onDiscover}>
+            <TLIcon name="plus" size={16} /> Find another book
+          </button>
+        </>
+      )}
 
       {showPlans && (
         <PlansView

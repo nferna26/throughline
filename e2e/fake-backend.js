@@ -102,6 +102,8 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       // window.__TL_FAKE_EMPTY__ → no books yet; __TL_FAKE_BEHIND__ → behind + recovery.
       case "cmd_today":
         if (window.__TL_FAKE_EMPTY__) return null;
+        if (window.__TL_FAKE_DONE__) return Object.assign({}, TODAY, { section: null, pace: { kind: "done" }, plan_status: "active" });
+        if (window.__TL_FAKE_PLAN_READY__) return Object.assign({}, TODAY, { plan_status: "plan_ready", pace: { kind: "not_started" } });
         if (window.__TL_FAKE_BEHIND__) {
           return Object.assign({}, TODAY, {
             pace: { kind: "behind", days_behind: 6 },

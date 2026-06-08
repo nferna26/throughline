@@ -234,7 +234,7 @@ export default function App() {
         {view.kind === "today" && (
           today === null ? (
             // No books yet — the welcome card owns book acquisition; no book chrome.
-            <Today today={null} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onStartRescue={startRescue} onRefresh={refreshToday} onNewPlan={newPlan} />
+            <Today today={null} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onStartRescue={startRescue} onRefresh={refreshToday} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} />
           ) : (
             <>
               <div className="tl-bookhead">
@@ -265,7 +265,7 @@ export default function App() {
                 aria-labelledby={tab === "today" ? "tab-today" : "tab-notes"}
               >
                 {tab === "today" ? (
-                  <Today today={today} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onStartRescue={startRescue} onRefresh={refreshToday} onNewPlan={newPlan} />
+                  <Today today={today} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onStartRescue={startRescue} onRefresh={refreshToday} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} />
                 ) : (
                   <NotesBrowser book={today.book} />
                 )}
