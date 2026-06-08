@@ -51,3 +51,9 @@ base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 tracing-appender = "0.2"
+
+[dev-dependencies]
+# Property-based testing for the TXT sectionizer invariants (coverage, no
+# overlap/gaps, char-boundary locators, no degenerate sections). Test-only —
+# never compiled into the shipped app.
+proptest = "1"

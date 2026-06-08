@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import TLIcon, { type IconName } from "../components/TLIcon";
+import TodayTeaser from "../components/TodayTeaser";
 import type { TodayCard, PaceState, RecoveryOption, RecomputedPlan, FinishForecast } from "../types";
 
 interface Props {
@@ -94,7 +95,7 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
     );
   }
 
-  const { book, section, section_completed, estimated_minutes, session_minutes, monthly_pct, pace, day_index, total_days, streak, recovery, plan_status, forecast, memory } = today;
+  const { book, section, section_completed, estimated_minutes, session_minutes, monthly_pct, pace, day_index, total_days, streak, recovery, plan_status, forecast, memory, teaser } = today;
   const pm = paceMeta(pace);
   // A freshly imported book's plan hasn't started its pace clock yet. It is, by
   // design, NEVER behind — the copy here must say so plainly and calmly.
@@ -157,6 +158,12 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
           {pace.kind === "done" ? "You finished the book." : "No section assigned."}
         </div>
       )}
+
+      {/* "Before you read" — the prepared encounter. Sits between the section
+          metadata above and the primary CTA below; progress/pace stay but become
+          supporting. The book's own first sentences + one hand-written prompt;
+          no AI, no gamification. Only shown when a section is assigned. */}
+      {section && <TodayTeaser teaser={teaser ?? null} completed={section_completed} />}
 
       {isResuming && (
         <p className="tl-resume-note" role="note">

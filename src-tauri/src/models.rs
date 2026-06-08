@@ -199,6 +199,27 @@ pub struct TodayCard {
     /// are empty/None when the reader hasn't captured anything yet.
     #[serde(default)]
     pub memory: TodayMemory,
+    /// "Before you read" teaser — the book's OWN first sentences plus a
+    /// hand-written reading prompt, so Today frames a prepared reading encounter
+    /// rather than a progress meter. None when there is no readable section text
+    /// (the front-end then shows a calm "section is ready" fallback). Sourced
+    /// entirely from the already-imported local text; no AI, no network.
+    #[serde(default)]
+    pub teaser: Option<TodayTeaser>,
+}
+
+/// "Before you read" block on Today. `excerpt` is the section's own first
+/// meaningful sentence(s) (headings / TOC / boilerplate skipped, ~320 char cap);
+/// `prompt` is a hand-written, deterministic reading lens (never AI-generated);
+/// `locator` points at the excerpt's start; `is_resume_excerpt` is true when the
+/// reader is mid-section and the excerpt is taken near their resume position
+/// rather than the section's opening.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodayTeaser {
+    pub excerpt: String,
+    pub prompt: String,
+    pub locator: String,
+    pub is_resume_excerpt: bool,
 }
 
 /// The reader's own most recent durable capture, surfaced on Today so picking

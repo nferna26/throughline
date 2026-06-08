@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import TLIcon from "../components/TLIcon";
 import { errorMessage, type DiscoverBook, type DiscoverPage, type ImportOutcome } from "../types";
+import { resolveShelves, indexBooks, type ResolvedShelf } from "../discoverShelves";
 import "./Discover.css";
 
 interface Props {
@@ -19,8 +20,10 @@ const fmtN = (n: number) => n.toLocaleString("en-US");
 type DlState = "idle" | "loading" | "done" | "error";
 
 // ── server-backed catalogue search ──
-// Idle (empty query) shows the most-downloaded titles. Typing runs a debounced
-// full-catalogue search. "Load more" appends the next page in place.
+// Discover opens to hand-authored editorial shelves (an empty query). Typing
+// runs a debounced full-catalogue search and switches to the ranked results
+// list — search is the secondary, intent-declared affordance. "Load more"
+// appends the next page in place.
 interface DiscoverState {
   query: string;
   results: DiscoverBook[];
@@ -156,9 +159,49 @@ function useDiscover() {
   };
 }
 
+// Hydrate the curated shelves. The editorial map (discoverShelves.ts) carries
+// only ids + reasons; the catalogue rows (title/author/URLs) come from the
+// bundled seed. The seed paginates 32/page, so page through it once — these are
+// instant, network-free, in-process calls — to build a complete id→book index
+// the whole curation can join against. Shelves resolve to whatever the seed can
+// actually serve; an id missing from the seed simply drops from its shelf.
+function useShelves() {
+  const [shelves, setShelves] = useState<ResolvedShelf[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const all: DiscoverBook[] = [];
+      let page: number | null = 1;
+      // Bounded so a misbehaving backend can never spin here.
+      for (let guard = 0; page != null && guard < 40; guard++) {
+        try {
+          const res: DiscoverPage = await invoke("cmd_discover_seed", { query: null, page });
+          all.push(...res.results);
+          page = res.next_page;
+        } catch {
+          break; // the bundled seed never fails, but never spin if it does
+        }
+      }
+      if (!cancelled) setShelves(resolveShelves(indexBooks(all)));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return shelves;
+}
+
 export default function Discover({ onBack, onPicked }: Props) {
   const d = useDiscover();
+  const shelves = useShelves();
   const [dl, setDl] = useState<Record<number, DlState>>({});
+  // After a genuinely-new book is saved we pause on a calm confirmation rather
+  // than yanking the reader onward — the loop's intent is to return to Today and
+  // build a plan, on the reader's click. A dedup needs no fanfare; it just hands
+  // straight back so the existing book becomes active.
+  const [saved, setSaved] = useState<{ outcome: ImportOutcome; title: string } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -175,7 +218,13 @@ export default function Discover({ onBack, onPicked }: Props) {
     })
       .then((outcome) => {
         setDl((m) => ({ ...m, [b.id]: "done" }));
-        onPicked(outcome);
+        // New book → pause on the "Saved." confirmation; let the reader return
+        // to Today (where the plan gets built). A dedup hands straight back.
+        if (outcome.created) {
+          setSaved({ outcome, title: b.title });
+        } else {
+          onPicked(outcome);
+        }
       })
       .catch(() => {
         // Calm, reversible: drop back so the row can be retried.
@@ -185,6 +234,30 @@ export default function Discover({ onBack, onPicked }: Props) {
 
   const searching = d.query.trim().length > 0;
 
+  // A book just landed in the library — calm hand-off back to Today, on a click.
+  if (saved) {
+    return (
+      <div className="tl-body">
+        <div className="tl-col tl-discover">
+          <div className="tl-disc-saved" role="status">
+            <span className="ico"><TLIcon name="check" size={30} /></span>
+            <span className="big">Saved to your library</span>
+            <span className="title">{saved.title}</span>
+            <span>Build today’s plan, and you’ll have a section waiting whenever you sit down.</span>
+            <div className="tl-disc-saved-actions">
+              <button className="tl-btn tl-btn-primary" onClick={() => onPicked(saved.outcome)}>
+                Open Today <TLIcon name="arrowRight" size={16} />
+              </button>
+              <button className="tl-btn tl-btn-ghost" onClick={() => setSaved(null)}>
+                Find another
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="tl-body">
       <div className="tl-col tl-discover">
@@ -192,9 +265,9 @@ export default function Discover({ onBack, onPicked }: Props) {
           <TLIcon name="chevronLeft" size={18} /> Cancel
         </button>
         <div className="tl-kicker"><span className="dot" />Public domain · free forever</div>
-        <h1 className="tl-disc-title">Discover a book</h1>
+        <h1 className="tl-disc-title">Choose a book worth staying with.</h1>
         <div className="tl-disc-sub">
-          {d.count > 0 && !d.offline ? `${fmtN(d.count)} free titles · ` : ""}saved straight to this Mac
+          A few good doorways into the public-domain library. Search is still here when you know what you want.
         </div>
 
         <div className="tl-search">
@@ -202,113 +275,176 @@ export default function Discover({ onBack, onPicked }: Props) {
           <input
             ref={searchRef}
             value={d.query}
-            placeholder="Search the catalogue by title or author…"
-            aria-label="Search the public-domain library by title or author"
+            placeholder="Search all titles and authors…"
+            aria-label="Search all titles and authors in the public-domain library"
             onChange={(e) => d.setQuery(e.target.value)}
           />
         </div>
 
-        <div className="tl-disc-meta" aria-live="polite">
-          <span className="tl-disc-count">
-            {d.status === "error" ? (
-              "Couldn't reach the library"
-            ) : searching ? (
-              <>
-                <b>{fmtN(d.count)}</b> result{d.count === 1 ? "" : "s"} for “{d.query.trim()}”
-              </>
-            ) : (
-              "Most downloaded"
-            )}
-          </span>
-          {d.offline && d.status !== "error" && (
-            <span className="tl-disc-offline" title="The live library was unreachable — showing a built-in catalogue of popular titles.">
-              <TLIcon name="globe" size={13} /> Offline catalogue
-            </span>
-          )}
-        </div>
-
-        {d.status === "error" ? (
-          <div className="tl-disc-empty" role="alert">
-            <span className="ico"><TLIcon name="globe" size={30} /></span>
-            <span className="big">The public-domain library isn’t responding</span>
-            <span>It may be briefly unavailable, or you might be offline. Your imported books aren’t affected — only finding new ones needs the connection.</span>
-            <button className="searchall" onClick={() => d.runSearch(d.query)}>
-              <TLIcon name="refresh" size={15} /> Try again
-            </button>
-          </div>
-        ) : d.status === "loading" && d.results.length === 0 ? (
-          <div className="tl-disc-empty">
-            <span className="ico"><TLIcon name="search" size={30} /></span>
-            <span>Searching the library…</span>
-          </div>
-        ) : d.results.length === 0 ? (
-          <div className="tl-disc-empty">
-            <span className="ico"><TLIcon name="search" size={30} /></span>
-            <span className="big">No matches</span>
-            <span>“{d.query.trim()}” isn’t in the public-domain library.</span>
-            <button className="searchall" onClick={() => d.setQuery("")}>
-              <TLIcon name="arrowDown" size={15} /> Browse the most downloaded
-            </button>
-          </div>
-        ) : (
-          <>
-            <div className="tl-index">
-              <div className="tl-index-h">
-                <span style={{ textAlign: "right" }}>#</span>
-                <span>Title</span>
-                <span style={{ paddingRight: 4 }}>Downloads</span>
-              </div>
-              {d.results.map((b, i) => {
-                const st = dl[b.id] ?? "idle";
-                const importable = b.has_txt || b.has_epub;
-                return (
-                  <div className="tl-irow" key={b.id}>
-                    <span className="rnk">{i + 1}</span>
-                    <span className="tw">
-                      <div className="it" title={b.title}>{b.title}</div>
-                      <div className="ia">{b.author || "Unknown author"}</div>
-                    </span>
-                    <span className="meta">
-                      <span className="dls">
-                        <TLIcon name="arrowDown" size={13} /> {fmtN(b.download_count)}
-                      </span>
-                      {b.language && <span className="lang">{b.language.toUpperCase()}</span>}
-                      <button
-                        className={"tl-getbtn" + (st === "loading" ? " loading" : st === "done" ? " done" : "")}
-                        onClick={() => getBook(b)}
-                        disabled={!importable || st === "loading" || st === "done"}
-                        aria-label={
-                          st === "done"
-                            ? `In library: ${b.title}`
-                            : importable
-                              ? `Get ${b.title}`
-                              : `${b.title} has no importable format`
-                        }
-                      >
-                        {st === "done" ? (
-                          <><TLIcon name="check" size={14} /> In library</>
-                        ) : st === "loading" ? (
-                          <><span className="tl-spin" /> Saving</>
-                        ) : st === "error" ? (
-                          <><TLIcon name="refresh" size={14} /> Retry</>
-                        ) : importable ? (
-                          <><TLIcon name="download" size={14} /> Get</>
-                        ) : (
-                          "—"
-                        )}
-                      </button>
-                    </span>
+        {/* ── Idle (no query): curated editorial shelves ── */}
+        {!searching ? (
+          shelves.length > 0 ? (
+            <div className="tl-shelves">
+              {shelves.map((shelf) => (
+                <section className="tl-shelf" key={shelf.key} aria-label={shelf.title}>
+                  <div className="tl-shelf-h">
+                    <h2 className="tl-shelf-title">{shelf.title}</h2>
+                    <p className="tl-shelf-desc">{shelf.description}</p>
                   </div>
-                );
-              })}
+                  <div className="tl-shelf-cards">
+                    {shelf.items.map(({ book, reason }) => {
+                      const st = dl[book.id] ?? "idle";
+                      const importable = book.has_txt || book.has_epub;
+                      return (
+                        <article className="tl-shelf-card" key={book.id}>
+                          <div className="tl-shelf-card-body">
+                            <div className="t" title={book.title}>{book.title}</div>
+                            <div className="a">{book.author || "Unknown author"}</div>
+                            <p className="why">{reason}</p>
+                          </div>
+                          <div className="tl-shelf-card-foot">
+                            <button
+                              className={"tl-getbtn" + (st === "loading" ? " loading" : st === "done" ? " done" : "")}
+                              onClick={() => getBook(book)}
+                              disabled={!importable || st === "loading" || st === "done"}
+                              aria-label={
+                                st === "done"
+                                  ? `In library: ${book.title}`
+                                  : importable
+                                    ? `Get ${book.title}`
+                                    : `${book.title} has no importable format`
+                              }
+                            >
+                              {st === "done" ? (
+                                <><TLIcon name="check" size={14} /> In library</>
+                              ) : st === "loading" ? (
+                                <><span className="tl-spin" /> Saving</>
+                              ) : st === "error" ? (
+                                <><TLIcon name="refresh" size={14} /> Retry</>
+                              ) : importable ? (
+                                <><TLIcon name="download" size={14} /> Get</>
+                              ) : (
+                                "—"
+                              )}
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          ) : (
+            <div className="tl-disc-empty">
+              <span className="ico"><TLIcon name="book" size={30} /></span>
+              <span>Gathering the shelves…</span>
+            </div>
+          )
+        ) : (
+          /* ── Active query: the ranked live/search results list (unchanged) ── */
+          <>
+            <div className="tl-disc-meta" aria-live="polite">
+              <span className="tl-disc-count">
+                {d.status === "error" ? (
+                  "Couldn’t reach the library"
+                ) : (
+                  <>
+                    <b>{fmtN(d.count)}</b> result{d.count === 1 ? "" : "s"} for “{d.query.trim()}”
+                  </>
+                )}
+              </span>
+              {d.offline && d.status !== "error" && (
+                <span className="tl-disc-offline" title="The live library was unreachable — showing a built-in catalogue of popular titles.">
+                  <TLIcon name="globe" size={13} /> Offline catalogue
+                </span>
+              )}
             </div>
 
-            {d.nextPage != null && (
-              <div className="tl-disc-more">
-                <button className="tl-btn tl-btn-ghost" onClick={d.loadMore} disabled={d.loadingMore}>
-                  {d.loadingMore ? "Loading…" : "Show more"}
+            {d.status === "error" ? (
+              <div className="tl-disc-empty" role="alert">
+                <span className="ico"><TLIcon name="globe" size={30} /></span>
+                <span className="big">The public-domain library isn’t responding</span>
+                <span>It may be briefly unavailable, or you might be offline. Your imported books aren’t affected — only finding new ones needs the connection.</span>
+                <button className="searchall" onClick={() => d.runSearch(d.query)}>
+                  <TLIcon name="refresh" size={15} /> Try again
                 </button>
               </div>
+            ) : d.status === "loading" && d.results.length === 0 ? (
+              <div className="tl-disc-empty">
+                <span className="ico"><TLIcon name="search" size={30} /></span>
+                <span>Searching the library…</span>
+              </div>
+            ) : d.results.length === 0 ? (
+              <div className="tl-disc-empty">
+                <span className="ico"><TLIcon name="search" size={30} /></span>
+                <span className="big">No matches</span>
+                <span>“{d.query.trim()}” isn’t in the public-domain library.</span>
+                <button className="searchall" onClick={() => d.setQuery("")}>
+                  <TLIcon name="chevronLeft" size={15} /> Back to the shelves
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="tl-index">
+                  <div className="tl-index-h">
+                    <span style={{ textAlign: "right" }}>#</span>
+                    <span>Title</span>
+                    <span style={{ paddingRight: 4 }}>Downloads</span>
+                  </div>
+                  {d.results.map((b, i) => {
+                    const st = dl[b.id] ?? "idle";
+                    const importable = b.has_txt || b.has_epub;
+                    return (
+                      <div className="tl-irow" key={b.id}>
+                        <span className="rnk">{i + 1}</span>
+                        <span className="tw">
+                          <div className="it" title={b.title}>{b.title}</div>
+                          <div className="ia">{b.author || "Unknown author"}</div>
+                        </span>
+                        <span className="meta">
+                          <span className="dls">
+                            <TLIcon name="arrowDown" size={13} /> {fmtN(b.download_count)}
+                          </span>
+                          {b.language && <span className="lang">{b.language.toUpperCase()}</span>}
+                          <button
+                            className={"tl-getbtn" + (st === "loading" ? " loading" : st === "done" ? " done" : "")}
+                            onClick={() => getBook(b)}
+                            disabled={!importable || st === "loading" || st === "done"}
+                            aria-label={
+                              st === "done"
+                                ? `In library: ${b.title}`
+                                : importable
+                                  ? `Get ${b.title}`
+                                  : `${b.title} has no importable format`
+                            }
+                          >
+                            {st === "done" ? (
+                              <><TLIcon name="check" size={14} /> In library</>
+                            ) : st === "loading" ? (
+                              <><span className="tl-spin" /> Saving</>
+                            ) : st === "error" ? (
+                              <><TLIcon name="refresh" size={14} /> Retry</>
+                            ) : importable ? (
+                              <><TLIcon name="download" size={14} /> Get</>
+                            ) : (
+                              "—"
+                            )}
+                          </button>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {d.nextPage != null && (
+                  <div className="tl-disc-more">
+                    <button className="tl-btn tl-btn-ghost" onClick={d.loadMore} disabled={d.loadingMore}>
+                      {d.loadingMore ? "Loading…" : "Show more"}
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </>
         )}

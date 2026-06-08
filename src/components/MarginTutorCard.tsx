@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import TLIcon from "./TLIcon";
+import AiSetupSheet from "./AiSetupSheet";
 import { aiProviderLabel, type Note, type AskHandle, type SettingsDto, type StreamEvent } from "../types";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
 import "../tl-tutor.css";
@@ -48,6 +49,32 @@ const LENS: Record<TutorMode, { label: string; verbs: string[] }> = {
 };
 /** Order of the "Ask another way" chips (Socratic only ever appears here). */
 const LENS_ORDER: TutorMode[] = ["explain", "historical", "vocabulary", "socratic"];
+
+/** A lens mode maps to the backend StubMode string for the cold-start fallback
+ *  prompt (cmd_ai_preview). Same identifiers the backend StubMode::from_str takes. */
+const SETUP_MODE: Record<TutorMode, string> = {
+  explain: "explain",
+  historical: "historical",
+  vocabulary: "vocabulary",
+  socratic: "socratic",
+};
+
+/** True when an error message reads like the configured provider is unreachable
+ *  (vs. a hard config error), so the card offers the "Tutor paused" recovery. */
+function looksUnavailable(msg: string): boolean {
+  const s = msg.toLowerCase();
+  return (
+    s.includes("can't reach") ||
+    s.includes("cannot reach") ||
+    s.includes("could not reach") ||
+    s.includes("connection") ||
+    s.includes("unavailable") ||
+    s.includes("refused") ||
+    s.includes("no model is loaded") ||
+    s.includes("timed out") ||
+    s.includes("timeout")
+  );
+}
 
 // ── defensive sanitizer: the brief budget is tiny, but if the local model
 //    still emits a leading markdown header, strip it so a 320px panel never
@@ -114,6 +141,11 @@ export default function MarginTutorCard(props: {
   /** Persisted as a durable TutorNote — caller refreshes the margin from it. */
   onSaved: (note: Note) => void;
   onDiscard: () => void;
+  /** Book title + author, threaded into the cold-start setup sheet's fallback
+   *  prompt so a reader who copies it gets a fully-attributed prompt. Optional:
+   *  the sheet degrades calmly to "Explain this passage." without them. */
+  bookTitle?: string;
+  author?: string | null;
 }) {
   const { draft } = props;
 
@@ -293,6 +325,16 @@ export default function MarginTutorCard(props: {
     startStream(lens, deepRequested ? "deep" : "brief");
   }, [lens, deepRequested, startStream]);
 
+  // Cold-start recovery: the setup sheet just connected (or asked us to retry).
+  // Re-read the live provider and immediately fire the original lens request at
+  // the tier the reader was on — no Settings detour. Enabling consent here is
+  // safe: connecting through the sheet is an explicit reader action.
+  const onSetupConnected = useCallback((connected: string) => {
+    setTutorEnabled(true);
+    if (connected) setProvider(connected);
+    startStream(lens, deepRequested ? "deep" : "brief");
+  }, [lens, deepRequested, startStream]);
+
   const doSave = useCallback(async () => {
     if (!aiReqRef.current || !briefRef.current.trim()) return;
     setSaving(true);
@@ -380,11 +422,34 @@ export default function MarginTutorCard(props: {
       </button>
 
       {phase === "blocked" || (phase === "consent" && (provider === "none" || provider === "")) ? (
-        <div className="tl-tutor-errbox" role="alert">
-          <p>
-            No AI provider is set up yet. Choose one in Settings → Assistance to use the tutor.
-          </p>
-        </div>
+        // Cold-start: no provider wired up. Setup at the moment of intent —
+        // paste a key / use a local model / copy a prompt — never a dead end.
+        <AiSetupSheet
+          ctx={{
+            mode: SETUP_MODE[lens],
+            selectedText: draft.anchoredText,
+            bookTitle: props.bookTitle ?? "",
+            author: props.author ?? null,
+            sectionLabel: draft.chapter || null,
+          }}
+          initialState="not_connected"
+          onConnected={onSetupConnected}
+        />
+      ) : phase === "error" && looksUnavailable(errorMsg) ? (
+        // Configured-but-unavailable: the provider isn't answering. "Tutor
+        // paused" recovery — check again / switch provider / copy the prompt.
+        // Never "go to Settings" as the only move.
+        <AiSetupSheet
+          ctx={{
+            mode: SETUP_MODE[lens],
+            selectedText: draft.anchoredText,
+            bookTitle: props.bookTitle ?? "",
+            author: props.author ?? null,
+            sectionLabel: draft.chapter || null,
+          }}
+          initialState="unavailable"
+          onConnected={onSetupConnected}
+        />
       ) : phase === "consent" ? (
         <div className="tl-tutor-consent">
           <p>

@@ -80,10 +80,13 @@ OpenAI `gpt-5.5`, Anthropic `claude-opus-4-8`, Codex via `codex login` (`gpt-5.5
 
 ## Known fragility
 
-- **Codex** reuses an unofficial contract (client id, the `chatgpt.com/backend-api/codex`
-  base, headers, the Responses schema). OpenAI can change these; on failure the
-  app degrades to a clear "run `codex login`" message. The app never proactively
-  background-refreshes the shared `auth.json` (consistent with no-background-AI).
+- **Codex is experimental.** It reuses an *unofficial* contract (client id, the
+  `chatgpt.com/backend-api/codex` base, headers, the Responses schema) that OpenAI
+  can change or break **without warning**. On failure the app degrades to a clear
+  "run `codex login`" message. The app never proactively background-refreshes the
+  shared `auth.json` (consistent with no-background-AI). For a dependable tutor,
+  prefer **OpenAI** or **Anthropic** with your own API key — those are documented,
+  stable endpoints; Settings marks the Codex choice "Experimental" accordingly.
 - **`keyring`** is the one new dependency. A locked Keychain or a changed signing
   identity degrades to `key_present = false` with a re-enter-key message; it never
   crashes, and CI uses an in-memory backend.

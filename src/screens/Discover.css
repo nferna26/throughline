@@ -118,6 +118,55 @@
 .tl-getbtn.loading { color: var(--tl-muted); }
 .tl-getbtn.done { color: var(--tl-accent); border-color: var(--tl-accent-line); background: var(--tl-accent-soft); }
 
+/* ════════ Editorial shelves (idle / no query) ════════
+   The default Discover view: hand-authored shelves of curated picks, each book
+   carrying a one-line editorial reason. Search demotes to a secondary path. */
+.tl-shelves {
+  margin-top: var(--tl-6);
+  display: flex; flex-direction: column; gap: var(--tl-8);
+}
+.tl-shelf-h { margin-bottom: var(--tl-4); }
+.tl-shelf-title {
+  font-family: var(--tl-serif); font-weight: 500;
+  font-size: 19px; line-height: 1.2; letter-spacing: -0.006em;
+  color: var(--tl-ink); margin: 0;
+}
+.tl-shelf-desc { font-family: var(--tl-sans); font-size: 13px; color: var(--tl-muted); margin: 4px 0 0; }
+
+.tl-shelf-cards {
+  display: grid; gap: var(--tl-4);
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+}
+.tl-shelf-card {
+  display: flex; flex-direction: column; justify-content: space-between; gap: var(--tl-3);
+  background: var(--tl-panel); border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-md); padding: var(--tl-4);
+  transition: border-color 150ms ease, background 150ms ease;
+}
+.tl-shelf-card:hover { border-color: var(--tl-ink-10); background: var(--tl-ink-04); }
+.tl-shelf-card-body { min-width: 0; }
+.tl-shelf-card .t {
+  font-family: var(--tl-serif); font-size: 16.5px; line-height: 1.22; color: var(--tl-ink);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.tl-shelf-card .a { font-family: var(--tl-sans); font-size: 12.5px; color: var(--tl-muted); margin-top: 3px; }
+.tl-shelf-card .why {
+  font-family: var(--tl-serif); font-size: 13.5px; font-style: italic;
+  line-height: 1.42; color: var(--tl-ink); opacity: 0.82; margin: var(--tl-3) 0 0;
+}
+.tl-shelf-card-foot { display: flex; }
+.tl-shelf-card-foot .tl-getbtn { width: 100%; }
+
+/* ════════ "Saved to your library" hand-off ════════ */
+.tl-disc-saved {
+  margin-top: var(--tl-9); text-align: center; color: var(--tl-muted);
+  display: flex; flex-direction: column; align-items: center; gap: var(--tl-3);
+}
+.tl-disc-saved .ico { color: var(--tl-accent); }
+.tl-disc-saved .big { font-family: var(--tl-serif); font-size: 22px; color: var(--tl-ink); }
+.tl-disc-saved .title { font-family: var(--tl-serif); font-size: 16px; color: var(--tl-ink); font-style: italic; }
+.tl-disc-saved-actions { display: flex; gap: var(--tl-3); margin-top: var(--tl-4); flex-wrap: wrap; justify-content: center; }
+
 /* load-more row */
 .tl-disc-more { display: flex; justify-content: center; margin-top: var(--tl-5); }
 

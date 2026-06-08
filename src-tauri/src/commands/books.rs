@@ -15,7 +15,9 @@ use tauri::State;
 use crate::commands::db_helpers::*;
 use crate::db::DbState;
 use crate::error::AppError;
-use crate::models::{Book, BookSection, ImportOutcome, ReadingPlan, StyleRange, TodayCard};
+use crate::models::{
+    Book, BookSection, ImportOutcome, ReadingPlan, StyleRange, TodayCard, TodayTeaser,
+};
 use crate::{epub_classify, export, import, log, models, paths, plan, recovery, settings};
 
 #[tauri::command]
@@ -219,6 +221,12 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
     // Build the "Last time" memory before `book` is moved into the card.
     let memory = today_memory(&conn, &book.id)?;
 
+    // "Before you read" teaser — the book's own first (or resume-adjacent)
+    // sentences plus a hand-written reading prompt. Sourced from the same local
+    // section text the reader path loads; never AI, never network. None when the
+    // section text can't be read (the front-end shows a calm fallback then).
+    let teaser = build_teaser(&book.id, section.as_ref(), resume_locator.as_deref());
+
     Ok(Some(TodayCard {
         book,
         plan,
@@ -237,7 +245,308 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
         plan_status: computed.plan_status.clone(),
         forecast: computed.forecast.clone(),
         memory,
+        teaser,
     }))
+}
+
+/// Hand-written reading prompts — calm, literary lenses to read *through*, never
+/// AI-generated and never analytics-driven. The opening set rotates by section so
+/// a reader meets different invitations across a book; the resume variant asks
+/// what a mid-section paragraph is carrying forward.
+const READING_PROMPTS: &[&str] = &[
+    "Read for the argument — what claim is being built?",
+    "Read for the image — what picture does this section leave behind?",
+    "Read for the turning point — what changes by the end?",
+    "Read for the pressure — what question can't the writer leave alone?",
+    "Read for the voice — what does the narrator want you to trust?",
+];
+const RESUME_PROMPT: &str = "Read for the thread — what is this paragraph carrying forward?";
+
+/// Pick a reading prompt deterministically. Resuming mid-section always gets the
+/// "thread" variant; a fresh section rotates through the hand-written set by its
+/// `sort_order` so the choice is pure, testable, and stable across reloads.
+fn reading_prompt(sort_order: i64, is_resume: bool) -> &'static str {
+    if is_resume {
+        return RESUME_PROMPT;
+    }
+    let n = READING_PROMPTS.len() as i64;
+    let idx = (sort_order.rem_euclid(n)) as usize;
+    READING_PROMPTS[idx]
+}
+
+/// Soft cap on the teaser excerpt (chars). One or two sentences usually land well
+/// under this; the cap is a backstop for run-on opening sentences.
+const TEASER_MAX_CHARS: usize = 320;
+
+/// Compose the "Before you read" teaser for today's section, reading the same
+/// local text the reader path loads. Returns None when there's no section or its
+/// text can't be read / yields nothing meaningful — the front-end then shows a
+/// calm "section is ready" fallback rather than an empty pull-quote.
+fn build_teaser(
+    book_id: &str,
+    section: Option<&BookSection>,
+    resume_locator: Option<&str>,
+) -> Option<TodayTeaser> {
+    let section = section?;
+    let sec_start: usize = section
+        .start_locator
+        .as_deref()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let sec_end: Option<usize> = section.end_locator.as_deref().and_then(|s| s.parse().ok());
+    let text = read_txt_section(book_id, sec_start, sec_end).ok()?;
+
+    // Resume offset: the saved locator is an ABSOLUTE body offset (same scheme as
+    // start_locator), so rebase it into the section's own text. Only treat it as a
+    // resume when it sits meaningfully past the section's opening — otherwise the
+    // "thread" framing would just re-show the first sentence.
+    let resume_within = parse_char_locator(resume_locator)
+        .map(|abs| abs.saturating_sub(sec_start))
+        .filter(|&w| w >= MIN_RESUME_OFFSET_CHARS && w < text.chars().count());
+    let is_resume = resume_within.is_some();
+
+    let excerpt = extract_teaser_excerpt(&text, resume_within, TEASER_MAX_CHARS)?;
+    let locator = format!("char:{}", sec_start + resume_within.unwrap_or(0));
+    Some(TodayTeaser {
+        excerpt,
+        prompt: reading_prompt(section.sort_order, is_resume).to_string(),
+        locator,
+        is_resume_excerpt: is_resume,
+    })
+}
+
+/// A resume position only counts as "mid-section" once it's this far past the
+/// opening; closer than this and the opening excerpt is the honest thing to show.
+const MIN_RESUME_OFFSET_CHARS: usize = 200;
+
+/// Parse a `char:<n>` (or bare-numeric, Shot-1) locator to its char offset.
+fn parse_char_locator(loc: Option<&str>) -> Option<usize> {
+    let loc = loc?.trim();
+    let digits = loc.strip_prefix("char:").unwrap_or(loc);
+    digits.parse().ok()
+}
+
+/// Pull the first meaningful sentence(s) out of section text for the teaser.
+///
+/// Skips structural noise the reader shouldn't meet as an opening line: blank
+/// lines, chapter/TOC headings (`looks_like_heading`), Project Gutenberg
+/// boilerplate, and very-short all-caps lines (drop-cap labels, "PREFACE",
+/// running heads). From the first real prose line it takes one or two sentences,
+/// then caps at ~`max_chars` (snapping to a word boundary so we never cut a word).
+///
+/// When `from_within` is Some, scanning starts at that char offset into `text`
+/// (the resume case) so the excerpt is the sentence the reader is returning to.
+/// Pure and unit-tested; touches no DB or filesystem.
+fn extract_teaser_excerpt(
+    text: &str,
+    from_within: Option<usize>,
+    max_chars: usize,
+) -> Option<String> {
+    // Rebase to the resume offset (snapped down to a char boundary) when given.
+    let scan = match from_within {
+        Some(w) => {
+            let byte = char_offset_to_byte(text, w);
+            &text[byte..]
+        }
+        None => text,
+    };
+
+    // Find the first line that reads as prose rather than structure. `start` is
+    // the byte offset (within `scan`) of that line's first non-whitespace char.
+    let mut start: Option<usize> = None;
+    let mut line_start = 0usize;
+    let consider = |raw: &str, line_start: usize| -> Option<usize> {
+        if is_prose_line(raw.trim()) {
+            let lead = raw.len() - raw.trim_start().len();
+            Some(line_start + lead)
+        } else {
+            None
+        }
+    };
+    for (i, c) in scan.char_indices() {
+        if c == '\n' {
+            if let Some(s) = consider(&scan[line_start..i], line_start) {
+                start = Some(s);
+                break;
+            }
+            line_start = i + 1;
+        }
+    }
+    if start.is_none() {
+        start = consider(&scan[line_start..], line_start);
+    }
+    let start = start?;
+
+    // From the first prose char, collect text up to the cap, then trim to the end
+    // of the first one or two sentences if one falls within the window.
+    let tail = &scan[start..];
+    let capped = take_chars(tail, max_chars);
+    let trimmed = trim_to_sentences(&capped, max_chars);
+    let out = trimmed.trim().to_string();
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Byte offset of the `n`-th char in `s` (clamps to the end).
+fn char_offset_to_byte(s: &str, n: usize) -> usize {
+    s.char_indices().nth(n).map(|(i, _)| i).unwrap_or(s.len())
+}
+
+/// First `n` chars of `s` as a String (UTF-8 safe).
+fn take_chars(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
+/// True when a (trimmed) line is real prose worth opening on — not a heading,
+/// TOC entry, Gutenberg boilerplate, or a very-short all-caps structural label.
+fn is_prose_line(line: &str) -> bool {
+    if line.is_empty() {
+        return false;
+    }
+    if looks_like_heading(line) {
+        return false;
+    }
+    if is_gutenberg_boilerplate(line) {
+        return false;
+    }
+    // Very-short all-caps lines are running heads / section labels ("PREFACE",
+    // "PART ONE", "THE END"), not prose. We only reject SHORT ones so a normal
+    // sentence that merely happens to be shouted isn't lost.
+    // All-caps lines are headings / titles / running heads, never prose paragraphs
+    // (real sentences carry lowercase). Reject regardless of length so a long titled
+    // heading — e.g. "FROM THE HEIGHTS (POEM TRANSLATED BY L.A. MAGNUS)" — never
+    // becomes the teaser's opening line.
+    if is_all_caps(line) {
+        return false;
+    }
+    // A line with no letters at all (rule of asterisks, page number) isn't prose.
+    line.chars().any(|c| c.is_alphabetic())
+}
+
+/// Project Gutenberg header/footer lines that can survive sectionizing.
+fn is_gutenberg_boilerplate(line: &str) -> bool {
+    let u = line.to_uppercase();
+    u.contains("PROJECT GUTENBERG")
+        || u.starts_with("*** START OF")
+        || u.starts_with("*** END OF")
+        || u.starts_with("PRODUCED BY")
+        || u.starts_with("E-TEXT PREPARED BY")
+        || u.starts_with("RELEASE DATE")
+        || u.starts_with("TRANSCRIBER")
+}
+
+/// True when a line has letters and every cased letter is uppercase.
+fn is_all_caps(line: &str) -> bool {
+    let mut saw_letter = false;
+    for c in line.chars() {
+        if c.is_alphabetic() {
+            saw_letter = true;
+            if c.is_lowercase() {
+                return false;
+            }
+        }
+    }
+    saw_letter
+}
+
+/// A conservative, self-contained heading/TOC-line check for the teaser. It is a
+/// deliberately small mirror of the import-side chapter detector (which is
+/// private to `import.rs`): short structural lines — chapter/book/letter/part/
+/// canto/act/scene markers, lone Roman-numeral or numeric lines, and standalone
+/// labels like PROLOGUE / EPILOGUE / CONTENTS / PREFACE — must never become the
+/// teaser's opening sentence. Kept narrow so it can't swallow real prose.
+fn looks_like_heading(line: &str) -> bool {
+    if line.len() > 80 {
+        return false; // real prose, not a heading
+    }
+    let upper = line.to_uppercase();
+    let words = line.split_whitespace().count();
+    const MARKERS: &[&str] = &[
+        "CHAPTER ", "CHAP. ", "BOOK ", "PART ", "LETTER ", "CANTO ", "ACT ", "SCENE ",
+    ];
+    if words <= 6 && MARKERS.iter().any(|m| upper.starts_with(m)) {
+        return true;
+    }
+    const STANDALONE: &[&str] = &[
+        "PROLOGUE",
+        "EPILOGUE",
+        "CONTENTS",
+        "PREFACE",
+        "FOREWORD",
+        "INTRODUCTION",
+        "DEDICATION",
+        "APPENDIX",
+        "INDEX",
+        "THE END",
+        "FINIS",
+    ];
+    if words <= 4 && STANDALONE.iter().any(|s| upper.starts_with(s)) {
+        return true;
+    }
+    // A line made only of digits / Roman-numeral letters / punctuation (e.g.
+    // "IV." or "12") is a section marker, not prose.
+    let core = line.trim().trim_end_matches('.').trim();
+    if !core.is_empty()
+        && core.chars().all(|c| {
+            c.is_ascii_digit()
+                || matches!(
+                    c.to_ascii_uppercase(),
+                    'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M'
+                )
+                || c.is_whitespace()
+        })
+    {
+        return true;
+    }
+    false
+}
+
+/// Given a capped excerpt, trim to the end of the first one or two sentences when
+/// a sentence terminator (`.`/`?`/`!`) falls inside the window. If the first
+/// sentence is very short (a clause, an interjection), keep the second too so the
+/// teaser carries a thought rather than a fragment. If no terminator is present
+/// (a long run-on within the cap), append an ellipsis so the cut reads as
+/// deliberate.
+fn trim_to_sentences(capped: &str, max_chars: usize) -> String {
+    // Byte offsets of sentence terminators that are followed by a space/end.
+    let bytes = capped.as_bytes();
+    let mut ends: Vec<usize> = Vec::new();
+    for (i, c) in capped.char_indices() {
+        if matches!(c, '.' | '?' | '!') {
+            let next = bytes.get(i + 1).copied();
+            if next.is_none()
+                || matches!(
+                    next,
+                    Some(b' ') | Some(b'\n') | Some(b'\r') | Some(b'"') | Some(b'\'')
+                )
+            {
+                ends.push(i + c.len_utf8());
+            }
+        }
+    }
+    if let Some(&first) = ends.first() {
+        let first_len = capped[..first].chars().count();
+        // A short first sentence reads as a fragment; reach for the second.
+        let cut = if first_len < 40 {
+            ends.get(1).copied().unwrap_or(first)
+        } else {
+            first
+        };
+        return capped[..cut].to_string();
+    }
+    // No sentence end inside the cap — likely the cap clipped a long opener.
+    let truncated = capped.chars().count() >= max_chars;
+    if truncated {
+        // Snap back to the last word boundary so we don't end mid-word.
+        let trimmed = capped.trim_end();
+        if let Some(sp) = trimmed.rfind(char::is_whitespace) {
+            return format!("{}…", trimmed[..sp].trim_end());
+        }
+    }
+    capped.to_string()
 }
 
 /// Build the "Today remembers" surface from local notes. Privacy-safe by
@@ -855,5 +1164,114 @@ mod tests {
         // No header (body_start = 0) behaves as a plain slice.
         let plain = super::slice_body("abcdef", 0, 2, Some(4));
         assert_eq!(plain, "cd");
+    }
+
+    /// The teaser excerpt must skip a leading chapter heading and any Gutenberg
+    /// boilerplate, opening instead on the section's first real sentence — and it
+    /// must respect the ~320-char cap (snapping to a word boundary, never mid-word).
+    #[test]
+    fn extract_teaser_strips_heading_and_boilerplate_and_caps_length() {
+        let text = "CHAPTER I\n\nProduced by Some Volunteer\n\nGreat art Thou, O Lord, and greatly to be praised; great is Thy power, and of Thy wisdom there is no end. Yet would man praise Thee.";
+        let ex = super::extract_teaser_excerpt(text, None, super::TEASER_MAX_CHARS)
+            .expect("prose follows the heading");
+        assert!(
+            ex.starts_with("Great art Thou"),
+            "excerpt must open on the first prose sentence, got {ex:?}"
+        );
+        assert!(
+            !ex.to_uppercase().contains("CHAPTER")
+                && !ex.to_uppercase().contains("PRODUCED BY")
+                && !ex.to_uppercase().contains("PROJECT GUTENBERG"),
+            "no heading/boilerplate may bleed into the excerpt: {ex:?}"
+        );
+
+        // A run-on opener with no early sentence end is capped and word-snapped.
+        let long = format!("{} more.", "word ".repeat(200));
+        let capped =
+            super::extract_teaser_excerpt(&long, None, super::TEASER_MAX_CHARS).expect("non-empty");
+        assert!(
+            capped.chars().count() <= super::TEASER_MAX_CHARS,
+            "excerpt must respect the {}-char cap, got {} chars",
+            super::TEASER_MAX_CHARS,
+            capped.chars().count()
+        );
+        assert!(
+            !capped.ends_with("wor") && !capped.contains("  "),
+            "cap must snap to a word boundary, got {capped:?}"
+        );
+    }
+
+    /// A section's own heading/title — even a long, all-caps, parenthetical one
+    /// like a translated dedication poem — must never become the teaser's opening
+    /// line; the first real prose sentence should.
+    #[test]
+    fn teaser_excerpt_skips_the_section_heading() {
+        let text = "FROM THE HEIGHTS (POEM TRANSLATED BY L.A. MAGNUS)\n\nSUPPOSING that Truth is a woman--what then? Is there not ground for suspecting that all philosophers have failed to understand women?";
+        let ex = super::extract_teaser_excerpt(text, None, super::TEASER_MAX_CHARS)
+            .expect("prose follows the title");
+        assert!(
+            !ex.to_uppercase().starts_with("FROM THE HEIGHTS"),
+            "teaser echoed the section's own title: {ex:?}"
+        );
+        assert!(
+            ex.starts_with("SUPPOSING"),
+            "teaser must open on the first real prose sentence, got {ex:?}"
+        );
+    }
+
+    /// A short opening clause should pull in the second sentence so the teaser
+    /// carries a thought rather than a bare fragment.
+    #[test]
+    fn extract_teaser_reaches_for_a_second_sentence_after_a_short_opener() {
+        let text =
+            "He was gone. The house kept the shape of him in every room for a long while after.";
+        let ex = super::extract_teaser_excerpt(text, None, super::TEASER_MAX_CHARS).expect("prose");
+        assert!(
+            ex.contains("The house kept the shape"),
+            "a short first sentence should be joined by the next, got {ex:?}"
+        );
+    }
+
+    /// Resuming mid-section: the excerpt is taken from the resume offset, not the
+    /// section's opening line.
+    #[test]
+    fn extract_teaser_uses_the_resume_offset_when_given() {
+        let text = "Opening sentence the reader already passed. Now the middle paragraph the reader is returning to begins here.";
+        let within = text.find("Now the middle").expect("offset exists");
+        let within_chars = text[..within].chars().count();
+        let ex = super::extract_teaser_excerpt(text, Some(within_chars), super::TEASER_MAX_CHARS)
+            .expect("prose at resume");
+        assert!(
+            ex.starts_with("Now the middle"),
+            "resume excerpt must begin at the resume position, got {ex:?}"
+        );
+    }
+
+    /// The prompt selector is a pure, deterministic function of the section index
+    /// (rotating the hand-written set) with a fixed resume variant — same input,
+    /// same prompt, every time.
+    #[test]
+    fn reading_prompt_is_deterministic_per_section_index() {
+        let n = super::READING_PROMPTS.len() as i64;
+        // Stable across calls.
+        assert_eq!(
+            super::reading_prompt(0, false),
+            super::reading_prompt(0, false)
+        );
+        // Index 0 and index n wrap to the same prompt.
+        assert_eq!(
+            super::reading_prompt(0, false),
+            super::reading_prompt(n, false)
+        );
+        assert_eq!(super::reading_prompt(0, false), super::READING_PROMPTS[0]);
+        assert_eq!(super::reading_prompt(2, false), super::READING_PROMPTS[2]);
+        // Negative sort_order is handled (rem_euclid), never panics or indexes OOB.
+        assert_eq!(
+            super::reading_prompt(-1, false),
+            super::READING_PROMPTS[(n - 1) as usize]
+        );
+        // Resume always gets the thread variant, regardless of index.
+        assert_eq!(super::reading_prompt(0, true), super::RESUME_PROMPT);
+        assert_eq!(super::reading_prompt(3, true), super::RESUME_PROMPT);
     }
 }

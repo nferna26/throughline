@@ -8,11 +8,10 @@ import BookSwitcher from "./screens/BookSwitcher";
 import NotesBrowser from "./screens/NotesBrowser";
 import BookSetupSheet from "./screens/BookSetupSheet";
 import Discover from "./screens/Discover";
-import Onboarding from "./screens/Onboarding";
 import TLIcon from "./components/TLIcon";
 import "./App.css";
 import "./tl-theme.css";
-import type { TodayCard, ReaderMode, Book, ImportOutcome, SettingsDto } from "./types";
+import type { TodayCard, ReaderMode, Book, ImportOutcome } from "./types";
 import { errorMessage } from "./types";
 
 type BookTab = "today" | "notes";
@@ -31,9 +30,6 @@ export default function App() {
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (localStorage.getItem("tl.theme") as "light" | "dark") || "light"
   );
-  // AI onboarding gate: null = unknown (loading), false = must choose a provider
-  // before the app is usable, true = chosen (or explicitly declined).
-  const [aiChosen, setAiChosen] = useState<boolean | null>(null);
 
   // Instant theme flip (brand rule: no crossfade). Suppress every transition for
   // one frame when data-theme changes — this also fixes the WKWebView quirk where
@@ -53,12 +49,6 @@ export default function App() {
     root.dataset.theme = theme;
     requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("tl-no-transition")));
   }, [theme]);
-
-  useEffect(() => {
-    invoke<SettingsDto>("cmd_get_settings")
-      .then((s) => setAiChosen(s.ai_provider_chosen))
-      .catch(() => setAiChosen(true)); // never trap the reader if settings can't load
-  }, []);
 
   // null = no load error. A string = the most recent cmd_today failure, which
   // would otherwise strand the app on "Loading…" forever with no way out.
@@ -152,7 +142,7 @@ export default function App() {
     refreshToday();
   }
 
-  if (today === undefined || aiChosen === null) {
+  if (today === undefined) {
     // A failed initial load gets an honest error + retry, never an endless spinner.
     if (loadError && today === undefined) {
       return (
@@ -178,23 +168,11 @@ export default function App() {
     );
   }
 
-  // Book-acquisition comes first: the whole Welcome → Discover → Plan-setup flow
-  // runs unobstructed (those are non-"today" views). The forced first-run AI
-  // choice only gates the Today *home* screen, and only once the reader actually
-  // has a book in hand — so it never interrupts mid-import, and the privacy
-  // decision lands when it's about to matter (a passage to send), not before
-  // there's anything to read. No implicit default either way: the choice stays
-  // explicit.
-  if (view.kind === "today" && today != null && !aiChosen) {
-    return (
-      <div className="app tl-root" data-theme={theme}>
-        <main id="main-content">
-          <Onboarding onDone={() => setAiChosen(true)} />
-        </main>
-      </div>
-    );
-  }
-
+  // Throughline opens to Today — no forced first-run AI chooser. The app is fully
+  // usable without AI; setup happens at the moment of intent (the first tutor lens
+  // click, via AiSetupSheet), where the privacy decision actually matters and the
+  // reader has a passage in hand. There is no implicit default and nothing AI runs
+  // until the reader selects a passage and asks.
   return (
     <div className="app tl-root" data-theme={theme}>
       <a href="#main-content" className="skip-link">Skip to main content</a>

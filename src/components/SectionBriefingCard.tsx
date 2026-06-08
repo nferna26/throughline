@@ -1,8 +1,26 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import TLIcon from "./TLIcon";
+import AiSetupSheet from "./AiSetupSheet";
 import { aiProviderLabel, type AskHandle, type SettingsDto, type StreamEvent } from "../types";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
+
+/** True when an error reads like the configured provider is unreachable (vs. a
+ *  hard config error), so the briefing offers the "Tutor paused" recovery. */
+function looksUnavailable(msg: string): boolean {
+  const s = msg.toLowerCase();
+  return (
+    s.includes("can't reach") ||
+    s.includes("cannot reach") ||
+    s.includes("could not reach") ||
+    s.includes("connection") ||
+    s.includes("unavailable") ||
+    s.includes("refused") ||
+    s.includes("no model is loaded") ||
+    s.includes("timed out") ||
+    s.includes("timeout")
+  );
+}
 import {
   getCachedBriefing,
   setCachedBriefing,
@@ -61,6 +79,10 @@ export default function SectionBriefingCard(props: {
    *  subtle marker the reader can tap to open a Context tutor flow on that theme.
    *  Reader-initiated, local-only, same consent rules — never auto-opens. */
   onAskContext?: (theme: string) => void;
+  /** Book title + author, threaded into the cold-start setup sheet's fallback
+   *  prompt. Optional: the sheet degrades calmly without them. */
+  bookTitle?: string;
+  author?: string | null;
 }) {
   const { bookId, sectionId, sourceSha, mode } = props;
   const cached = getCachedBriefing(bookId, sectionId, sourceSha, mode);
@@ -179,6 +201,14 @@ export default function SectionBriefingCard(props: {
     generate();
   }, [bookId, sectionId, sourceSha, mode, generate]);
 
+  // Cold-start recovery: the setup sheet connected (or asked us to retry). Read
+  // the live provider and immediately prepare the briefing — no Settings detour.
+  const onSetupConnected = useCallback((connected: string) => {
+    setTutorEnabled(true);
+    if (connected) setProvider(connected);
+    generate();
+  }, [generate]);
+
   const streaming = phase === "thinking" || phase === "streaming";
   const parts = parseBriefing(text);
 
@@ -208,12 +238,34 @@ export default function SectionBriefingCard(props: {
       </div>
 
       {phase === "blocked" || (phase === "consent" && (provider === "none" || provider === "")) ? (
-        <div className="tl-tutor-errbox" role="alert">
-          <p>
-            No AI provider is set up yet. Choose one in Settings → Assistance to use Deep Study
-            briefings.
-          </p>
-        </div>
+        // Cold-start: no provider wired up. Setup at the moment of intent rather
+        // than a dead-end pointer to Settings.
+        <AiSetupSheet
+          ctx={{
+            mode: "section_briefing",
+            selectedText: props.sectionText,
+            bookTitle: props.bookTitle ?? "",
+            author: props.author ?? null,
+            sectionLabel: props.chapter || null,
+            sectionText: props.sectionText,
+          }}
+          initialState="not_connected"
+          onConnected={onSetupConnected}
+        />
+      ) : phase === "error" && looksUnavailable(errorMsg) ? (
+        // Configured-but-unavailable: "Tutor paused" recovery, never Settings-only.
+        <AiSetupSheet
+          ctx={{
+            mode: "section_briefing",
+            selectedText: props.sectionText,
+            bookTitle: props.bookTitle ?? "",
+            author: props.author ?? null,
+            sectionLabel: props.chapter || null,
+            sectionText: props.sectionText,
+          }}
+          initialState="unavailable"
+          onConnected={onSetupConnected}
+        />
       ) : phase === "consent" ? (
         <div className="tl-tutor-consent">
           <p>

@@ -95,6 +95,59 @@ pub fn sectionize(body: &str) -> Vec<(String, usize, usize)> {
     chunk_evenly(body)
 }
 
+/// Per-section "assignable" flags (true = part of the reading plan). Front matter —
+/// a LEADING run of dedication / title page / table of contents / copyright /
+/// epigraph / translator title-poem — is marked non-assignable so the plan's
+/// day-1 starts on real content (Preface/Foreword/Introduction/Prologue/chapters
+/// are kept). `raw` is the output of `sectionize`; `body` is the same text.
+pub fn classify_assignable(raw: &[(String, usize, usize)], body: &str) -> Vec<bool> {
+    let mut flags = vec![true; raw.len()];
+    for (i, (label, s, e)) in raw.iter().enumerate() {
+        let sec = body.get(*s..*e).unwrap_or("");
+        if is_leading_front_matter(label, sec) {
+            flags[i] = false;
+        } else {
+            break; // first real-content section; everything after stays assignable
+        }
+    }
+    // Never emit an empty plan (e.g. an all-verse book): if the heuristic would
+    // drop every section, keep them all assignable.
+    if flags.iter().all(|f| !f) {
+        return vec![true; raw.len()];
+    }
+    flags
+}
+
+/// A LEADING section is front matter when its label is a known marker (reusing the
+/// EPUB classifier — dedication / contents / title page / copyright / epigraph /
+/// "about the author" …) OR it lacks substantial flowing prose (a title page,
+/// contents list, dedication, or short title-poem). Preface / Foreword /
+/// Introduction / Prologue carry real prose, so they pass and become day-1.
+fn is_leading_front_matter(label: &str, section_body: &str) -> bool {
+    if crate::epub_classify::is_front_back_matter(Some(label), label, true) {
+        return true;
+    }
+    !section_has_substantial_prose(section_body)
+}
+
+/// True when a section's body (after its first/heading line) reads as real flowing
+/// prose: enough text, several sentence terminators, and at least one prose-length
+/// line. Verse, contents lists, and title pages all fail this.
+fn section_has_substantial_prose(section_body: &str) -> bool {
+    let after = section_body
+        .trim_start()
+        .split_once('\n')
+        .map(|(_, rest)| rest)
+        .unwrap_or("");
+    let prose_chars = after.chars().filter(|c| !c.is_whitespace()).count();
+    let terminators = after
+        .bytes()
+        .filter(|b| matches!(b, b'.' | b'!' | b'?'))
+        .count();
+    let has_long_line = after.lines().any(|l| l.trim().chars().count() > 60);
+    prose_chars >= 300 && terminators >= 2 && has_long_line
+}
+
 fn detect_chapters(body: &str) -> Vec<(String, usize, usize)> {
     // Heading lines, as (line_start, line_end_before_newline, trimmed_label).
     let mut headings: Vec<(usize, usize, String)> = Vec::new();
@@ -228,13 +281,14 @@ fn detect_chapters(body: &str) -> Vec<(String, usize, usize)> {
         if len > TARGET_SECTION_CHARS * 3 {
             let parts = len.div_ceil(TARGET_SECTION_CHARS);
             let part_len = len / parts;
+            // Snap each interior split to a clean reading boundary (paragraph /
+            // sentence / word — never mid-word, always a char boundary). The same
+            // snapped value is reused as this part's end and the next part's
+            // start, so the parts stay abutting (no overlap/gap).
+            let split = |p: usize| snap_to_boundary(body, s + p * part_len);
             for p in 0..parts {
-                let ps = s + p * part_len;
-                let pe = if p == parts - 1 {
-                    e
-                } else {
-                    s + (p + 1) * part_len
-                };
+                let ps = if p == 0 { s } else { split(p) };
+                let pe = if p == parts - 1 { e } else { split(p + 1) };
                 refined.push((format!("{} — pt {}", label, p + 1), ps, pe));
             }
         } else {
@@ -397,7 +451,7 @@ fn chunk_evenly(body: &str) -> Vec<(String, usize, usize)> {
         let snapped_end = if i == n - 1 {
             len
         } else {
-            snap_to_paragraph(body, (i + 1) * chunk)
+            snap_to_boundary(body, (i + 1) * chunk)
         };
         prev_end = snapped_end;
         out.push((format!("Part {}", i + 1), s, snapped_end));
@@ -405,16 +459,82 @@ fn chunk_evenly(body: &str) -> Vec<(String, usize, usize)> {
     out
 }
 
-fn snap_to_paragraph(body: &str, idx: usize) -> usize {
-    let bytes = body.as_bytes();
-    let max_skip = 500.min(bytes.len() - idx);
-    for j in 0..max_skip {
-        let pos = idx + j;
-        if pos + 1 < bytes.len() && bytes[pos] == b'\n' && bytes[pos + 1] == b'\n' {
-            return pos + 2;
-        }
+/// Snap a byte index DOWN to the nearest UTF-8 char boundary of `body`
+/// (`std::str::floor_char_boundary` is still unstable). Section locators are
+/// used to slice the body, so every split point MUST land on a boundary or the
+/// slice panics; snapping down also keeps abutment intact because the same
+/// snapped value is shared by a section's end and the next section's start.
+fn floor_char_boundary(body: &str, idx: usize) -> usize {
+    let mut idx = idx.min(body.len());
+    while idx > 0 && !body.is_char_boundary(idx) {
+        idx -= 1;
     }
     idx
+}
+
+/// Snap a byte index FORWARD to a clean reading boundary so a section never
+/// starts or ends in the middle of a word. Preference, nearest-first within a
+/// bounded window: a PARAGRAPH break (blank line) > a SENTENCE end (`.?!` then
+/// whitespace) > a WORD boundary (the start of the next word, after whitespace).
+/// The result is always a valid UTF-8 char boundary, and the char just before it
+/// is never a word character abutting a word character at it — so `body[..b]` and
+/// `body[b..]` split cleanly. All windows are far below TARGET_SECTION_CHARS
+/// (9_000), so a snap can never collapse a section into the next one.
+fn snap_to_boundary(body: &str, idx: usize) -> usize {
+    let len = body.len();
+    if idx == 0 || idx >= len {
+        return floor_char_boundary(body, idx);
+    }
+    let bytes = body.as_bytes();
+
+    // 1. Paragraph break (blank line) -> first real char of the next paragraph.
+    let para_window = 1_000.min(len - idx);
+    for j in 0..para_window {
+        let pos = idx + j;
+        if bytes[pos] == b'\n' && pos + 1 < len && bytes[pos + 1] == b'\n' {
+            let mut k = pos + 2;
+            while k < len && bytes[k].is_ascii_whitespace() {
+                k += 1;
+            }
+            return floor_char_boundary(body, k);
+        }
+    }
+
+    // 2. Sentence end (`.`/`!`/`?` then whitespace) -> next sentence's first char.
+    let sent_window = 400.min(len - idx);
+    for j in 0..sent_window {
+        let pos = idx + j;
+        if matches!(bytes[pos], b'.' | b'!' | b'?')
+            && pos + 1 < len
+            && bytes[pos + 1].is_ascii_whitespace()
+        {
+            let mut k = pos + 1;
+            while k < len && bytes[k].is_ascii_whitespace() {
+                k += 1;
+            }
+            if k < len {
+                return floor_char_boundary(body, k);
+            }
+        }
+    }
+
+    // 3. Word boundary: advance to the first whitespace at/after idx, then to the
+    //    start of the next word. The char before the split is then whitespace, so
+    //    no word is ever cut. (Prose has whitespace within a few chars; bounded by len.)
+    let mut pos = idx;
+    while pos < len && !bytes[pos].is_ascii_whitespace() {
+        pos += 1;
+    }
+    while pos < len && bytes[pos].is_ascii_whitespace() {
+        pos += 1;
+    }
+    if pos < len {
+        return floor_char_boundary(body, pos);
+    }
+
+    // 4. No whitespace ahead (a pathological single-token tail): a word split is
+    //    unavoidable, so fall back to a codepoint-safe split.
+    floor_char_boundary(body, idx)
 }
 
 pub struct ImportResult {
@@ -474,6 +594,7 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
 
     // Sectionize
     let raw_sections = sectionize(body);
+    let assignable_flags = classify_assignable(&raw_sections, body);
     let now = Utc::now().to_rfc3339();
     let mut sections: Vec<BookSection> = Vec::with_capacity(raw_sections.len());
     for (i, (label, s, e)) in raw_sections.iter().enumerate() {
@@ -488,7 +609,7 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
             end_locator: Some(e.to_string()),
             estimated_units: Some((e - s) as i64),
             sort_order: i as i64,
-            assignable: true,
+            assignable: assignable_flags[i],
         });
     }
 
@@ -740,6 +861,48 @@ mod tests {
         for (label, s, e) in &secs {
             assert!(e > s, "degenerate empty section {label}: {s}..{e}");
         }
+    }
+
+    #[test]
+    fn chunk_locators_are_char_boundaries_for_dense_multibyte_body() {
+        // A long run of multibyte glyphs with NO paragraph break forces
+        // snap_to_boundary onto its word/char-boundary fallback. Before the fix that
+        // fallback returned a byte offset that could slice through a codepoint,
+        // so body[start..end] (used to read the section) would panic. Every
+        // locator must now land on a UTF-8 char boundary.
+        let body: String = "é—🜨à"
+            .chars()
+            .cycle()
+            .take(12_000) // >> TARGET_SECTION_CHARS so n >= 2 boundaries exist
+            .collect();
+        let secs = chunk_evenly(&body);
+        assert!(secs.len() >= 2, "need a real boundary, got {}", secs.len());
+        for (label, s, e) in &secs {
+            assert!(
+                body.is_char_boundary(*s) && body.is_char_boundary(*e),
+                "section {label} {s}..{e} crosses a codepoint"
+            );
+            // Must be sliceable without panicking.
+            let _ = &body[*s..*e];
+            assert!(e > s, "degenerate section {label}");
+        }
+        assert_eq!(secs[0].1, 0);
+        assert_eq!(secs.last().unwrap().2, body.len());
+        for w in secs.windows(2) {
+            assert_eq!(w[0].2, w[1].1, "sections must abut");
+        }
+    }
+
+    #[test]
+    fn floor_char_boundary_snaps_down_to_a_codepoint_start() {
+        let s = "aé🜨b"; // bytes: a(1) é(2) 🜨(4) b(1) => len 8
+        assert_eq!(floor_char_boundary(s, 0), 0);
+        assert_eq!(floor_char_boundary(s, 1), 1); // boundary before 'é'
+        assert_eq!(floor_char_boundary(s, 2), 1); // mid-'é' -> back to 1
+        assert_eq!(floor_char_boundary(s, 3), 3); // boundary before '🜨'
+        assert_eq!(floor_char_boundary(s, 5), 3); // mid-'🜨' -> back to 3
+        assert_eq!(floor_char_boundary(s, 7), 7); // boundary before 'b'
+        assert_eq!(floor_char_boundary(s, 99), s.len()); // clamps to len
     }
 
     #[test]

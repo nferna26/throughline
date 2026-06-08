@@ -119,11 +119,13 @@ describe("SectionBriefingCard — provider gate", () => {
     });
   }
 
-  it("does NOT generate when no provider is chosen, and shows the choose-a-provider message", async () => {
+  it("does NOT generate when no provider is chosen, and shows the cold-start setup sheet", async () => {
     localStorage.setItem("rg.tutorEnabled", "true"); // would normally auto-prepare
     setNoProvider();
     render(<SectionBriefingCard {...props} />);
-    expect(await screen.findByText(/No AI provider is set up/i)).toBeInTheDocument();
+    // The dead-end "Choose one in Settings" message is replaced by setup-at-intent.
+    expect(await screen.findByText(/Tutor not connected/i)).toBeInTheDocument();
+    expect(screen.getByText(/Paste API key & ask/i)).toBeInTheDocument();
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_get_settings"));
     expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_ai_ask", expect.anything());
     expect(screen.queryByText(/Nothing leaves your device/i)).toBeNull();
