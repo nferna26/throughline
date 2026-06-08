@@ -112,7 +112,8 @@ pub fn cmd_list_plans_for_book(
 #[tauri::command]
 pub fn cmd_start_new_plan(book_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
-    let sections = crate::commands::db_helpers::list_sections(&conn, &book_id).map_err(AppError::from)?;
+    let sections =
+        crate::commands::db_helpers::list_sections(&conn, &book_id).map_err(AppError::from)?;
     let plan = crate::plan::build_default_plan(&book_id, &sections);
     crate::commands::db_helpers::insert_plan(&conn, &plan).map_err(AppError::from)?;
     Ok(())
@@ -280,19 +281,36 @@ mod tests {
     }
 
     fn count(conn: &Connection, where_clause: &str) -> i64 {
-        conn.query_row(&format!("SELECT COUNT(*) FROM {where_clause}"), [], |r| r.get(0))
-            .unwrap()
+        conn.query_row(&format!("SELECT COUNT(*) FROM {where_clause}"), [], |r| {
+            r.get(0)
+        })
+        .unwrap()
     }
 
     #[test]
     fn delete_is_soft_and_restorable() {
         let conn = db();
-        conn.execute("UPDATE reading_plans SET deleted_at=datetime('now') WHERE id='p1'", [])
+        conn.execute(
+            "UPDATE reading_plans SET deleted_at=datetime('now') WHERE id='p1'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            count(&conn, "reading_plans WHERE id='p1' AND deleted_at IS NULL"),
+            0
+        );
+        assert_eq!(
+            count(&conn, "reading_plans WHERE id='p1'"),
+            1,
+            "soft delete keeps the row"
+        );
+        conn.execute("UPDATE reading_plans SET deleted_at=NULL WHERE id='p1'", [])
             .unwrap();
-        assert_eq!(count(&conn, "reading_plans WHERE id='p1' AND deleted_at IS NULL"), 0);
-        assert_eq!(count(&conn, "reading_plans WHERE id='p1'"), 1, "soft delete keeps the row");
-        conn.execute("UPDATE reading_plans SET deleted_at=NULL WHERE id='p1'", []).unwrap();
-        assert_eq!(count(&conn, "reading_plans WHERE id='p1' AND deleted_at IS NULL"), 1, "restore");
+        assert_eq!(
+            count(&conn, "reading_plans WHERE id='p1' AND deleted_at IS NULL"),
+            1,
+            "restore"
+        );
     }
 
     #[test]
@@ -311,8 +329,20 @@ mod tests {
         let purged = super::sweep_deleted_plans(&conn, 30).unwrap();
         assert_eq!(purged, 1, "only the plan past the 30-day window is purged");
         assert_eq!(count(&conn, "reading_plans WHERE id='p_old'"), 0);
-        assert_eq!(count(&conn, "reading_sessions WHERE id='s_old'"), 0, "its sessions purged");
-        assert_eq!(count(&conn, "notes WHERE id='n_old'"), 0, "its notes purged");
-        assert_eq!(count(&conn, "reading_plans WHERE id='p_rec'"), 1, "in-window kept");
+        assert_eq!(
+            count(&conn, "reading_sessions WHERE id='s_old'"),
+            0,
+            "its sessions purged"
+        );
+        assert_eq!(
+            count(&conn, "notes WHERE id='n_old'"),
+            0,
+            "its notes purged"
+        );
+        assert_eq!(
+            count(&conn, "reading_plans WHERE id='p_rec'"),
+            1,
+            "in-window kept"
+        );
     }
 }

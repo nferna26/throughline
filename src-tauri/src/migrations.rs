@@ -83,7 +83,8 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: "v009_plan_name_softdelete",
-        description: "reading_plans.name + deleted_at (soft-delete) + reached_percent (frontispiece)",
+        description:
+            "reading_plans.name + deleted_at (soft-delete) + reached_percent (frontispiece)",
         up: v009_plan_name_softdelete,
     },
 ];
@@ -335,8 +336,8 @@ fn v008_plan_lifecycle(conn: &Connection) -> Result<()> {
 }
 
 /// Frontispiece redesign: reader-named plans, soft-delete ("Let go" keeps the row
-/// + its sessions/notes until a 30-day retention sweep), and a progress snapshot
-/// for the back-matter entries.
+/// with its sessions/notes until a 30-day retention sweep), and a progress
+/// snapshot for the back-matter entries.
 fn v009_plan_name_softdelete(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "reading_plans", "name", "TEXT")?;
     add_column_if_missing(conn, "reading_plans", "deleted_at", "TEXT")?;
