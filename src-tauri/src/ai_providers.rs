@@ -280,12 +280,30 @@ pub enum SseOutcome {
 
 /// Drive an SSE response body line-by-line through `parse`, emitting StreamEvents.
 /// Ends with a synthetic Done if the stream closes cleanly without a terminal event.
+/// Emit a Usage event if any tokens were seen (B6). Sent just before Done so
+/// cmd_ai_ask can record it. No-op when the stream reported no usage.
+async fn emit_usage(tx: &mpsc::Sender<StreamEvent>, u: &TokenUsage) {
+    if u.input_tokens > 0 || u.output_tokens > 0 {
+        let _ = tx
+            .send(StreamEvent::Usage {
+                input_tokens: u.input_tokens,
+                output_tokens: u.output_tokens,
+                cache_read_tokens: u.cache_read_tokens,
+                cache_creation_tokens: u.cache_creation_tokens,
+            })
+            .await;
+    }
+}
+
+// pump_sse is Anthropic-only (OpenAI/Local go through ai_client::run_chat_call),
+// so it accumulates Anthropic usage from message_start/message_delta inline.
 async fn pump_sse<F>(resp: reqwest::Response, tx: mpsc::Sender<StreamEvent>, parse: F)
 where
     F: Fn(&str) -> SseOutcome,
 {
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
+    let mut usage = TokenUsage::default();
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {
             Ok(b) => b,
@@ -302,11 +320,13 @@ where
         while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
             let line_bytes = buf.drain(..=pos).collect::<Vec<u8>>();
             let line = String::from_utf8_lossy(&line_bytes);
+            accumulate_anthropic_usage(&line, &mut usage);
             match parse(&line) {
                 SseOutcome::Delta(t) => {
                     let _ = tx.send(StreamEvent::Delta { text: t }).await;
                 }
                 SseOutcome::Done => {
+                    emit_usage(&tx, &usage).await;
                     let _ = tx.send(StreamEvent::Done).await;
                     return;
                 }
@@ -318,6 +338,7 @@ where
             }
         }
     }
+    emit_usage(&tx, &usage).await;
     let _ = tx.send(StreamEvent::Done).await;
 }
 
@@ -1465,6 +1486,7 @@ mod tests {
             match ev {
                 StreamEvent::Delta { text } => got.push_str(&text),
                 StreamEvent::Done => break,
+                StreamEvent::Usage { .. } => {}
                 StreamEvent::Error { message } => panic!("anthropic stream error: {message}"),
             }
         }
@@ -1506,6 +1528,7 @@ mod tests {
             match ev {
                 StreamEvent::Delta { text } => got.push_str(&text),
                 StreamEvent::Done => break,
+                StreamEvent::Usage { .. } => {}
                 StreamEvent::Error { message } => {
                     // Codex backend is an unofficial/fragile contract — report, don't fail.
                     println!("[codex-brevity] stream error: {message}");
@@ -1554,6 +1577,7 @@ mod tests {
                     done = true;
                     break;
                 }
+                StreamEvent::Usage { .. } => {}
                 StreamEvent::Error { message } => panic!("anthropic stream error: {message}"),
             }
         }
@@ -1651,6 +1675,7 @@ mod tests {
                         match ev {
                             StreamEvent::Delta { text } => got.push_str(&text),
                             StreamEvent::Done => break,
+                            StreamEvent::Usage { .. } => {}
                             StreamEvent::Error { message } => {
                                 println!("[codex] stream error: {message}");
                                 break;
@@ -1699,6 +1724,7 @@ mod tests {
                     done = true;
                     break;
                 }
+                StreamEvent::Usage { .. } => {}
                 StreamEvent::Error { message } => panic!("openai stream error: {message}"),
             }
         }

@@ -155,6 +155,14 @@ pub enum StreamEvent {
     Delta { text: String },
     Done,
     Error { message: String },
+    /// Token usage for the call (B6). Emitted by the provider stream just before
+    /// Done; intercepted + recorded by cmd_ai_ask and NOT forwarded to the webview.
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_creation_tokens: u64,
+    },
 }
 
 #[derive(Debug, Deserialize)]
