@@ -83,6 +83,11 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
           <div className="mark"><TLIcon name="book" size={26} /></div>
           <h1>Welcome to Throughline</h1>
           <p>One book at a time, a little each day. Find something you mean to finish, and it'll be waiting on Today.</p>
+          <ul className="tl-welcome-promise" aria-label="How Throughline treats your reading">
+            <li><TLIcon name="check" size={15} /> Your books and notes never leave this Mac.</li>
+            <li><TLIcon name="check" size={15} /> Your notes export as plain Markdown that outlives the app.</li>
+            <li><TLIcon name="check" size={15} /> No account, no cloud, no tracking.</li>
+          </ul>
           <button className="tl-btn tl-btn-primary" style={{ margin: "0 auto" }} onClick={onDiscover}>
             <TLIcon name="search" size={18} /> Find a book to read
           </button>

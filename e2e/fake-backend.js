@@ -99,9 +99,10 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
   // ── Command table ────────────────────────────────────────────────────────────
   function handle(cmd, args) {
     switch (cmd) {
-      case "cmd_today": return TODAY;
+      // window.__TL_FAKE_EMPTY__ → no books yet (welcome / first-run state).
+      case "cmd_today": return window.__TL_FAKE_EMPTY__ ? null : TODAY;
       case "cmd_get_settings": return SETTINGS;
-      case "cmd_list_books": return [BOOK];
+      case "cmd_list_books": return window.__TL_FAKE_EMPTY__ ? [] : [BOOK];
       case "cmd_assignable_sections": return SECTIONS;
       case "cmd_list_notes": return NOTES.slice();
       case "cmd_read_section_text": return SECTION_TEXT;
