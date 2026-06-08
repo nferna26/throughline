@@ -28,6 +28,15 @@ test("welcome-first-run", async ({ page }) => {
   await shoot(page, "00-welcome");
 });
 
+test("recovery-when-behind", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_BEHIND__ = true; });
+  await page.goto("/");
+  // Falling behind must never dead-end: a visible recovery panel with options.
+  await expect(page.getByText(/calm way back|behind/i).first()).toBeVisible();
+  await expect(page.getByText(/extend|re-pace|finish by/i).first()).toBeVisible();
+  await shoot(page, "09-recovery");
+});
+
 test("today", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Meditations" })).toBeVisible();

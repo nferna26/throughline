@@ -99,8 +99,25 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
   // ── Command table ────────────────────────────────────────────────────────────
   function handle(cmd, args) {
     switch (cmd) {
-      // window.__TL_FAKE_EMPTY__ → no books yet (welcome / first-run state).
-      case "cmd_today": return window.__TL_FAKE_EMPTY__ ? null : TODAY;
+      // window.__TL_FAKE_EMPTY__ → no books yet; __TL_FAKE_BEHIND__ → behind + recovery.
+      case "cmd_today":
+        if (window.__TL_FAKE_EMPTY__) return null;
+        if (window.__TL_FAKE_BEHIND__) {
+          return Object.assign({}, TODAY, {
+            pace: { kind: "behind", days_behind: 6 },
+            forecast: { state: "needs_rebalance", projected_finish_date: "2026-07-15", days_late: 6 },
+            recovery: {
+              headline: "You're 6 days behind — here's the calm way back.",
+              days_behind: 6,
+              options: [
+                { kind: "ResumeToday" },
+                { kind: "GentleCatchup", extra_minutes: 10, for_sessions: 5 },
+                { kind: "ExtendFinish", add_days: 10, new_finish: "2026-07-11" },
+              ],
+            },
+          });
+        }
+        return TODAY;
       case "cmd_get_settings": return SETTINGS;
       case "cmd_list_books": return window.__TL_FAKE_EMPTY__ ? [] : [BOOK];
       case "cmd_assignable_sections": return SECTIONS;
