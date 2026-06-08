@@ -378,12 +378,28 @@ pub fn parse_anthropic_line(line: &str) -> SseOutcome {
 /// it can never be MORE restrictive than the reader's chosen tier. Pure →
 /// unit-tested so the brevity contract is pinned without a live call.
 fn anthropic_body(model: &str, prompt: &str, max_tokens: Option<u32>) -> serde_json::Value {
-    json!({
+    let mut body = json!({
         "model": model,
         "max_tokens": max_tokens.unwrap_or(1024),
-        "messages": [{ "role": "user", "content": prompt }],
         "stream": true,
-    })
+    });
+    // Prompt caching (B5): put the stable instruction prefix in a cached `system`
+    // block and keep the per-call fenced passage as the user message. Falls back to
+    // a single user message when there's no fence to split on.
+    match crate::ai_stub::cache_split(prompt) {
+        Some((stable, volatile)) if !stable.is_empty() => {
+            body["system"] = json!([{
+                "type": "text",
+                "text": stable,
+                "cache_control": { "type": "ephemeral" }
+            }]);
+            body["messages"] = json!([{ "role": "user", "content": volatile }]);
+        }
+        _ => {
+            body["messages"] = json!([{ "role": "user", "content": prompt }]);
+        }
+    }
+    body
 }
 
 async fn run_anthropic(
@@ -1378,6 +1394,25 @@ mod tests {
             fallback["max_tokens"], 1024,
             "a capless caller falls back to a generous floor, never a tighter one"
         );
+    }
+
+    #[test]
+    fn anthropic_body_caches_the_stable_instruction_prefix() {
+        let prompt = "You are a tutor. Instructions here.\n\n<<<UNTRUSTED_PASSAGE>>>\n> hi there\n<<<END_UNTRUSTED_PASSAGE>>>\n";
+        let body = anthropic_body("claude-sonnet-4-6", prompt, Some(200));
+        // The stable instruction prefix becomes a cached system block...
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        let sys = body["system"][0]["text"].as_str().unwrap();
+        assert!(sys.contains("Instructions here"));
+        assert!(
+            !sys.contains("UNTRUSTED_PASSAGE"),
+            "the volatile passage must stay OUT of the cached prefix"
+        );
+        // ...and the fenced passage is the per-call user message.
+        let user = body["messages"][0]["content"].as_str().unwrap();
+        assert!(user.contains("UNTRUSTED_PASSAGE") && user.contains("hi there"));
+        // No fence → a single user message, no system block.
+        assert!(anthropic_body("claude-sonnet-4-6", "hi", Some(200)).get("system").is_none());
     }
 
     #[test]

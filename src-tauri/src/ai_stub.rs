@@ -190,6 +190,22 @@ pub fn safety_preamble() -> String {
     )
 }
 
+/// Split a built prompt at the untrusted-content fence into
+/// `(stable_prefix, volatile_passage)` for Anthropic prompt caching: the role +
+/// safety preamble + instructions before the fence are identical across calls in
+/// a mode (cacheable); the fenced passage is per-call.
+///
+/// Honest caveat: with the copyright-safe, selection-only design the content is
+/// always *inside* the fence (volatile), so the stable prefix is just the
+/// instructions — a few hundred tokens, usually below Anthropic's ~1024-token
+/// cache minimum. This wires caching correctly and future-proofs it, but it is
+/// not a guaranteed COGS cut today. Returns None when there is no fence.
+pub fn cache_split(prompt: &str) -> Option<(&str, &str)> {
+    prompt
+        .find(FENCE_OPEN)
+        .map(|i| (prompt[..i].trim_end(), &prompt[i..]))
+}
+
 fn fenced_passage(selection: &str) -> String {
     // The quote-block style ("> line") inside the fence keeps the preview
     // readable while FENCE_OPEN/FENCE_CLOSE carry the untrusted-content boundary.
