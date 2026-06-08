@@ -203,7 +203,22 @@ fn detect_chapters(body: &str) -> Vec<(String, usize, usize)> {
         let recurs_in_body = headings[run..]
             .iter()
             .any(|h| heading_key(&h.2) == last_key);
-        if !recurs_in_body {
+        // Recover the run's last entry as a real opening section ONLY when it is
+        // not a contents-list tail. A leaked TOC tail is the HIGHEST chapter
+        // number — or a terminal "Epilogue" — standing BEFORE the real opening
+        // chapters ("CHAPTER XXVII"/"CHAPTER IX" before "CHAPTER I", "Epilogue"
+        // before "CHAPTER 1"). Truncated / label-varied text can hide the
+        // recurrence, so this natural-order check is what catches those leaks;
+        // the epistolary case (a real "Letter 3" flush against the list) stays in
+        // order and is still recovered.
+        let last_label = &headings[run - 1].2;
+        let later_min = headings[run..]
+            .iter()
+            .filter_map(|h| chapter_number(&h.2))
+            .min();
+        let out_of_order = last_label.trim().to_uppercase().starts_with("EPILOGUE")
+            || matches!((chapter_number(last_label), later_min), (Some(l), Some(m)) if l > m);
+        if !recurs_in_body && !out_of_order {
             keep[run - 1] = true;
         }
     }
@@ -331,7 +346,11 @@ fn is_chapter_heading(line: &str) -> bool {
     // "Epilogue"/"Prologue" line is deduped out of the front-matter region (so a
     // book's opening section is labelled from its real first line, not a stray
     // TOC entry), and the real Epilogue/Prologue becomes its own section.
-    if (upper.starts_with("EPILOGUE") || upper.starts_with("PROLOGUE"))
+    if (upper.starts_with("EPILOGUE")
+        || upper.starts_with("PROLOGUE")
+        || upper.starts_with("PREFACE")
+        || upper.starts_with("FOREWORD")
+        || upper.starts_with("INTRODUCTION"))
         && line.split_whitespace().count() <= 3
     {
         return true;
@@ -360,6 +379,53 @@ fn heading_key(label: &str) -> String {
         }
     }
     l.split('.').next().unwrap_or(&l).trim().to_string()
+}
+
+/// The ordinal of a NUMBERED heading ("CHAPTER XXVII" → 27, "BOOK II" → 2,
+/// "Letter 3" → 3). None for unnumbered headings (a preface, a title, Epilogue).
+/// Used to spot a leaked contents-list tail — a high chapter number standing
+/// before the real opening chapters.
+fn chapter_number(label: &str) -> Option<u32> {
+    let up = label.trim().to_uppercase();
+    for kw in ["CHAPTER ", "CHAP. ", "BOOK ", "PART ", "LETTER ", "CANTO "] {
+        if let Some(rest) = up.strip_prefix(kw) {
+            let tok = rest
+                .split(|c: char| !c.is_alphanumeric())
+                .find(|s| !s.is_empty())?;
+            if let Ok(n) = tok.parse::<u32>() {
+                return Some(n);
+            }
+            return roman_to_u32(tok);
+        }
+    }
+    None
+}
+
+/// Parse a roman numeral ("XXVII" → 27). None if it isn't well-formed roman.
+fn roman_to_u32(s: &str) -> Option<u32> {
+    let val = |c: char| match c {
+        'I' => 1,
+        'V' => 5,
+        'X' => 10,
+        'L' => 50,
+        'C' => 100,
+        'D' => 500,
+        'M' => 1000,
+        _ => 0,
+    };
+    let cs: Vec<i64> = s.chars().map(val).collect();
+    if cs.is_empty() || cs.contains(&0) {
+        return None;
+    }
+    let mut total = 0i64;
+    for i in 0..cs.len() {
+        if i + 1 < cs.len() && cs[i] < cs[i + 1] {
+            total -= cs[i];
+        } else {
+            total += cs[i];
+        }
+    }
+    u32::try_from(total).ok().filter(|&n| n > 0)
 }
 
 /// Render 1..=100 as a canonical roman numeral (used to reject non-canonical
