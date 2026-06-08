@@ -488,6 +488,55 @@ pub fn cmd_model_catalog(provider: String) -> Vec<crate::ai_providers::ModelInfo
     crate::ai_providers::model_catalog(crate::settings::AiProvider::from_str(&provider))
 }
 
+/// Record token usage + computed cost for a finished AI request (Epic B3). The
+/// streaming layer accumulates the provider's usage block; this persists it as
+/// the COGS row the usage panel (B4) reads. Idempotent per request_id.
+#[tauri::command]
+pub fn cmd_finalize_ai_request(
+    request_id: String,
+    provider: String,
+    model: String,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: Option<u64>,
+    cache_creation_tokens: Option<u64>,
+    state: State<DbState>,
+) -> Result<i64, AppError> {
+    use crate::ai_providers::{cost_micros, TokenUsage};
+    let usage = TokenUsage {
+        input_tokens,
+        output_tokens,
+        cache_read_tokens: cache_read_tokens.unwrap_or(0),
+        cache_creation_tokens: cache_creation_tokens.unwrap_or(0),
+    };
+    let cost = cost_micros(settings::AiProvider::from_str(&provider), &model, &usage);
+    let conn = state.0.lock()?;
+    conn.execute(
+        "INSERT INTO ai_request_usage
+           (request_id, provider, model, input_tokens, output_tokens,
+            cache_read_tokens, cache_creation_tokens, cost_usd_micros, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
+         ON CONFLICT(request_id) DO UPDATE SET
+           input_tokens = excluded.input_tokens,
+           output_tokens = excluded.output_tokens,
+           cache_read_tokens = excluded.cache_read_tokens,
+           cache_creation_tokens = excluded.cache_creation_tokens,
+           cost_usd_micros = excluded.cost_usd_micros",
+        rusqlite::params![
+            request_id,
+            provider,
+            model,
+            input_tokens as i64,
+            output_tokens as i64,
+            usage.cache_read_tokens as i64,
+            usage.cache_creation_tokens as i64,
+            cost,
+        ],
+    )
+    .map_err(AppError::from)?;
+    Ok(cost)
+}
+
 /// List selectable models for a provider. Local lists the server's `/models`;
 /// cloud providers return a small curated set (the model field is also free-text).
 #[tauri::command]

@@ -74,6 +74,74 @@ pub fn model_price(provider: AiProvider, model: &str) -> Option<(f64, f64)> {
         .map(|m| (m.input_per_mtok, m.output_per_mtok))
 }
 
+/// Token usage for one AI request, accumulated from a provider's stream (B3).
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+}
+
+/// Fold one Anthropic SSE line into a running usage tally. `message_start` carries
+/// input + cache token counts; `message_delta` carries the running output_tokens.
+pub fn accumulate_anthropic_usage(line: &str, acc: &mut TokenUsage) {
+    let Some(payload) = sse_data_payload(line) else {
+        return;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return;
+    };
+    match v.get("type").and_then(|x| x.as_str()) {
+        Some("message_start") => {
+            if let Some(u) = v.pointer("/message/usage") {
+                let g = |k: &str| u.get(k).and_then(|x| x.as_u64());
+                acc.input_tokens = g("input_tokens").unwrap_or(acc.input_tokens);
+                acc.cache_read_tokens = g("cache_read_input_tokens").unwrap_or(acc.cache_read_tokens);
+                acc.cache_creation_tokens =
+                    g("cache_creation_input_tokens").unwrap_or(acc.cache_creation_tokens);
+            }
+        }
+        Some("message_delta") => {
+            if let Some(o) = v.pointer("/usage/output_tokens").and_then(|x| x.as_u64()) {
+                acc.output_tokens = o;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Parse OpenAI's terminal usage chunk (`stream_options.include_usage`): the final
+/// frame carries `usage: { prompt_tokens, completion_tokens }`. None if absent
+/// (e.g. an LM Studio server that doesn't report usage).
+pub fn parse_openai_usage(value: &serde_json::Value) -> Option<TokenUsage> {
+    let u = value.get("usage")?;
+    Some(TokenUsage {
+        input_tokens: u.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
+        output_tokens: u.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
+        cache_read_tokens: u
+            .pointer("/prompt_tokens_details/cached_tokens")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0),
+        cache_creation_tokens: 0,
+    })
+}
+
+/// Cost of a request in integer micro-dollars (no float in the DB). Because the
+/// price is $/Mtok, `tokens × price` already yields micro-dollars. Cache reads
+/// bill at 0.1× and 5-minute cache writes at 1.25× the input rate (Anthropic).
+/// Uncatalogued models fall back to the provider's default price (never $0).
+pub fn cost_micros(provider: AiProvider, model: &str, u: &TokenUsage) -> i64 {
+    let Some((inp, out)) = model_price(provider, model) else {
+        return 0;
+    };
+    let micros = u.input_tokens as f64 * inp
+        + u.output_tokens as f64 * out
+        + u.cache_read_tokens as f64 * inp * 0.10
+        + u.cache_creation_tokens as f64 * inp * 1.25;
+    micros.round() as i64
+}
+
 const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
@@ -1041,6 +1109,43 @@ mod tests {
         let opus = cat.iter().find(|m| m.id.contains("opus")).unwrap();
         let sonnet = cat.iter().find(|m| m.id.contains("sonnet")).unwrap();
         assert!(opus.input_per_mtok >= sonnet.input_per_mtok * 4.0);
+    }
+
+    #[test]
+    fn cost_micros_sonnet_matches_hand_math() {
+        let u = TokenUsage { input_tokens: 4750, output_tokens: 400, ..Default::default() };
+        // 4750·$3 + 400·$15 per Mtok = 20,250 micro-dollars = $0.02025 (the memo's mid call).
+        assert_eq!(cost_micros(AiProvider::Anthropic, "claude-sonnet-4-6", &u), 20_250);
+        // Opus costs the same tokens ~5× more.
+        let opus = cost_micros(AiProvider::Anthropic, "claude-opus-4-8", &u);
+        assert!(opus >= cost_micros(AiProvider::Anthropic, "claude-sonnet-4-6", &u) * 4);
+    }
+
+    #[test]
+    fn anthropic_usage_accumulates_from_message_start_and_delta() {
+        let mut acc = TokenUsage::default();
+        accumulate_anthropic_usage(
+            r#"data: {"type":"message_start","message":{"usage":{"input_tokens":4500,"cache_read_input_tokens":120}}}"#,
+            &mut acc,
+        );
+        accumulate_anthropic_usage(r#"data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}"#, &mut acc);
+        accumulate_anthropic_usage(r#"data: {"type":"message_delta","usage":{"output_tokens":380}}"#, &mut acc);
+        assert_eq!(acc.input_tokens, 4500);
+        assert_eq!(acc.cache_read_tokens, 120);
+        assert_eq!(acc.output_tokens, 380);
+    }
+
+    #[test]
+    fn openai_usage_parsed_from_terminal_chunk() {
+        let v: serde_json::Value =
+            serde_json::from_str(r#"{"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":300}}"#)
+                .unwrap();
+        let u = parse_openai_usage(&v).unwrap();
+        assert_eq!(u.input_tokens, 1200);
+        assert_eq!(u.output_tokens, 300);
+        // A chunk without usage (a normal delta) yields None.
+        let no: serde_json::Value = serde_json::from_str(r#"{"choices":[{"delta":{"content":"x"}}]}"#).unwrap();
+        assert!(parse_openai_usage(&no).is_none());
     }
 
     #[test]

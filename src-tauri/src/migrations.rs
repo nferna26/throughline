@@ -71,6 +71,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "notes.anchor_start + anchor_end + anchored_text (marginalia anchoring)",
         up: v006_notes_anchor,
     },
+    Migration {
+        version: "v007_ai_request_usage",
+        description: "ai_request_usage: per-request token counts + computed cost (B3 COGS)",
+        up: v007_ai_request_usage,
+    },
 ];
 
 /// Apply every migration that is not already recorded in `schema_migrations`.
@@ -262,6 +267,26 @@ fn v006_notes_anchor(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "notes", "anchor_start", "TEXT")?;
     add_column_if_missing(conn, "notes", "anchor_end", "TEXT")?;
     add_column_if_missing(conn, "notes", "anchored_text", "TEXT")?;
+    Ok(())
+}
+
+fn v007_ai_request_usage(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS ai_request_usage (
+          request_id TEXT PRIMARY KEY,
+          provider TEXT,
+          model TEXT,
+          input_tokens INTEGER,
+          output_tokens INTEGER,
+          cache_read_tokens INTEGER DEFAULT 0,
+          cache_creation_tokens INTEGER DEFAULT 0,
+          cost_usd_micros INTEGER,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (request_id) REFERENCES ai_requests(id)
+        );
+        "#,
+    )?;
     Ok(())
 }
 
