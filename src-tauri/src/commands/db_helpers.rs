@@ -199,9 +199,12 @@ pub fn fetch_plan_for_book(
     conn: &Connection,
     book_id: &str,
 ) -> rusqlite::Result<Option<ReadingPlan>> {
+    // Prefer the live (lifecycle='active'), non-soft-deleted plan; fall back to the
+    // most recent. Multiple plans + "Let go" soft-delete depend on this ordering.
     let mut stmt = conn.prepare(
         "SELECT id, book_id, start_date, target_finish_date, daily_target_units, days_per_week, catchup_mode, status, activated_at, original_finish_date
-         FROM reading_plans WHERE book_id = ?1 ORDER BY start_date DESC LIMIT 1",
+         FROM reading_plans WHERE book_id = ?1 AND deleted_at IS NULL
+         ORDER BY (lifecycle = 'active') DESC, start_date DESC LIMIT 1",
     )?;
     let mut rows = stmt.query(params![book_id])?;
     if let Some(row) = rows.next()? {
