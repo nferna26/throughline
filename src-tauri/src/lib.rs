@@ -69,7 +69,7 @@ use crate::db::DbState;
 ///   new imports) — a return-shape change.
 /// - 2 → 3: cloud AI command surface (provider keys, model listing, Codex device
 ///   login, request history) reshaped the AI args/returns.
-pub const COMMAND_API_VERSION: u32 = 3;
+pub const COMMAND_API_VERSION: u32 = 4;
 
 /// Open the database, recovering from a CORRUPT file rather than crash-looping on
 /// launch (a permanently-unusable app — the worst outcome for a paying user). A
