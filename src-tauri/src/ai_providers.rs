@@ -1433,7 +1433,9 @@ mod tests {
         let user = body["messages"][0]["content"].as_str().unwrap();
         assert!(user.contains("UNTRUSTED_PASSAGE") && user.contains("hi there"));
         // No fence → a single user message, no system block.
-        assert!(anthropic_body("claude-sonnet-4-6", "hi", Some(200)).get("system").is_none());
+        assert!(anthropic_body("claude-sonnet-4-6", "hi", Some(200))
+            .get("system")
+            .is_none());
     }
 
     #[test]

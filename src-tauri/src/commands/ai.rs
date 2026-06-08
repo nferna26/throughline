@@ -873,7 +873,8 @@ mod tests {
             ..Default::default()
         };
         // 4750·$3 + 400·$15 per Mtok = 20,250 micro-dollars.
-        let cost = super::write_usage_row(&conn, "req1", "anthropic", "claude-sonnet-4-6", &usage).unwrap();
+        let cost = super::write_usage_row(&conn, "req1", "anthropic", "claude-sonnet-4-6", &usage)
+            .unwrap();
         assert_eq!(cost, 20_250);
         let (it, ot, cm): (i64, i64, i64) = conn
             .query_row(
@@ -889,15 +890,23 @@ mod tests {
     fn cloud_consent_gate_blocks_until_confirmed() {
         let conn = Connection::open_in_memory().unwrap();
         crate::migrations::apply_pending(&conn).unwrap();
-        let confirmed =
-            |c: &Connection| settings::get_string(c, settings::KEY_FIRST_CLOUD_CONFIRMED_AT).is_some();
+        let confirmed = |c: &Connection| {
+            settings::get_string(c, settings::KEY_FIRST_CLOUD_CONFIRMED_AT).is_some()
+        };
         // Remote providers gate (until confirmed); local never gates.
         assert!(settings::AiProvider::Anthropic.is_remote());
         assert!(!settings::AiProvider::Local.is_remote());
         assert!(!confirmed(&conn), "unconfirmed by default → the gate fires");
-        settings::set_string(&conn, settings::KEY_FIRST_CLOUD_CONFIRMED_AT, "2026-06-08T00:00:00Z")
-            .unwrap();
-        assert!(confirmed(&conn), "confirmed after cmd_confirm_cloud_send → gate clears");
+        settings::set_string(
+            &conn,
+            settings::KEY_FIRST_CLOUD_CONFIRMED_AT,
+            "2026-06-08T00:00:00Z",
+        )
+        .unwrap();
+        assert!(
+            confirmed(&conn),
+            "confirmed after cmd_confirm_cloud_send → gate clears"
+        );
     }
 
     /// The brevity contract is cross-provider: the cap that `cmd_ai_ask` threads
