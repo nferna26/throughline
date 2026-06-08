@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import TextReader, { clampToolbarPosition, clampPanelWidth, splitParagraphs } from "./TextReader";
+import TextReader, { clampToolbarPosition, clampPanelWidth, panelDragOutcome, DEFAULT_PANEL_WIDTH, splitParagraphs } from "./TextReader";
 import type { TodayCard, BookSection, Note } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -258,12 +258,28 @@ describe("clampPanelWidth (companion side panel)", () => {
   it("keeps a normal width unchanged", () => {
     expect(clampPanelWidth(320)).toBe(320);
   });
-  it("floors at 240 and caps at 560", () => {
-    expect(clampPanelWidth(100)).toBe(240);
+  it("floors at 200 and caps at 560", () => {
+    expect(clampPanelWidth(100)).toBe(200);
     expect(clampPanelWidth(9000)).toBe(560);
   });
-  it("falls back to 320 on a non-finite value", () => {
-    expect(clampPanelWidth(NaN)).toBe(320);
+  it("falls back to the default on a non-finite value", () => {
+    expect(clampPanelWidth(NaN)).toBe(DEFAULT_PANEL_WIDTH);
+  });
+});
+
+describe("panelDragOutcome (slide-to-collapse)", () => {
+  it("resizes within bounds while the drag stays at/above the minimum", () => {
+    expect(panelDragOutcome(360)).toEqual({ kind: "resize", width: 360 });
+    expect(panelDragOutcome(200)).toEqual({ kind: "resize", width: 200 });
+    expect(panelDragOutcome(9000)).toEqual({ kind: "resize", width: 560 });
+  });
+  it("collapses once the divider is dragged past the minimum (slide closed)", () => {
+    expect(panelDragOutcome(199)).toEqual({ kind: "collapse" });
+    expect(panelDragOutcome(40)).toEqual({ kind: "collapse" });
+    expect(panelDragOutcome(0)).toEqual({ kind: "collapse" });
+  });
+  it("collapses on a non-finite width rather than resizing", () => {
+    expect(panelDragOutcome(NaN)).toEqual({ kind: "collapse" });
   });
 });
 

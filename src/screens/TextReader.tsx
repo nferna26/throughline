@@ -128,19 +128,34 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   useEffect(() => { localStorage.setItem("rg.panelWidth", String(panelWidth)); }, [panelWidth]);
 
   // Drag the resizer: panel width = window-right-edge minus pointer x, clamped.
-  const startPanelDrag = useCallback((e: React.MouseEvent) => {
+  const startPanelDrag = useCallback((e: React.MouseEvent, opts?: { opening?: boolean }) => {
     e.preventDefault();
     draggingRef.current = true;
-    const onMove = (ev: MouseEvent) => {
-      if (!draggingRef.current || !readerRef.current) return;
-      const right = readerRef.current.getBoundingClientRect().right;
-      setPanelWidth(clampPanelWidth(right - ev.clientX));
-    };
-    const onUp = () => {
+    // Grabbing the collapsed edge first re-opens the margin; this same drag then
+    // sizes it (so it never re-collapses out from under the opening gesture).
+    const opening = !!opts?.opening;
+    if (opening) dispatchMargin("show");
+    const cleanup = () => {
       draggingRef.current = false;
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
+    const onMove = (ev: MouseEvent) => {
+      if (!draggingRef.current || !readerRef.current) return;
+      const right = readerRef.current.getBoundingClientRect().right;
+      const outcome = panelDragOutcome(right - ev.clientX);
+      // Slide the divider past the minimum → collapse to the clean column, and
+      // reset the width so the Margin toggle reopens at a comfortable default
+      // (never while opening from the edge — that drag only sizes the panel up).
+      if (outcome.kind === "collapse" && !opening) {
+        setPanelWidth(DEFAULT_PANEL_WIDTH);
+        dispatchMargin("hide");
+        cleanup();
+        return;
+      }
+      setPanelWidth(outcome.kind === "resize" ? outcome.width : MIN_PANEL_WIDTH);
+    };
+    const onUp = () => cleanup();
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   }, []);
@@ -742,6 +757,17 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
                 />
               ))}
         </aside>
+        {/* Collapsed: a slim edge grab to slide the margin back open. */}
+        {!marginIsVisible && (
+          <div
+            className="tl-margin-reopen"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Open the margin"
+            title="Drag to open the margin"
+            onMouseDown={(e) => startPanelDrag(e, { opening: true })}
+          />
+        )}
       </div>
 
       {sel && (
@@ -901,11 +927,28 @@ function charOffsetWithinSection(node: Node, offset: number, col: HTMLElement): 
  *   - selecting the very top line leaves no room above it → when `y` is smaller
  *     than the toolbar height, flip the toolbar BELOW the selection and report
  *     `below: true` so the caller can drop the upward translate. */
+/** Companion side-panel width bounds (px). Dragging the divider below MIN
+ *  collapses the margin back to the clean reading column. */
+export const MIN_PANEL_WIDTH = 200;
+export const MAX_PANEL_WIDTH = 560;
+export const DEFAULT_PANEL_WIDTH = 320;
+
 /** Clamp the companion side-panel width to a sane range (px). Exported for the
  *  width persistence read + unit tests. */
 export function clampPanelWidth(w: number): number {
-  if (!Number.isFinite(w)) return 320;
-  return Math.min(Math.max(Math.round(w), 240), 560);
+  if (!Number.isFinite(w)) return DEFAULT_PANEL_WIDTH;
+  return Math.min(Math.max(Math.round(w), MIN_PANEL_WIDTH), MAX_PANEL_WIDTH);
+}
+
+/** Outcome of a resize drag at a proposed raw width (px from the window's right
+ *  edge to the cursor). Below the minimum → collapse to the clean column;
+ *  otherwise resize within bounds. */
+export type PanelDrag = { kind: "collapse" } | { kind: "resize"; width: number };
+export function panelDragOutcome(rawWidth: number): PanelDrag {
+  if (!Number.isFinite(rawWidth) || rawWidth < MIN_PANEL_WIDTH) {
+    return { kind: "collapse" };
+  }
+  return { kind: "resize", width: clampPanelWidth(rawWidth) };
 }
 
 export function clampToolbarPosition(
