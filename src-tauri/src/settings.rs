@@ -36,7 +36,9 @@ pub const DEFAULT_AI_MODEL: &str = "";
 /// Best-model defaults at time of writing; the user can override, and the
 /// connection test self-selects the newest from the live model list.
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.5";
-pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-4-8";
+// Sonnet is the bundled default: ~5× cheaper than Opus per token, the right
+// quality/cost point for tutor lenses. Opus/Haiku are opt-in via the model picker.
+pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
 pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.5";
 
 /// Which AI surface the reader chose. `None` means not yet chosen (run
@@ -605,5 +607,16 @@ mod tests {
             );
             assert!(p.remote_host().is_some(), "{p:?} must expose a remote host");
         }
+    }
+
+    #[test]
+    fn anthropic_default_is_sonnet_not_opus() {
+        // Company-paid economics: Opus is ~5× Sonnet's cost. The bundled default
+        // must be Sonnet (any Sonnet version qualifies; Opus/Haiku are opt-in via
+        // the model picker). Guards against silently reverting to Opus.
+        assert!(
+            DEFAULT_ANTHROPIC_MODEL.contains("sonnet"),
+            "Anthropic default must be a Sonnet model, got {DEFAULT_ANTHROPIC_MODEL}"
+        );
     }
 }
