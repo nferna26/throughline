@@ -452,35 +452,91 @@
 .tl-usage-figures span { font-size: 11px; color: var(--tl-muted); }
 .tl-usage-breakdown { display: flex; flex-wrap: wrap; gap: var(--tl-2); margin-top: var(--tl-2); }
 
-/* Plan pill + plans management sheet (Epic A3) */
-.tl-plan-pill {
-  margin-left: var(--tl-2); padding: 1px 8px; font-size: 11px; border-radius: 999px;
-  border: 1px solid var(--tl-line); background: var(--tl-surface); color: var(--tl-muted); cursor: pointer;
-}
-.tl-plan-pill:hover { color: var(--tl-ink); }
-.tl-sheet-backdrop {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.32);
-  display: flex; align-items: center; justify-content: center; z-index: 50; padding: var(--tl-6);
-}
-.tl-plans-sheet {
-  background: var(--tl-bg); border: 1px solid var(--tl-line); border-radius: 14px;
-  width: min(560px, 92vw); max-height: 80vh; overflow: auto; padding: var(--tl-6);
-  box-shadow: 0 20px 60px rgba(0,0,0,0.25);
-}
-.tl-plans-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--tl-4); }
-.tl-plans-head h3 { margin: 0; font-family: var(--tl-serif); font-weight: 500; }
-.tl-plans-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--tl-3); }
-.tl-plan-row { border: 1px solid var(--tl-line); border-radius: 10px; padding: var(--tl-3); display: flex; flex-direction: column; gap: var(--tl-2); }
-.tl-plan-main { display: flex; align-items: center; gap: var(--tl-3); flex-wrap: wrap; font-size: 13px; }
-.tl-plan-badge { text-transform: capitalize; font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--tl-surface); border: 1px solid var(--tl-line); }
-.tl-plan-badge.is-active { color: var(--tl-accent); border-color: var(--tl-accent); }
-.tl-plan-badge.is-paused { color: var(--tl-warn); }
-.tl-plan-badge.is-archived { color: var(--tl-muted); }
-.tl-plan-dates { font-variant-numeric: tabular-nums; }
-.tl-plan-counts { color: var(--tl-muted); }
-.tl-plan-actions { display: flex; gap: var(--tl-2); align-items: center; flex-wrap: wrap; }
-.tl-plan-confirm { display: flex; gap: var(--tl-2); align-items: center; font-size: 12px; color: var(--tl-warn); }
-.tl-danger { color: var(--tl-danger, #b3261e); }
+/* (Old Epic A3 plan-sheet styles removed — superseded by the frontispiece view below.) */
+
+/* ═══ Plans for a book — frontispiece + back-matter (design handoff) ═══ */
+.tl-plans-screen { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--tl-bg); }
+.tl-plans-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.tl-plans-col { width: 100%; max-width: 600px; margin: 0 auto; padding: var(--tl-6) var(--tl-7) 0; }
+.tl-back { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; cursor: pointer; color: var(--tl-muted); font-size: 13px; font-weight: 550; padding: 6px 8px 6px 4px; border-radius: var(--tl-r-sm); }
+.tl-back:hover { color: var(--tl-ink); background: color-mix(in oklab, var(--tl-ink) 6%, transparent); }
+.tl-plans-top { padding-top: calc(var(--tl-6) * var(--tl-density)); }
+.tl-eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--tl-muted); display: flex; align-items: center; gap: var(--tl-2); }
+.tl-eyebrow .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--tl-accent); }
+.tl-plans-book { font-family: var(--tl-serif); font-weight: 500; font-size: 27px; line-height: 1.15; letter-spacing: -0.012em; color: var(--tl-ink); margin: var(--tl-2) 0 2px; }
+.tl-plans-byline { font-size: 14px; color: var(--tl-muted); }
+
+.tl-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; letter-spacing: 0.02em; }
+.tl-state.accent { color: var(--tl-accent); }
+.tl-state.muted { color: var(--tl-muted); }
+.tl-state .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--tl-accent); box-shadow: 0 0 0 3px var(--tl-accent-soft); }
+
+.fp-live { margin-top: calc(var(--tl-6) * var(--tl-density)); padding-bottom: calc(var(--tl-6) * var(--tl-density)); border-bottom: 1px solid var(--tl-line); }
+.fp-live .tl-state { margin-bottom: var(--tl-3); }
+.fp-name { font-family: var(--tl-serif); font-weight: 500; font-size: 24px; line-height: 1.18; color: var(--tl-ink); letter-spacing: -0.008em; }
+.fp-sub { margin-top: 6px; font-size: 13.5px; color: var(--tl-muted); }
+.fp-progress { margin-top: var(--tl-5); }
+.fp-track { height: 4px; border-radius: 99px; background: color-mix(in oklab, var(--tl-ink) 6%, transparent); overflow: hidden; }
+.fp-fill { height: 100%; border-radius: 99px; background: var(--tl-accent); }
+.fp-progress-meta { margin-top: 10px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; font-size: 13.5px; color: var(--tl-muted); }
+.fp-progress-meta .strong { color: var(--tl-ink); font-weight: 600; }
+.fp-progress-meta .sep, .em-meta .sep { width: 3px; height: 3px; border-radius: 50%; background: var(--tl-muted); opacity: 0.5; display: inline-block; }
+.fp-pace { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--tl-warn); }
+.fp-actions { margin-top: var(--tl-5); display: flex; align-items: center; gap: var(--tl-2); }
+
+.fp-history { margin-top: calc(var(--tl-6) * var(--tl-density)); padding-bottom: var(--tl-8); }
+.fp-history-label { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--tl-muted); margin-bottom: var(--tl-2); }
+.fp-entry { padding: var(--tl-4) 0; border-top: 1px solid var(--tl-line); }
+.fp-entry:first-of-type { border-top: none; }
+.fp-entry .em-name { font-family: var(--tl-serif); font-size: 16px; color: var(--tl-ink); line-height: 1.25; }
+.fp-entry .em-meta { margin-top: 4px; font-size: 12.5px; color: var(--tl-muted); display: flex; flex-wrap: wrap; align-items: center; gap: 3px 9px; }
+.fp-entry .em-actions { margin-top: var(--tl-3); display: flex; gap: var(--tl-2); opacity: 0; transform: translateY(-2px); transition: opacity 150ms ease, transform 150ms ease; }
+.fp-entry:hover .em-actions, .fp-entry:focus-within .em-actions { opacity: 1; transform: none; }
+
+.tl-act { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--tl-muted); background: transparent; border: 1px solid var(--tl-line); border-radius: var(--tl-r-pill); padding: 6px 12px; transition: color 150ms ease, border-color 150ms ease, background 150ms ease; }
+.tl-act:hover { color: var(--tl-ink); border-color: color-mix(in oklab, var(--tl-ink) 10%, transparent); }
+.tl-act.accent { color: var(--tl-accent); border-color: var(--tl-accent-line); background: var(--tl-accent-soft); }
+.tl-act.danger:hover { color: var(--tl-alert); border-color: color-mix(in oklab, var(--tl-alert) 34%, transparent); background: color-mix(in oklab, var(--tl-alert) 12%, transparent); }
+
+.tl-plans-empty { margin-top: calc(var(--tl-8) * var(--tl-density)); text-align: center; display: flex; flex-direction: column; align-items: center; gap: var(--tl-3); padding-bottom: var(--tl-9); }
+.tl-plans-empty .mark { width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; border-radius: var(--tl-r-md); border: 1px solid var(--tl-line); color: var(--tl-muted); }
+.tl-plans-empty .big { font-family: var(--tl-serif); font-size: 21px; line-height: 1.2; color: var(--tl-ink); max-width: 300px; }
+.tl-plans-empty p { font-size: 14px; color: var(--tl-muted); max-width: 320px; line-height: 1.55; margin: 0; }
+
+.tl-plans-actionbar { flex-shrink: 0; padding: var(--tl-3) var(--tl-7); border-top: 1px solid var(--tl-line); background: color-mix(in oklab, var(--tl-surface) 55%, var(--tl-bg)); }
+.tl-plans-actionbar-inner { width: 100%; max-width: 600px; margin: 0 auto; display: flex; align-items: center; gap: var(--tl-3); }
+.tl-plans-actionbar .note { font-size: 13px; color: var(--tl-muted); }
+.tl-plans-actionbar .right { margin-left: auto; }
+
+.tl-plans-toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; align-items: center; gap: var(--tl-4); background: var(--tl-ink); color: var(--tl-bg); border-radius: var(--tl-r-pill); padding: 10px 12px 10px 18px; box-shadow: var(--tl-shadow-pop); font-size: 13px; z-index: 70; }
+.tl-plans-toast button { font-size: 13px; font-weight: 650; color: var(--tl-bg); background: color-mix(in oklab, var(--tl-bg) 18%, transparent); border: none; border-radius: var(--tl-r-pill); padding: 6px 13px; cursor: pointer; }
+.tl-plans-toast button:hover { background: color-mix(in oklab, var(--tl-bg) 28%, transparent); }
+
+/* "Plans · N earlier" pill on Today (only when a book has >1 plan) */
+.tl-plans-link { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--tl-muted); background: transparent; border: 1px solid var(--tl-line); border-radius: var(--tl-r-pill); padding: 4px 11px; }
+.tl-plans-link:hover { color: var(--tl-ink); border-color: color-mix(in oklab, var(--tl-ink) 10%, transparent); }
+.tl-plans-link .cnt { color: var(--tl-accent); }
+
+/* Decision moment — "you already have a plan" (focus-trapped radio dialog) */
+.tl-scrim { position: fixed; inset: 0; background: color-mix(in oklab, var(--tl-ink) 32%, transparent); backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; padding: var(--tl-6); z-index: 80; }
+.tl-replan-sheet { width: 100%; max-width: 460px; background: var(--tl-surface); border: 1px solid var(--tl-line); border-radius: var(--tl-r-lg); box-shadow: var(--tl-shadow-pop); padding: var(--tl-7) var(--tl-7) var(--tl-5); }
+.tl-replan-sheet h3 { font-family: var(--tl-serif); font-weight: 500; font-size: 21px; line-height: 1.25; color: var(--tl-ink); margin: 0; letter-spacing: -0.008em; }
+.tl-replan-sheet .ctx { margin: var(--tl-3) 0 var(--tl-5); font-size: 14px; line-height: 1.55; color: var(--tl-muted); }
+.tl-replan-sheet .ctx b { color: var(--tl-ink); font-weight: 600; }
+.tl-options { display: flex; flex-direction: column; gap: var(--tl-2); }
+.tl-option { display: flex; align-items: flex-start; gap: var(--tl-3); text-align: left; cursor: pointer; background: var(--tl-bg); border: 1px solid var(--tl-line); border-radius: var(--tl-r-md); padding: 13px var(--tl-4); transition: border-color 150ms ease, background 150ms ease; }
+.tl-option:hover { border-color: color-mix(in oklab, var(--tl-ink) 10%, transparent); }
+.tl-option[aria-checked="true"] { border-color: var(--tl-accent-line); background: var(--tl-accent-soft); }
+.tl-radio { width: 17px; height: 17px; border-radius: 50%; border: 1.5px solid var(--tl-line); flex-shrink: 0; margin-top: 1px; position: relative; }
+.tl-option[aria-checked="true"] .tl-radio { border-color: var(--tl-accent); }
+.tl-option[aria-checked="true"] .tl-radio::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--tl-accent); }
+.tl-option .o-t { font-size: 14px; font-weight: 600; color: var(--tl-ink); display: block; }
+.tl-option .o-s { font-size: 12.5px; color: var(--tl-muted); margin-top: 3px; line-height: 1.45; display: block; }
+/* On the selected (accent-soft) row, muted text fails contrast — darken it (WCAG-AA). */
+.tl-option[aria-checked="true"] .o-s { color: color-mix(in oklab, var(--tl-ink) 80%, transparent); }
+.tl-replan-foot { display: flex; align-items: center; gap: var(--tl-3); margin-top: var(--tl-5); }
+.tl-replan-foot .keep { font-size: 12.5px; color: var(--tl-muted); }
+.tl-replan-foot .right { margin-left: auto; display: flex; gap: var(--tl-2); }
 
 /* ── Book Setup Sheet ─────────────────────────────────────────────────── */
 .tl-setup { flex: 1; display: flex; justify-content: center; padding: var(--tl-7) var(--tl-7) var(--tl-8); overflow-y: auto; }

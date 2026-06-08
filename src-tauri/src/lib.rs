@@ -69,7 +69,7 @@ use crate::db::DbState;
 ///   new imports) — a return-shape change.
 /// - 2 → 3: cloud AI command surface (provider keys, model listing, Codex device
 ///   login, request history) reshaped the AI args/returns.
-pub const COMMAND_API_VERSION: u32 = 4;
+pub const COMMAND_API_VERSION: u32 = 5;
 
 /// Open the database, recovering from a CORRUPT file rather than crash-looping on
 /// launch (a permanently-unusable app — the worst outcome for a paying user). A
@@ -125,6 +125,12 @@ pub fn run() {
             Ok(_) => {}
             Err(e) => eprintln!("[tl] ai_retention: sweep failed: {}", e),
         }
+    }
+    // Purge plans "let go" longer than 30 days ago, with their sessions + notes.
+    match commands::plans::sweep_deleted_plans(&conn, 30) {
+        Ok(n) if n > 0 => eprintln!("[tl] plan_retention: purged {} let-go plan(s)", n),
+        Ok(_) => {}
+        Err(e) => eprintln!("[tl] plan_retention: sweep failed: {}", e),
     }
     let state = DbState(Mutex::new(conn));
 
@@ -185,10 +191,12 @@ pub fn run() {
             commands::settings_cmds::cmd_check_export_path,
             commands::plans::cmd_list_plans_for_book,
             commands::plans::cmd_get_active_plan,
+            commands::plans::cmd_start_new_plan,
             commands::plans::cmd_pause_plan,
             commands::plans::cmd_resume_plan,
             commands::plans::cmd_archive_plan,
             commands::plans::cmd_delete_plan,
+            commands::plans::cmd_restore_plan,
             commands::settings_cmds::cmd_set_ai_settings,
             commands::settings_cmds::cmd_set_ai_key,
             commands::settings_cmds::cmd_clear_ai_key,

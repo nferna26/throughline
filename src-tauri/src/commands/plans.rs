@@ -13,6 +13,7 @@ use crate::error::AppError;
 pub struct PlanSummary {
     pub id: String,
     pub book_id: String,
+    pub name: String,
     pub lifecycle: String,
     pub status: String,
     pub start_date: String,
@@ -20,27 +21,70 @@ pub struct PlanSummary {
     pub paused_days_total: i64,
     pub session_count: i64,
     pub note_count: i64,
+    /// Progress snapshot taken when the plan was paused/archived (back-matter).
+    /// The live plan's current day/percent/pace comes from cmd_today instead.
+    pub reached_percent: Option<i64>,
 }
 
-const PLAN_SELECT: &str = "SELECT p.id, p.book_id, p.lifecycle, p.status, p.start_date,
-        p.target_finish_date, p.paused_days_total,
+const PLAN_SELECT: &str = "SELECT p.id, p.book_id, COALESCE(p.name, ''), p.lifecycle, p.status,
+        p.start_date, p.target_finish_date, p.paused_days_total,
         (SELECT COUNT(*) FROM reading_sessions s WHERE s.plan_id = p.id),
         (SELECT COUNT(*) FROM notes n WHERE n.session_id IN
-           (SELECT id FROM reading_sessions s WHERE s.plan_id = p.id))
+           (SELECT id FROM reading_sessions s WHERE s.plan_id = p.id)),
+        p.reached_percent
      FROM reading_plans p";
 
 fn row_to_summary(r: &rusqlite::Row) -> rusqlite::Result<PlanSummary> {
     Ok(PlanSummary {
         id: r.get(0)?,
         book_id: r.get(1)?,
-        lifecycle: r.get(2)?,
-        status: r.get(3)?,
-        start_date: r.get(4)?,
-        target_finish_date: r.get(5)?,
-        paused_days_total: r.get(6)?,
-        session_count: r.get(7)?,
-        note_count: r.get(8)?,
+        name: r.get(2)?,
+        lifecycle: r.get(3)?,
+        status: r.get(4)?,
+        start_date: r.get(5)?,
+        target_finish_date: r.get(6)?,
+        paused_days_total: r.get(7)?,
+        session_count: r.get(8)?,
+        note_count: r.get(9)?,
+        reached_percent: r.get(10)?,
     })
+}
+
+/// Snapshot the book's current progress % onto a plan (for back-matter display)
+/// at the moment it stops being live — pause or archive.
+fn snapshot_reached_percent(conn: &rusqlite::Connection, plan_id: &str) -> rusqlite::Result<()> {
+    let book_id: String = match conn.query_row(
+        "SELECT book_id FROM reading_plans WHERE id = ?1",
+        [plan_id],
+        |r| r.get(0),
+    ) {
+        Ok(b) => b,
+        Err(_) => return Ok(()),
+    };
+    let assignable: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM book_sections WHERE book_id = ?1 AND assignable = 1",
+            [&book_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let completed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM section_progress WHERE book_id = ?1 AND completed_at IS NOT NULL",
+            [&book_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let pct = if assignable > 0 {
+        (completed * 100 / assignable).clamp(0, 100)
+    } else {
+        0
+    };
+    conn.execute(
+        "UPDATE reading_plans SET reached_percent = ?1 WHERE id = ?2",
+        rusqlite::params![pct, plan_id],
+    )?;
+    Ok(())
 }
 
 /// Every plan for a book, active first, with attached session + note counts so the
@@ -52,13 +96,27 @@ pub fn cmd_list_plans_for_book(
 ) -> Result<Vec<PlanSummary>, AppError> {
     let conn = state.0.lock()?;
     let sql = format!(
-        "{PLAN_SELECT} WHERE p.book_id = ?1 ORDER BY (p.lifecycle = 'active') DESC, p.start_date DESC"
+        "{PLAN_SELECT} WHERE p.book_id = ?1 AND p.deleted_at IS NULL
+         ORDER BY (p.lifecycle = 'active') DESC, p.start_date DESC"
     );
     let mut stmt = conn.prepare(&sql).map_err(AppError::from)?;
     let rows = stmt
         .query_map([&book_id], row_to_summary)
         .map_err(AppError::from)?;
     Ok(rows.filter_map(|x| x.ok()).collect())
+}
+
+/// Create a fresh plan-ready plan for a book (a new "attempt"). The caller decides
+/// what happens to any existing live plan (keep / pause / replace) first; this just
+/// inserts the new one, which becomes the live plan (lifecycle defaults to active).
+#[tauri::command]
+pub fn cmd_start_new_plan(book_id: String, state: State<DbState>) -> Result<(), AppError> {
+    let conn = state.0.lock()?;
+    let sections =
+        crate::commands::db_helpers::list_sections(&conn, &book_id).map_err(AppError::from)?;
+    let plan = crate::plan::build_default_plan(&book_id, &sections);
+    crate::commands::db_helpers::insert_plan(&conn, &plan).map_err(AppError::from)?;
+    Ok(())
 }
 
 /// The book's live plan (the most recent `lifecycle = 'active'`), if any.
@@ -69,7 +127,7 @@ pub fn cmd_get_active_plan(
 ) -> Result<Option<PlanSummary>, AppError> {
     let conn = state.0.lock()?;
     let sql = format!(
-        "{PLAN_SELECT} WHERE p.book_id = ?1 AND p.lifecycle = 'active'
+        "{PLAN_SELECT} WHERE p.book_id = ?1 AND p.lifecycle = 'active' AND p.deleted_at IS NULL
          ORDER BY p.start_date DESC LIMIT 1"
     );
     let r = conn.query_row(&sql, [&book_id], row_to_summary).ok();
@@ -86,6 +144,7 @@ pub fn cmd_pause_plan(plan_id: String, state: State<DbState>) -> Result<(), AppE
         [&plan_id],
     )
     .map_err(AppError::from)?;
+    snapshot_reached_percent(&conn, &plan_id).ok();
     Ok(())
 }
 
@@ -118,40 +177,57 @@ pub fn cmd_archive_plan(plan_id: String, state: State<DbState>) -> Result<(), Ap
         [&plan_id],
     )
     .map_err(AppError::from)?;
+    snapshot_reached_percent(&conn, &plan_id).ok();
     Ok(())
 }
 
-/// Delete a plan. With `cascade_sessions`, also delete its sessions and the notes
-/// attached to them; otherwise the sessions are detached (plan_id → NULL) and kept.
+/// "Let go": soft-delete the plan — kept, with its sessions + notes, until the
+/// 30-day retention sweep. Reversible via cmd_restore_plan (the Undo window).
 #[tauri::command]
-pub fn cmd_delete_plan(
-    plan_id: String,
-    cascade_sessions: bool,
-    state: State<DbState>,
-) -> Result<(), AppError> {
+pub fn cmd_delete_plan(plan_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
-    if cascade_sessions {
-        conn.execute(
-            "DELETE FROM notes WHERE session_id IN
-               (SELECT id FROM reading_sessions WHERE plan_id = ?1)",
-            [&plan_id],
-        )
-        .map_err(AppError::from)?;
-        conn.execute(
-            "DELETE FROM reading_sessions WHERE plan_id = ?1",
-            [&plan_id],
-        )
-        .map_err(AppError::from)?;
-    } else {
-        conn.execute(
-            "UPDATE reading_sessions SET plan_id = NULL WHERE plan_id = ?1",
-            [&plan_id],
-        )
-        .map_err(AppError::from)?;
-    }
-    conn.execute("DELETE FROM reading_plans WHERE id = ?1", [&plan_id])
-        .map_err(AppError::from)?;
+    conn.execute(
+        "UPDATE reading_plans SET deleted_at = datetime('now') WHERE id = ?1 AND deleted_at IS NULL",
+        [&plan_id],
+    )
+    .map_err(AppError::from)?;
     Ok(())
+}
+
+/// Undo a "Let go" (restore a soft-deleted plan within the retention window).
+#[tauri::command]
+pub fn cmd_restore_plan(plan_id: String, state: State<DbState>) -> Result<(), AppError> {
+    let conn = state.0.lock()?;
+    conn.execute(
+        "UPDATE reading_plans SET deleted_at = NULL WHERE id = ?1",
+        [&plan_id],
+    )
+    .map_err(AppError::from)?;
+    Ok(())
+}
+
+/// Hard-purge plans soft-deleted longer than `days` ago, with their sessions +
+/// notes. Mirrors ai_retention::sweep; `days <= 0` disables it. Returns plans purged.
+pub fn sweep_deleted_plans(conn: &rusqlite::Connection, days: i64) -> rusqlite::Result<usize> {
+    if days <= 0 {
+        return Ok(0);
+    }
+    let cutoff = format!("-{days} days");
+    conn.execute(
+        "DELETE FROM notes WHERE session_id IN (
+            SELECT s.id FROM reading_sessions s JOIN reading_plans p ON p.id = s.plan_id
+            WHERE p.deleted_at IS NOT NULL AND p.deleted_at < datetime('now', ?1))",
+        [&cutoff],
+    )?;
+    conn.execute(
+        "DELETE FROM reading_sessions WHERE plan_id IN (
+            SELECT id FROM reading_plans WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', ?1))",
+        [&cutoff],
+    )?;
+    conn.execute(
+        "DELETE FROM reading_plans WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', ?1)",
+        [&cutoff],
+    )
 }
 
 #[cfg(test)]
@@ -204,28 +280,69 @@ mod tests {
         assert_eq!(lifecycle, "active");
     }
 
+    fn count(conn: &Connection, where_clause: &str) -> i64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {where_clause}"), [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    }
+
     #[test]
-    fn delete_cascade_removes_sessions_and_notes() {
+    fn delete_is_soft_and_restorable() {
         let conn = db();
-        conn.execute_batch(
-            "INSERT INTO reading_sessions (id,book_id,started_at,plan_id) VALUES ('s1','b1','2026-01-02','p1');
-             INSERT INTO notes (id,book_id,session_id,note_type,locator,body,created_at,updated_at)
-               VALUES ('n1','b1','s1','reflection','char:0','x','2026-01-02','2026-01-02');",
+        conn.execute(
+            "UPDATE reading_plans SET deleted_at=datetime('now') WHERE id='p1'",
+            [],
         )
         .unwrap();
-        // Cascade delete (the cmd_delete_plan cascade branch).
-        conn.execute("DELETE FROM notes WHERE session_id IN (SELECT id FROM reading_sessions WHERE plan_id='p1')", []).unwrap();
-        conn.execute("DELETE FROM reading_sessions WHERE plan_id='p1'", [])
+        assert_eq!(
+            count(&conn, "reading_plans WHERE id='p1' AND deleted_at IS NULL"),
+            0
+        );
+        assert_eq!(
+            count(&conn, "reading_plans WHERE id='p1'"),
+            1,
+            "soft delete keeps the row"
+        );
+        conn.execute("UPDATE reading_plans SET deleted_at=NULL WHERE id='p1'", [])
             .unwrap();
-        conn.execute("DELETE FROM reading_plans WHERE id='p1'", [])
-            .unwrap();
-        let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))
-            .unwrap();
-        let s: i64 = conn
-            .query_row("SELECT COUNT(*) FROM reading_sessions", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(n, 0);
-        assert_eq!(s, 0);
+        assert_eq!(
+            count(&conn, "reading_plans WHERE id='p1' AND deleted_at IS NULL"),
+            1,
+            "restore"
+        );
+    }
+
+    #[test]
+    fn sweep_purges_only_plans_past_the_window() {
+        let conn = db();
+        conn.execute_batch(
+            "INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle,deleted_at)
+               VALUES ('p_old','b1','2026-01-01','2026-02-01','archived','archived',datetime('now','-40 days'));
+             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle,deleted_at)
+               VALUES ('p_rec','b1','2026-01-01','2026-02-01','archived','archived',datetime('now','-5 days'));
+             INSERT INTO reading_sessions (id,book_id,started_at,plan_id) VALUES ('s_old','b1','2026-01-02','p_old');
+             INSERT INTO notes (id,book_id,session_id,note_type,locator,body,created_at,updated_at)
+               VALUES ('n_old','b1','s_old','reflection','char:0','x','2026-01-02','2026-01-02');",
+        )
+        .unwrap();
+        let purged = super::sweep_deleted_plans(&conn, 30).unwrap();
+        assert_eq!(purged, 1, "only the plan past the 30-day window is purged");
+        assert_eq!(count(&conn, "reading_plans WHERE id='p_old'"), 0);
+        assert_eq!(
+            count(&conn, "reading_sessions WHERE id='s_old'"),
+            0,
+            "its sessions purged"
+        );
+        assert_eq!(
+            count(&conn, "notes WHERE id='n_old'"),
+            0,
+            "its notes purged"
+        );
+        assert_eq!(
+            count(&conn, "reading_plans WHERE id='p_rec'"),
+            1,
+            "in-window kept"
+        );
     }
 }

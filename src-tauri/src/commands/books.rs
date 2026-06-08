@@ -108,6 +108,7 @@ pub fn cmd_configure_plan(
     days_per_week: i64,
     session_minutes: i64,
     margin_help: Option<String>,
+    name: Option<String>,
     state: State<DbState>,
 ) -> Result<ReadingPlan, AppError> {
     let conn = state.0.lock()?;
@@ -137,9 +138,21 @@ pub fn cmd_configure_plan(
     let remaining = (assignable - completed).max(0);
     let daily_target = plan::daily_target_for(remaining, today, finish);
 
+    // Name the plan: the reader's name wins; else keep an existing one; else a
+    // friendly default by attempt order ("First attempt", …).
+    let attempt = conn
+        .query_row(
+            "SELECT COUNT(*) FROM reading_plans WHERE book_id = ?1 AND deleted_at IS NULL",
+            params![book_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(1)
+        .max(1) as usize;
+    let default_label = plan::default_plan_label(attempt);
+    let provided = name.as_deref().map(str::trim).filter(|s| !s.is_empty());
     conn.execute(
-        "UPDATE reading_plans SET target_finish_date = ?1, days_per_week = ?2, daily_target_units = ?3 WHERE id = ?4",
-        params![finish.to_string(), dpw, daily_target, plan.id],
+        "UPDATE reading_plans SET target_finish_date = ?1, days_per_week = ?2, daily_target_units = ?3, name = COALESCE(?4, name, ?5) WHERE id = ?6",
+        params![finish.to_string(), dpw, daily_target, provided, default_label, plan.id],
     )?;
     settings::set_string(
         &conn,

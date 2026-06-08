@@ -363,6 +363,7 @@ export interface UsageRow {
 export interface PlanSummary {
   id: string;
   book_id: string;
+  name: string;
   lifecycle: string; // active | paused | completed | archived | superseded
   status: string;
   start_date: string;
@@ -370,6 +371,7 @@ export interface PlanSummary {
   paused_days_total: number;
   session_count: number;
   note_count: number;
+  reached_percent: number | null;
 }
 
 /** AI spend summary for the Settings usage card (cmd_get_usage_summary). */

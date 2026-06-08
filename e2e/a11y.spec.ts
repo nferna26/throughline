@@ -50,6 +50,21 @@ test("a11y: settings", async ({ page }) => {
   expect(await serious(page)).toEqual([]);
 });
 
+test("a11y: plans view (frontispiece + back-matter)", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /see plans for this book/i }).click();
+  await page.getByText("Slow mornings").waitFor();
+  expect(await serious(page)).toEqual([]);
+});
+
+test("a11y: replan decision dialog", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /see plans for this book/i }).click();
+  await page.getByRole("button", { name: /start a new plan/i }).first().click();
+  await page.getByRole("dialog").waitFor();
+  expect(await serious(page)).toEqual([]);
+});
+
 test("a11y: every Today control is keyboard-reachable", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /session/i }).first().waitFor();

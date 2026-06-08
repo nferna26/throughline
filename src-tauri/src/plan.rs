@@ -36,6 +36,19 @@ pub fn build_default_plan(book_id: &str, sections: &[BookSection]) -> ReadingPla
     }
 }
 
+/// A friendly default name for a new plan when the reader doesn't give one:
+/// "First attempt", "Second attempt", … then "Attempt N". The app can't invent an
+/// evocative name, so it names by honest attempt order (matching "earlier attempts").
+pub fn default_plan_label(attempt: usize) -> String {
+    const WORDS: [&str; 9] = [
+        "First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh", "Eighth", "Ninth",
+    ];
+    match WORDS.get(attempt.saturating_sub(1)) {
+        Some(w) => format!("{w} attempt"),
+        None => format!("Attempt {}", attempt.max(1)),
+    }
+}
+
 /// Daily section target to cover `remaining_sections` between `today` and
 /// `finish` (inclusive of both ends). `None` when nothing remains. This is the
 /// single source of the ceil-division used by both plan configuration (Setup
@@ -300,6 +313,15 @@ mod tests {
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn default_plan_label_names_by_attempt() {
+        assert_eq!(default_plan_label(1), "First attempt");
+        assert_eq!(default_plan_label(2), "Second attempt");
+        assert_eq!(default_plan_label(9), "Ninth attempt");
+        assert_eq!(default_plan_label(10), "Attempt 10");
+        assert_eq!(default_plan_label(0), "First attempt"); // saturating
     }
 
     fn plan_with(

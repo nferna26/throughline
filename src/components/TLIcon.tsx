@@ -36,6 +36,12 @@ const PATHS: Record<string, string> = {
   globe: "M10 17a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM3 10h14M10 3c2.2 2.1 2.2 11.9 0 14M10 3c-2.2 2.1-2.2 11.9 0 14",
   download: "M10 3.5v8M6.7 8.2 10 11.5l3.3-3.3M4.5 13.5v1.5A1.5 1.5 0 0 0 6 16.5h8a1.5 1.5 0 0 0 1.5-1.5v-1.5",
   arrowDown: "M10 4.5v10M6.2 10.8 10 14.5l3.8-3.7",
+  // Plans view (frontispiece + back-matter) — pause/resume/archive/replace/undo.
+  pause: "M7.5 4.8v10.4M12.5 4.8v10.4",
+  play: "M6.5 4.8l9 5.2-9 5.2z",
+  archive: "M3.8 4.5h12.4v3.2H3.8zM5 7.7v7.8h10V7.7M8 11h4",
+  swap: "M5 7.5h10l-3-3M15 12.5H5l3 3",
+  undo: "M7.5 8.5H13a3.5 3.5 0 0 1 0 7H8.5M7.5 8.5l3-3M7.5 8.5l3 3",
 };
 
 import type { CSSProperties } from "react";
