@@ -445,6 +445,13 @@
 }
 .tl-price-chip .unit { opacity: 0.7; }
 
+/* AI usage card (Epic B4) */
+.tl-usage-figures { display: flex; gap: var(--tl-5); text-align: right; }
+.tl-usage-figures > div { display: flex; flex-direction: column; }
+.tl-usage-figures strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+.tl-usage-figures span { font-size: 11px; color: var(--tl-muted); }
+.tl-usage-breakdown { display: flex; flex-wrap: wrap; gap: var(--tl-2); margin-top: var(--tl-2); }
+
 /* ── Book Setup Sheet ─────────────────────────────────────────────────── */
 .tl-setup { flex: 1; display: flex; justify-content: center; padding: var(--tl-7) var(--tl-7) var(--tl-8); overflow-y: auto; }
 .tl-setup-card { width: 100%; max-width: 560px; }

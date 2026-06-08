@@ -10,6 +10,8 @@ pub const KEY_AI_BASE_URL: &str = "ai_base_url";
 pub const KEY_AI_MODEL: &str = "ai_model";
 pub const KEY_LOCAL_ONLY: &str = "ai_local_only";
 pub const KEY_AI_RETENTION_DAYS: &str = "ai_requests_retention_days";
+/// Optional monthly cloud-AI spend ceiling in whole cents (0 = off). Epic B4.
+pub const KEY_AI_SPEND_CAP_CENTS: &str = "ai_spend_cap_cents";
 pub const KEY_READING_RHYTHM_MINUTES: &str = "reading_rhythm_minutes";
 pub const KEY_MARGIN_HELP: &str = "margin_help";
 // Cloud-AI provider selection (added with the opt-in cloud providers). The

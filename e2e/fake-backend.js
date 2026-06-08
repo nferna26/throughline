@@ -159,6 +159,14 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_test_ai_connection":
         return { reachable: true, first_model_id: "gemma-4-31b-it-mlx", message: "ok" };
       case "cmd_list_ai_models": return ["gemma-4-31b-it-mlx", "qwen2.5-14b"];
+      case "cmd_get_usage_summary":
+        return {
+          total_calls: 27, total_cost_micros: 540000, month_cost_micros: 180000,
+          spend_cap_cents: 0, pricing_verified_at: "2026-06-08",
+          by_provider: [{ key: "anthropic", calls: 27, cost_micros: 540000 }],
+          by_lens: [{ key: "explain", calls: 18, cost_micros: 360000 }, { key: "historical", calls: 9, cost_micros: 180000 }],
+        };
+      case "cmd_set_monthly_spend_cap": return null;
       case "cmd_model_catalog": {
         const cat = {
           anthropic: [

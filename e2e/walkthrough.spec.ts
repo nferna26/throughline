@@ -103,6 +103,16 @@ test("model-picker-with-price-chip", async ({ page }) => {
   await shoot(page, "10-model-picker");
 });
 
+test("ai-usage-card", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByText("AI usage").first()).toBeVisible();
+  await expect(page.getByText("all time").first()).toBeVisible();
+  await expect(page.getByLabel(/spend cap in dollars/i)).toBeVisible();
+  await page.getByText("AI usage").first().scrollIntoViewIfNeeded();
+  await shoot(page, "11-ai-usage");
+});
+
 test("settings", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();

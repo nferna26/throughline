@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import TLIcon from "../components/TLIcon";
 import ModelSelect from "../components/ModelSelect";
+import AiUsageCard from "../components/AiUsageCard";
 import CodexLogin from "../components/CodexLogin";
 import AiHistory from "./AiHistory";
 import UpdateChecker from "../components/UpdateChecker";
@@ -332,6 +333,9 @@ export default function Settings() {
             )}
           </div>
         </div>
+
+        {/* ── AI usage + spend cap (B4) ── */}
+        <AiUsageCard />
 
         {/* ── Request history (audit) ── */}
         {dto && <AiHistory retentionDays={dto.ai_requests_retention_days} onSettingsChanged={refresh} />}

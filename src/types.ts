@@ -353,6 +353,23 @@ export interface ModelInfo {
   tier: string; // "default" | "power" | "fast"
 }
 
+export interface UsageRow {
+  key: string;
+  calls: number;
+  cost_micros: number;
+}
+
+/** AI spend summary for the Settings usage card (cmd_get_usage_summary). */
+export interface UsageSummary {
+  total_calls: number;
+  total_cost_micros: number;
+  month_cost_micros: number;
+  spend_cap_cents: number;
+  by_provider: UsageRow[];
+  by_lens: UsageRow[];
+  pricing_verified_at: string;
+}
+
 /** Typed error shape emitted by Tauri commands (see src-tauri/src/error.rs).
  *  All command rejections deserialize to one of these. Frontends can either
  *  branch on `kind` for special handling or pull `message` for display. */
