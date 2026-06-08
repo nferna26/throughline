@@ -554,7 +554,11 @@ pub fn cmd_get_usage_summary(state: State<DbState>) -> Result<UsageSummary, AppE
         let mut out = Vec::new();
         if let Ok(mut stmt) = conn.prepare(sql) {
             if let Ok(rows) = stmt.query_map([], |r| {
-                Ok(UsageRow { key: r.get(0)?, calls: r.get(1)?, cost_micros: r.get(2)? })
+                Ok(UsageRow {
+                    key: r.get(0)?,
+                    calls: r.get(1)?,
+                    cost_micros: r.get(2)?,
+                })
             }) {
                 out = rows.filter_map(|x| x.ok()).collect();
             }
@@ -588,8 +592,12 @@ pub fn cmd_get_usage_summary(state: State<DbState>) -> Result<UsageSummary, AppE
 #[tauri::command]
 pub fn cmd_set_monthly_spend_cap(cents: i64, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
-    settings::set_string(&conn, settings::KEY_AI_SPEND_CAP_CENTS, &cents.max(0).to_string())
-        .map_err(AppError::from)
+    settings::set_string(
+        &conn,
+        settings::KEY_AI_SPEND_CAP_CENTS,
+        &cents.max(0).to_string(),
+    )
+    .map_err(AppError::from)
 }
 
 /// Record token usage + computed cost for a finished AI request (Epic B3). The

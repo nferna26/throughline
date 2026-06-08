@@ -300,9 +300,19 @@ fn v007_ai_request_usage(conn: &Connection) -> Result<()> {
 /// archived | superseded. `sessions.plan_id` ties each session to its plan;
 /// legacy sessions backfill to their book's most-recent plan.
 fn v008_plan_lifecycle(conn: &Connection) -> Result<()> {
-    add_column_if_missing(conn, "reading_plans", "lifecycle", "TEXT NOT NULL DEFAULT 'active'")?;
+    add_column_if_missing(
+        conn,
+        "reading_plans",
+        "lifecycle",
+        "TEXT NOT NULL DEFAULT 'active'",
+    )?;
     add_column_if_missing(conn, "reading_plans", "paused_at", "TEXT")?;
-    add_column_if_missing(conn, "reading_plans", "paused_days_total", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(
+        conn,
+        "reading_plans",
+        "paused_days_total",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     add_column_if_missing(conn, "reading_plans", "parent_plan_id", "TEXT")?;
     add_column_if_missing(conn, "reading_sessions", "plan_id", "TEXT")?;
     conn.execute(
@@ -386,11 +396,22 @@ mod tests {
         // Re-running the idempotent lifecycle migration backfills the orphan session.
         v008_plan_lifecycle(&conn).unwrap();
         let pid: String = conn
-            .query_row("SELECT plan_id FROM reading_sessions WHERE id='s1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT plan_id FROM reading_sessions WHERE id='s1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(pid, "p_new", "session attaches to the book's most-recent plan");
+        assert_eq!(
+            pid, "p_new",
+            "session attaches to the book's most-recent plan"
+        );
         let lc: String = conn
-            .query_row("SELECT lifecycle FROM reading_plans WHERE id='p_new'", [], |r| r.get(0))
+            .query_row(
+                "SELECT lifecycle FROM reading_plans WHERE id='p_new'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(lc, "active", "new plans default to the 'active' lifecycle");
     }

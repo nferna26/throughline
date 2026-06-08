@@ -56,7 +56,7 @@ pub fn cmd_list_plans_for_book(
     );
     let mut stmt = conn.prepare(&sql).map_err(AppError::from)?;
     let rows = stmt
-        .query_map([&book_id], |r| row_to_summary(r))
+        .query_map([&book_id], row_to_summary)
         .map_err(AppError::from)?;
     Ok(rows.filter_map(|x| x.ok()).collect())
 }
@@ -72,9 +72,7 @@ pub fn cmd_get_active_plan(
         "{PLAN_SELECT} WHERE p.book_id = ?1 AND p.lifecycle = 'active'
          ORDER BY p.start_date DESC LIMIT 1"
     );
-    let r = conn
-        .query_row(&sql, [&book_id], |r| row_to_summary(r))
-        .ok();
+    let r = conn.query_row(&sql, [&book_id], row_to_summary).ok();
     Ok(r)
 }
 
@@ -139,8 +137,11 @@ pub fn cmd_delete_plan(
             [&plan_id],
         )
         .map_err(AppError::from)?;
-        conn.execute("DELETE FROM reading_sessions WHERE plan_id = ?1", [&plan_id])
-            .map_err(AppError::from)?;
+        conn.execute(
+            "DELETE FROM reading_sessions WHERE plan_id = ?1",
+            [&plan_id],
+        )
+        .map_err(AppError::from)?;
     } else {
         conn.execute(
             "UPDATE reading_sessions SET plan_id = NULL WHERE plan_id = ?1",
@@ -214,10 +215,16 @@ mod tests {
         .unwrap();
         // Cascade delete (the cmd_delete_plan cascade branch).
         conn.execute("DELETE FROM notes WHERE session_id IN (SELECT id FROM reading_sessions WHERE plan_id='p1')", []).unwrap();
-        conn.execute("DELETE FROM reading_sessions WHERE plan_id='p1'", []).unwrap();
-        conn.execute("DELETE FROM reading_plans WHERE id='p1'", []).unwrap();
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0)).unwrap();
-        let s: i64 = conn.query_row("SELECT COUNT(*) FROM reading_sessions", [], |r| r.get(0)).unwrap();
+        conn.execute("DELETE FROM reading_sessions WHERE plan_id='p1'", [])
+            .unwrap();
+        conn.execute("DELETE FROM reading_plans WHERE id='p1'", [])
+            .unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))
+            .unwrap();
+        let s: i64 = conn
+            .query_row("SELECT COUNT(*) FROM reading_sessions", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 0);
         assert_eq!(s, 0);
     }

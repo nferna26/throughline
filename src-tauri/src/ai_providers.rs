@@ -39,7 +39,13 @@ pub struct ModelInfo {
 pub const PRICING_VERIFIED_AT: &str = "2026-06-08";
 
 fn mi(id: &str, label: &str, inp: f64, out: f64, tier: &str) -> ModelInfo {
-    ModelInfo { id: id.into(), label: label.into(), input_per_mtok: inp, output_per_mtok: out, tier: tier.into() }
+    ModelInfo {
+        id: id.into(),
+        label: label.into(),
+        input_per_mtok: inp,
+        output_per_mtok: out,
+        tier: tier.into(),
+    }
 }
 
 /// Per-provider model catalogue ($/Mtok). Anthropic prices are exact (the
@@ -49,16 +55,40 @@ fn mi(id: &str, label: &str, inp: f64, out: f64, tier: &str) -> ModelInfo {
 pub fn model_catalog(provider: AiProvider) -> Vec<ModelInfo> {
     match provider {
         AiProvider::Anthropic => vec![
-            mi("claude-sonnet-4-6", "Sonnet 4.6 — best value", 3.0, 15.0, "default"),
-            mi("claude-haiku-4-5", "Haiku 4.5 — fastest, cheapest", 1.0, 5.0, "fast"),
-            mi("claude-opus-4-8", "Opus 4.8 — most capable (~5× cost)", 15.0, 75.0, "power"),
+            mi(
+                "claude-sonnet-4-6",
+                "Sonnet 4.6 — best value",
+                3.0,
+                15.0,
+                "default",
+            ),
+            mi(
+                "claude-haiku-4-5",
+                "Haiku 4.5 — fastest, cheapest",
+                1.0,
+                5.0,
+                "fast",
+            ),
+            mi(
+                "claude-opus-4-8",
+                "Opus 4.8 — most capable (~5× cost)",
+                15.0,
+                75.0,
+                "power",
+            ),
         ],
         AiProvider::OpenAi => vec![
             mi("gpt-5.5", "GPT-5.5", 1.25, 10.0, "default"),
             mi("gpt-5.5-pro", "GPT-5.5 Pro", 2.5, 20.0, "power"),
             mi("gpt-5-mini", "GPT-5 mini — cheapest", 0.25, 2.0, "fast"),
         ],
-        AiProvider::Codex => vec![mi("gpt-5.5", "GPT-5.5 (via Codex login)", 1.25, 10.0, "default")],
+        AiProvider::Codex => vec![mi(
+            "gpt-5.5",
+            "GPT-5.5 (via Codex login)",
+            1.25,
+            10.0,
+            "default",
+        )],
         _ => Vec::new(),
     }
 }
@@ -97,7 +127,8 @@ pub fn accumulate_anthropic_usage(line: &str, acc: &mut TokenUsage) {
             if let Some(u) = v.pointer("/message/usage") {
                 let g = |k: &str| u.get(k).and_then(|x| x.as_u64());
                 acc.input_tokens = g("input_tokens").unwrap_or(acc.input_tokens);
-                acc.cache_read_tokens = g("cache_read_input_tokens").unwrap_or(acc.cache_read_tokens);
+                acc.cache_read_tokens =
+                    g("cache_read_input_tokens").unwrap_or(acc.cache_read_tokens);
                 acc.cache_creation_tokens =
                     g("cache_creation_input_tokens").unwrap_or(acc.cache_creation_tokens);
             }
@@ -118,7 +149,10 @@ pub fn parse_openai_usage(value: &serde_json::Value) -> Option<TokenUsage> {
     let u = value.get("usage")?;
     Some(TokenUsage {
         input_tokens: u.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
-        output_tokens: u.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
+        output_tokens: u
+            .get("completion_tokens")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0),
         cache_read_tokens: u
             .pointer("/prompt_tokens_details/cached_tokens")
             .and_then(|x| x.as_u64())
@@ -1113,9 +1147,16 @@ mod tests {
 
     #[test]
     fn cost_micros_sonnet_matches_hand_math() {
-        let u = TokenUsage { input_tokens: 4750, output_tokens: 400, ..Default::default() };
+        let u = TokenUsage {
+            input_tokens: 4750,
+            output_tokens: 400,
+            ..Default::default()
+        };
         // 4750·$3 + 400·$15 per Mtok = 20,250 micro-dollars = $0.02025 (the memo's mid call).
-        assert_eq!(cost_micros(AiProvider::Anthropic, "claude-sonnet-4-6", &u), 20_250);
+        assert_eq!(
+            cost_micros(AiProvider::Anthropic, "claude-sonnet-4-6", &u),
+            20_250
+        );
         // Opus costs the same tokens ~5× more.
         let opus = cost_micros(AiProvider::Anthropic, "claude-opus-4-8", &u);
         assert!(opus >= cost_micros(AiProvider::Anthropic, "claude-sonnet-4-6", &u) * 4);
@@ -1128,8 +1169,14 @@ mod tests {
             r#"data: {"type":"message_start","message":{"usage":{"input_tokens":4500,"cache_read_input_tokens":120}}}"#,
             &mut acc,
         );
-        accumulate_anthropic_usage(r#"data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}"#, &mut acc);
-        accumulate_anthropic_usage(r#"data: {"type":"message_delta","usage":{"output_tokens":380}}"#, &mut acc);
+        accumulate_anthropic_usage(
+            r#"data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}"#,
+            &mut acc,
+        );
+        accumulate_anthropic_usage(
+            r#"data: {"type":"message_delta","usage":{"output_tokens":380}}"#,
+            &mut acc,
+        );
         assert_eq!(acc.input_tokens, 4500);
         assert_eq!(acc.cache_read_tokens, 120);
         assert_eq!(acc.output_tokens, 380);
@@ -1137,14 +1184,16 @@ mod tests {
 
     #[test]
     fn openai_usage_parsed_from_terminal_chunk() {
-        let v: serde_json::Value =
-            serde_json::from_str(r#"{"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":300}}"#)
-                .unwrap();
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":300}}"#,
+        )
+        .unwrap();
         let u = parse_openai_usage(&v).unwrap();
         assert_eq!(u.input_tokens, 1200);
         assert_eq!(u.output_tokens, 300);
         // A chunk without usage (a normal delta) yields None.
-        let no: serde_json::Value = serde_json::from_str(r#"{"choices":[{"delta":{"content":"x"}}]}"#).unwrap();
+        let no: serde_json::Value =
+            serde_json::from_str(r#"{"choices":[{"delta":{"content":"x"}}]}"#).unwrap();
         assert!(parse_openai_usage(&no).is_none());
     }
 
