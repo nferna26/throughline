@@ -11,7 +11,7 @@ import Discover from "./screens/Discover";
 import TLIcon from "./components/TLIcon";
 import "./App.css";
 import "./tl-theme.css";
-import type { TodayCard, ReaderMode, Book, ImportOutcome } from "./types";
+import type { TodayCard, ReaderMode, Book, ImportOutcome, ExportPathStatus } from "./types";
 import { errorMessage } from "./types";
 
 type BookTab = "today" | "notes";
@@ -67,6 +67,15 @@ export default function App() {
   useEffect(() => {
     refreshToday();
   }, []);
+
+  // Export-folder preflight: catch a misconfigured path or an unmounted drive on
+  // launch, BEFORE a session's notes are silently lost. A calm banner, not a block.
+  const [exportWarning, setExportWarning] = useState<string | null>(null);
+  useEffect(() => {
+    invoke<ExportPathStatus>("cmd_check_export_path")
+      .then((s) => setExportWarning(s.writable ? null : (s.message ?? "Throughline can't save notes to the export folder.")))
+      .catch(() => {});
+  }, [view.kind]);
 
   async function importBook() {
     const file = await openDialog({
@@ -199,6 +208,14 @@ export default function App() {
           <TLIcon name={theme === "dark" ? "sun" : "moon"} size={18} />
         </button>
       </header>
+
+      {exportWarning && (
+        <div className="tl-export-warning" role="alert">
+          <TLIcon name="behind" size={16} />
+          <span>{exportWarning} Your reading is safe — new notes just won't export until you choose a folder.</span>
+          <button className="tl-btn-quiet" onClick={() => setView({ kind: "settings" })}>Choose a folder</button>
+        </div>
+      )}
 
       <main id="main-content">
         {view.kind === "today" && (

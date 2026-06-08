@@ -48,6 +48,35 @@ pub fn cmd_set_export_path(
     settings::build_dto(&conn).map_err(AppError::from)
 }
 
+/// Preflight the effective export root: can Throughline actually write notes
+/// there right now? Catches a misconfigured custom path or an unmounted drive
+/// BEFORE a session's notes are silently lost. Pure check — creates the folder if
+/// missing, writes + removes a probe file, never touches real notes.
+#[tauri::command]
+pub fn cmd_check_export_path(state: State<DbState>) -> Result<serde_json::Value, AppError> {
+    let root = {
+        let conn = state.0.lock()?;
+        crate::export::root_for(&conn)
+    };
+    let message = export_write_probe(&root).err();
+    Ok(serde_json::json!({
+        "path": root.to_string_lossy(),
+        "writable": message.is_none(),
+        "message": message,
+    }))
+}
+
+/// Returns Ok(()) if `root` can be created and written to, else a human message.
+fn export_write_probe(root: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(root)
+        .map_err(|e| format!("Throughline can't create the export folder ({e})."))?;
+    let probe = root.join(".throughline-write-test");
+    std::fs::write(&probe, b"ok")
+        .map_err(|e| format!("Throughline can't save notes to this folder ({e})."))?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn cmd_set_ai_settings(
     provider: Option<String>,

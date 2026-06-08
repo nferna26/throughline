@@ -72,6 +72,15 @@ test("reader-margin-and-tutor", async ({ page }) => {
   await expect.soft(page.getByText(/Aurelius is bracing himself|telling himself|Stoic|cooperation/).first()).toBeVisible();
 });
 
+test("export-warning", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EXPORT_BROKEN__ = true; });
+  await page.goto("/");
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByText(/can't save notes/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /choose a folder/i })).toBeVisible();
+  await shoot(page, "08-export-warning");
+});
+
 test("settings", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();

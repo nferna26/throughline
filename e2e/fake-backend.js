@@ -145,6 +145,10 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_list_ai_requests": return [];
       case "cmd_discover_seed": return DISCOVER_PAGE;
       case "cmd_discover_search": return DISCOVER_PAGE;
+      case "cmd_check_export_path":
+        return window.__TL_FAKE_EXPORT_BROKEN__
+          ? { path: "/Volumes/USB/GBrain/Reading", writable: false, message: "Throughline can't save notes to this folder (No such file or directory)." }
+          : { path: SETTINGS.export_path, writable: true, message: null };
       case "cmd_set_ai_settings": case "cmd_set_ai_key": case "cmd_clear_ai_key":
       case "cmd_set_export_path": case "cmd_forget_ai_history": case "cmd_codex_logout":
         return null;

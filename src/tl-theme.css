@@ -416,6 +416,15 @@
 }
 .tl-welcome-promise li svg { color: var(--tl-accent); flex-shrink: 0; margin-top: 2px; }
 
+/* Export-folder preflight warning — calm strip, never a blocking modal. */
+.tl-export-warning {
+  flex-shrink: 0; display: flex; align-items: center; gap: var(--tl-3);
+  padding: var(--tl-2) var(--tl-7); background: var(--tl-warn-soft);
+  border-bottom: 1px solid var(--tl-line); color: var(--tl-ink); font-size: 13px;
+}
+.tl-export-warning svg { color: var(--tl-warn); flex-shrink: 0; }
+.tl-export-warning span { flex: 1; }
+
 /* ── Book Setup Sheet ─────────────────────────────────────────────────── */
 .tl-setup { flex: 1; display: flex; justify-content: center; padding: var(--tl-7) var(--tl-7) var(--tl-8); overflow-y: auto; }
 .tl-setup-card { width: 100%; max-width: 560px; }

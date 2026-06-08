@@ -336,6 +336,14 @@ export interface ConnTestResult {
   message: string;
 }
 
+/** Preflight of the Markdown export folder (cmd_check_export_path): can notes
+ *  actually be written there right now? `message` is a human reason when not. */
+export interface ExportPathStatus {
+  path: string;
+  writable: boolean;
+  message: string | null;
+}
+
 /** Typed error shape emitted by Tauri commands (see src-tauri/src/error.rs).
  *  All command rejections deserialize to one of these. Frontends can either
  *  branch on `kind` for special handling or pull `message` for display. */
