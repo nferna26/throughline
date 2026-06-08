@@ -603,6 +603,14 @@
 }
 .tl-panel-resizer:hover, .tl-panel-resizer.dragging { background: var(--tl-accent-soft); }
 
+/* Collapsed margin: a slim grab at the right edge to slide the panel back open. */
+.tl-margin-reopen {
+  flex: 0 0 8px; cursor: col-resize; background: transparent;
+  border-left: 1px solid var(--tl-line);
+  transition: background 150ms ease;
+}
+.tl-margin-reopen:hover { background: var(--tl-accent-soft); }
+
 /* The side panel itself: in-flow, fixed (resizable) width, own scroll. */
 .tl-sidepanel {
   flex: 0 0 auto; min-height: 0; overflow-y: auto;
@@ -619,7 +627,7 @@
 @media (max-width: 880px) {
   /* Too narrow for a side-by-side panel — stack it under the text. */
   .tl-reader-body { flex-direction: column; }
-  .tl-panel-resizer { display: none; }
+  .tl-panel-resizer, .tl-margin-reopen { display: none; }
   .tl-sidepanel { flex: none; width: auto !important; border-left: none; border-top: 1px solid var(--tl-line); }
 }
 
