@@ -129,8 +129,7 @@ async fn company_arm_maps_402_to_cap_exhausted() {
 
     let err = run_provider_call(company_call(base_url))
         .await
-        .err()
-        .expect("402 must be an error");
+        .expect_err("402 must be an error");
     assert!(
         err.to_string().contains(CAP_EXHAUSTED_SENTINEL),
         "402 → cap-exhausted sentinel, got: {err}"

@@ -107,7 +107,6 @@ fn open_db_resilient() -> rusqlite::Connection {
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Parse a `throughline://activate?token=…` deep link, returning the token.
 /// Anything else (wrong scheme, wrong action, no token) yields None.
 fn parse_activate_token(url: &str) -> Option<String> {
@@ -124,6 +123,7 @@ fn parse_activate_token(url: &str) -> Option<String> {
         .map(|(_, v)| v.into_owned())
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize structured logging before anything else so DB migrations,
     // startup errors, and IPC events all get captured.
@@ -278,7 +278,10 @@ mod tests {
         );
         // Wrong action, wrong scheme, or no token → ignored (no accidental activation).
         assert_eq!(parse_activate_token("throughline://other?token=x"), None);
-        assert_eq!(parse_activate_token("https://evil.example/activate?token=x"), None);
+        assert_eq!(
+            parse_activate_token("https://evil.example/activate?token=x"),
+            None
+        );
         assert_eq!(parse_activate_token("throughline://activate"), None);
     }
 
