@@ -121,9 +121,20 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
         }
         return TODAY;
       case "cmd_get_settings":
+        if (window.__TL_FAKE_COMPANY_ACTIVE__)
+          return Object.assign({}, SETTINGS, { ai_provider: "company", ai_remote_allowed: true, ai_local_only: false, ai_posture: "Sends your selection to ai.readthroughline.com" });
         return window.__TL_FAKE_CLOUD__
           ? Object.assign({}, SETTINGS, { ai_provider: "anthropic", ai_remote_allowed: true, ai_local_only: false, ai_posture: "Sends your selection to api.anthropic.com" })
           : SETTINGS;
+      case "cmd_company_status":
+        return window.__TL_FAKE_COMPANY_ACTIVE__
+          ? { provider_active: true, has_license: true }
+          : { provider_active: false, has_license: false };
+      case "cmd_company_credits":
+        return { status: "active", remaining_micros: 6000000, budget_micros: 8000000, spent_micros: 2000000, approx_questions_left: 9000 };
+      case "cmd_activate_company":
+        window.__TL_FAKE_COMPANY_ACTIVE__ = true;
+        return { provider_active: true, has_license: true };
       case "cmd_list_books": return window.__TL_FAKE_EMPTY__ ? [] : [BOOK];
       case "cmd_assignable_sections": return SECTIONS;
       case "cmd_list_notes": return NOTES.slice();

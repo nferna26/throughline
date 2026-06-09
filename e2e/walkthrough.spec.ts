@@ -186,6 +186,29 @@ test("cloud-trust-copy", async ({ page }) => {
   await shoot(page, "15-cloud-trust");
 });
 
+test("company-activation", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  // Choosing Throughline AI shows the buy + activation surface (not a key field).
+  await page.selectOption('select[aria-label="AI provider"]', "company");
+  await expect(page.getByRole("button", { name: /Get Throughline AI — \$20/i })).toBeVisible();
+  await expect(page.getByPlaceholder("XXXX-XXXX-XXXX")).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Activate$/ })).toBeVisible();
+  await page.getByText(/Throughline AI — \$20 once/i).scrollIntoViewIfNeeded();
+  await shoot(page, "18-company-activate");
+});
+
+test("company-fuel-gauge", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_COMPANY_ACTIVE__ = true; });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  // Active company mode shows the fuel gauge, not a "buy" prompt.
+  await expect(page.getByText(/Throughline AI is active/i)).toBeVisible();
+  await expect(page.getByText(/Plenty of AI left/i)).toBeVisible();
+  await page.getByText(/Throughline AI is active/i).scrollIntoViewIfNeeded();
+  await shoot(page, "19-company-fuel");
+});
+
 test("ai-usage-card", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();

@@ -549,6 +549,17 @@
 .tl-finished-card p { font-size: 14px; color: var(--tl-muted); max-width: 360px; line-height: 1.55; margin: 0; }
 .tl-finished-actions { display: flex; gap: var(--tl-2); margin-top: var(--tl-2); flex-wrap: wrap; justify-content: center; }
 
+/* Company mode: activation + the credits fuel gauge (CM4 / CM7). */
+.tl-fuel { display: flex; align-items: center; gap: var(--tl-3); }
+.tl-fuel-bar { width: 120px; height: 8px; border-radius: 999px; background: var(--tl-line); overflow: hidden; }
+.tl-fuel-bar .fill { display: block; height: 100%; border-radius: 999px; }
+.tl-fuel.ok .fill { width: 80%; background: var(--tl-accent); }
+.tl-fuel.low .fill { width: 35%; background: #b8860b; }
+.tl-fuel.empty .fill { width: 8%; background: var(--tl-muted); }
+.tl-fuel-label { font-size: 13px; color: var(--tl-ink); }
+.tl-fuel.low .tl-fuel-label, .tl-fuel.empty .tl-fuel-label { color: var(--tl-muted); }
+.tl-activate-lbl { display: block; font-size: 13px; color: var(--tl-muted); margin-bottom: var(--tl-2); }
+
 /* ── Book Setup Sheet ─────────────────────────────────────────────────── */
 .tl-setup { flex: 1; display: flex; justify-content: center; padding: var(--tl-7) var(--tl-7) var(--tl-8); overflow-y: auto; }
 .tl-setup-card { width: 100%; max-width: 560px; }
