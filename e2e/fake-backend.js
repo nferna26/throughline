@@ -241,6 +241,10 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
     if (window.__TL_FAKE_NEEDS_CONSENT__ && !window.__cloud_confirmed__) {
       return Promise.reject({ kind: "NeedsCloudConsent", host: "api.anthropic.com" });
     }
+    // CM6: company-paid cap spent.
+    if (window.__TL_FAKE_CAP_EXHAUSTED__) {
+      return Promise.reject({ kind: "CapExhausted" });
+    }
     const ch = args && args.onEvent;
     const emit = (ev) => { try { if (ch && typeof ch.onmessage === "function") ch.onmessage(ev); } catch (_) {} };
     const words = TUTOR_REPLY.split(" ");

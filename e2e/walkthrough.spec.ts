@@ -154,6 +154,29 @@ test("cloud-consent-gate", async ({ page }) => {
   await shoot(page, "16-cloud-consent");
 });
 
+test("cap-exhausted-fallback", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_CAP_EXHAUSTED__ = true; });
+  await page.goto("/");
+  await page.getByRole("button", { name: /session/i }).first().click();
+  await expect(page.locator(".tl-readcol p").first()).toBeVisible();
+  await page.evaluate(() => {
+    const ps = document.querySelectorAll(".tl-readcol p");
+    const p = ps[1] || ps[0];
+    if (!p) return;
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const sel = window.getSelection();
+    sel!.removeAllRanges();
+    sel!.addRange(range);
+    document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  await page.getByRole("button", { name: /^Explain/ }).click();
+  // Credits spent → a calm fallback to the BYO/local floor, never a dead end.
+  await expect(page.getByText(/used your Throughline AI credits/i)).toBeVisible();
+  await expect(page.getByText(/plan and notes are untouched/i)).toBeVisible();
+  await shoot(page, "20-cap-exhausted");
+});
+
 test("export-warning", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EXPORT_BROKEN__ = true; });
   await page.goto("/");

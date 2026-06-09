@@ -157,6 +157,8 @@ export default function MarginTutorCard(props: {
   const [errorMsg, setErrorMsg] = useState("");
   // First-cloud-call consent (C2): set when cmd_ai_ask returns NeedsCloudConsent.
   const [cloudConsent, setCloudConsent] = useState<{ host: string; which: TutorMode; tier: Depth } | null>(null);
+  // Company-mode cap spent (CM6): set when cmd_ai_ask returns CapExhausted.
+  const [capExhausted, setCapExhausted] = useState(false);
   const [modelName, setModelName] = useState("the local model");
   // Provider posture, loaded from settings. Drives the badge + consent copy
   // (WHERE the passage goes). Disabled only when no provider is chosen. null =
@@ -287,6 +289,11 @@ export default function MarginTutorCard(props: {
         if (err?.kind === "NeedsCloudConsent") {
           // First cloud send — pause and ask once before anything leaves the Mac.
           setCloudConsent({ host: err.host ?? "the cloud provider", which, tier });
+          return;
+        }
+        if (err?.kind === "CapExhausted") {
+          // Company-paid credits spent — fall to the BYO-key / local floor.
+          setCapExhausted(true);
           return;
         }
         setErrorMsg(humanizeError(String(err?.message ?? e)));
@@ -436,7 +443,27 @@ export default function MarginTutorCard(props: {
         {draft.locator && <span className="tl-quotechip-loc">{draft.locator}</span>}
       </button>
 
-      {phase === "blocked" || (phase === "consent" && (provider === "none" || provider === "")) ? (
+      {capExhausted ? (
+        // Company-paid credits spent (CM6). A calm message, then the BYO-key /
+        // local floor right here — reading and notes are untouched.
+        <div className="tl-tutor-consent">
+          <p>
+            You've used your <strong>Throughline AI</strong> credits. Keep reading with your own
+            API key, or switch to a local model — your plan and notes are untouched.
+          </p>
+          <AiSetupSheet
+            ctx={{
+              mode: SETUP_MODE[lens],
+              selectedText: draft.anchoredText,
+              bookTitle: props.bookTitle ?? "",
+              author: props.author ?? null,
+              sectionLabel: draft.chapter || null,
+            }}
+            initialState="not_connected"
+            onConnected={onSetupConnected}
+          />
+        </div>
+      ) : phase === "blocked" || (phase === "consent" && (provider === "none" || provider === "")) ? (
         // Cold-start: no provider wired up. Setup at the moment of intent —
         // paste a key / use a local model / copy a prompt — never a dead end.
         <AiSetupSheet
