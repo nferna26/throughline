@@ -60,6 +60,16 @@ pub struct AiPreviewCard {
     pub copy_label: String,
 }
 
+/// Map a provider-dispatch error to an AppError. The Company arm signals an
+/// exhausted cap with `CAP_EXHAUSTED_SENTINEL`; everything else is a generic Ai error.
+pub(crate) fn classify_provider_error(e: &anyhow::Error) -> AppError {
+    if format!("{e}").contains(crate::ai_providers::CAP_EXHAUSTED_SENTINEL) {
+        AppError::cap_exhausted()
+    } else {
+        AppError::ai(format!("{e}"))
+    }
+}
+
 // ── Commands ───────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -383,7 +393,11 @@ pub async fn cmd_ai_ask(
                 "No AI model set. Open Settings → Assistance and set the model id.",
             ));
         }
-        let base_url = settings::get_ai_base_url(&conn);
+        let base_url = if matches!(provider, settings::AiProvider::Company) {
+            settings::get_company_base_url(&conn)
+        } else {
+            settings::get_ai_base_url(&conn)
+        };
         // Local keeps the hard loopback backstop; a typo can never send off-device.
         if matches!(provider, settings::AiProvider::Local) {
             ai_client::validate_base_url(&base_url, true).map_err(AppError::from)?;
@@ -396,6 +410,7 @@ pub async fn cmd_ai_ask(
             settings::AiProvider::OpenAi => "api.openai.com".to_string(),
             settings::AiProvider::Anthropic => "api.anthropic.com".to_string(),
             settings::AiProvider::Codex => "chatgpt.com".to_string(),
+            settings::AiProvider::Company => "ai.readthroughline.com".to_string(),
             _ => String::new(),
         };
 
@@ -446,6 +461,9 @@ pub async fn cmd_ai_ask(
                 AppError::config("Add your Anthropic API key in Settings → Assistance.")
             })?,
         settings::AiProvider::Codex => crate::ai_providers::ProviderAuth::Codex,
+        settings::AiProvider::Company => crate::keystore::get_key("company")
+            .map(crate::ai_providers::ProviderAuth::CompanyLicense)
+            .ok_or_else(|| AppError::config("Activate Throughline AI in Settings → Assistance."))?,
         _ => return Err(AppError::config("No AI provider chosen.")),
     };
 
@@ -471,7 +489,7 @@ pub async fn cmd_ai_ask(
                 started.elapsed().as_millis(),
                 "request_failed",
             );
-            return Err(AppError::ai(format!("{}", e)));
+            return Err(classify_provider_error(&e));
         }
     };
 
@@ -645,6 +663,144 @@ pub fn cmd_confirm_cloud_send(state: State<DbState>) -> Result<(), AppError> {
         &Utc::now().to_rfc3339(),
     )
     .map_err(AppError::from)
+}
+
+// ── Company mode (the $20 bundle) ────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct CompanyStatus {
+    /// Company is the active provider.
+    pub provider_active: bool,
+    /// A license is stored (from the persisted flag, no Keychain prompt).
+    pub has_license: bool,
+}
+
+#[derive(Serialize, Default)]
+pub struct CompanyCredits {
+    pub status: String, // active | exhausted | expired | revoked | uninit | unknown
+    pub remaining_micros: i64,
+    pub budget_micros: i64,
+    pub spent_micros: i64,
+    pub approx_questions_left: i64,
+}
+
+fn company_http() -> Result<reqwest::Client, AppError> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AppError::ai(format!("http client: {e}")))
+}
+
+/// Exchange a single-use activation token (deep link or typed code) for a durable
+/// license, store it in the Keychain, and switch the active provider to Company.
+/// Activating IS the reader's cloud-send consent, so we stamp that too.
+#[tauri::command]
+pub async fn cmd_activate_company(
+    activation_token: String,
+    state: State<'_, DbState>,
+) -> Result<CompanyStatus, AppError> {
+    let token = activation_token.trim().to_string();
+    if token.is_empty() {
+        return Err(AppError::validation("Enter your activation code."));
+    }
+    let base_url = {
+        let conn = state.0.lock()?;
+        settings::get_company_base_url(&conn)
+    };
+    let resp = company_http()?
+        .post(format!("{base_url}/v1/activate"))
+        .json(&serde_json::json!({ "activation_token": token }))
+        .send()
+        .await
+        .map_err(|e| AppError::ai(format!("Couldn't reach Throughline AI: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(AppError::validation(
+            "That activation code is invalid, expired, or already used.",
+        ));
+    }
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    let license = body
+        .get("license")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if license.is_empty() {
+        return Err(AppError::ai("Activation returned no license."));
+    }
+    crate::keystore::set_key("company", &license).map_err(|e| AppError::io(format!("{e}")))?;
+    {
+        let conn = state.0.lock()?;
+        settings::set_string(&conn, settings::KEY_AI_PROVIDER, "company")?;
+        settings::set_string(&conn, settings::KEY_COMPANY_ACTIVATED, "1")?;
+        settings::set_string(&conn, settings::KEY_LOCAL_ONLY, "false")?;
+        // Activating company mode is the reader's first-cloud consent.
+        settings::set_string(
+            &conn,
+            settings::KEY_FIRST_CLOUD_CONFIRMED_AT,
+            &Utc::now().to_rfc3339(),
+        )?;
+        if settings::get_string(&conn, settings::KEY_AI_PROVIDER_CHOSEN_AT).is_none() {
+            settings::set_string(
+                &conn,
+                settings::KEY_AI_PROVIDER_CHOSEN_AT,
+                &Utc::now().to_rfc3339(),
+            )?;
+        }
+    }
+    Ok(CompanyStatus {
+        provider_active: true,
+        has_license: true,
+    })
+}
+
+/// Whether company mode is active + a license is present. Reads a persisted flag
+/// (not the Keychain), so it's safe to call on every Settings render.
+#[tauri::command]
+pub fn cmd_company_status(state: State<DbState>) -> Result<CompanyStatus, AppError> {
+    let conn = state.0.lock()?;
+    Ok(CompanyStatus {
+        provider_active: matches!(
+            settings::get_ai_provider(&conn),
+            settings::AiProvider::Company
+        ),
+        has_license: settings::get_string(&conn, settings::KEY_COMPANY_ACTIVATED).as_deref()
+            == Some("1"),
+    })
+}
+
+/// Read-only credits view for the fuel gauge (the server is authoritative).
+#[tauri::command]
+pub async fn cmd_company_credits(state: State<'_, DbState>) -> Result<CompanyCredits, AppError> {
+    let base_url = {
+        let conn = state.0.lock()?;
+        settings::get_company_base_url(&conn)
+    };
+    let license = crate::keystore::get_key("company")
+        .ok_or_else(|| AppError::config("Throughline AI isn't activated."))?;
+    let resp = company_http()?
+        .get(format!("{base_url}/v1/credits"))
+        .header("authorization", format!("Bearer {license}"))
+        .send()
+        .await
+        .map_err(|e| AppError::ai(format!("Couldn't reach Throughline AI: {e}")))?;
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    let ok = body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let reason = body.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+    let status = if ok {
+        "active".to_string()
+    } else if !reason.is_empty() {
+        reason.to_string()
+    } else {
+        "unknown".to_string()
+    };
+    let i = |k: &str| body.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+    Ok(CompanyCredits {
+        status,
+        remaining_micros: i("remaining_micros"),
+        budget_micros: i("budget_micros"),
+        spent_micros: i("spent_micros"),
+        approx_questions_left: i("approx_questions_left"),
+    })
 }
 
 /// Record token usage + computed cost for a finished AI request (Epic B3). The
@@ -840,6 +996,17 @@ pub fn cmd_codex_logout(state: State<DbState>) -> Result<settings::SettingsDto, 
 mod tests {
     use super::*;
     use rusqlite::Connection;
+
+    #[test]
+    fn cap_exhausted_sentinel_maps_to_cap_exhausted_error() {
+        let capped = classify_provider_error(&anyhow::anyhow!(
+            crate::ai_providers::CAP_EXHAUSTED_SENTINEL
+        ));
+        assert_eq!(capped.kind(), "CapExhausted");
+        // Anything else stays a generic Ai error.
+        let other = classify_provider_error(&anyhow::anyhow!("connection refused"));
+        assert_eq!(other.kind(), "Ai");
+    }
 
     #[test]
     fn spend_cap_only_bites_when_set_and_reached() {

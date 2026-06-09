@@ -196,7 +196,13 @@ pub enum ProviderAuth {
     OpenAiKey(String),
     AnthropicKey(String),
     Codex,
+    /// The per-install Throughline AI license (Bearer-auth to the company proxy).
+    CompanyLicense(String),
 }
+
+/// Sentinel error string from the Company arm when the proxy returns HTTP 402
+/// (cap exhausted). `commands::ai` maps it to `AppError::CapExhausted`.
+pub const CAP_EXHAUSTED_SENTINEL: &str = "__throughline_cap_exhausted__";
 
 /// A normalized provider call. `base_url` applies to Local only.
 pub struct ProviderCall {
@@ -261,6 +267,21 @@ pub async fn run_provider_call(call: ProviderCall) -> Result<mpsc::Receiver<Stre
         }
         AiProvider::Codex => {
             run_codex(&call.model, &call.prompt, call.max_tokens, call.timeout).await
+        }
+        AiProvider::Company => {
+            let license = match call.auth {
+                ProviderAuth::CompanyLicense(l) => l,
+                _ => return Err(anyhow!("Throughline AI selected but not activated")),
+            };
+            run_company(
+                &call.base_url,
+                &license,
+                &call.model,
+                &call.prompt,
+                call.max_tokens,
+                call.timeout,
+            )
+            .await
         }
         AiProvider::Disabled | AiProvider::Unset => Err(anyhow!(
             "No AI provider chosen. Pick one in Settings → Assistance."
@@ -467,6 +488,48 @@ async fn run_anthropic(
                     .await;
             }
         }
+    });
+    Ok(rx)
+}
+
+/// Company-paid path: the SAME Anthropic body, POSTed to the proxy's `/v1/tutor`
+/// with `Authorization: Bearer <license>` instead of an `x-api-key`. The proxy
+/// relays Anthropic's SSE verbatim, so we reuse `parse_anthropic_line`. Unlike the
+/// other providers we await the response head before returning, so an HTTP 402
+/// (cap exhausted) surfaces as a typed error rather than a mid-stream event.
+async fn run_company(
+    base_url: &str,
+    license: &str,
+    model: &str,
+    prompt: &str,
+    max_tokens: Option<u32>,
+    timeout: Duration,
+) -> Result<mpsc::Receiver<StreamEvent>> {
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .context("reqwest build")?;
+    let body = anthropic_body(model, prompt, max_tokens);
+    let url = format!("{}/v1/tutor", base_url.trim_end_matches('/'));
+    let resp = client
+        .post(&url)
+        .header("authorization", format!("Bearer {license}"))
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| anyhow!("Throughline AI request failed: {e}"))?;
+    let status = resp.status();
+    if status.as_u16() == 402 {
+        return Err(anyhow!(CAP_EXHAUSTED_SENTINEL));
+    }
+    if !status.is_success() {
+        let snippet = resp.text().await.unwrap_or_default();
+        return Err(anyhow!(humanize_http("Throughline AI", status, &snippet)));
+    }
+    let (tx, rx) = mpsc::channel::<StreamEvent>(64);
+    tokio::spawn(async move {
+        pump_sse(resp, tx, parse_anthropic_line).await;
     });
     Ok(rx)
 }
@@ -1011,6 +1074,11 @@ pub async fn test_provider(
             None => (false, None, "Add your Anthropic API key first.".to_string()),
         },
         AiProvider::Codex => test_codex(model, timeout).await,
+        AiProvider::Company => (
+            true,
+            Some(crate::settings::DEFAULT_ANTHROPIC_MODEL.to_string()),
+            "Throughline AI is active (Claude Sonnet, company-paid).".to_string(),
+        ),
         AiProvider::Disabled | AiProvider::Unset => {
             (false, None, "Choose a provider first.".to_string())
         }

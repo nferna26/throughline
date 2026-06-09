@@ -56,6 +56,10 @@ pub enum AppError {
     /// retries after cmd_confirm_cloud_send. (Epic C2.)
     NeedsCloudConsent { host: String },
 
+    /// The reader's Throughline AI (company-paid) credits are spent. The frontend
+    /// catches this and offers the BYO-key / local floor. (Company mode, CM3.)
+    CapExhausted,
+
     /// Catch-all. Used by the `From<anyhow::Error>` impl for errors that
     /// haven't been classified into a more specific variant yet. Adding a
     /// specific variant later is non-breaking.
@@ -102,6 +106,9 @@ impl AppError {
     pub fn needs_cloud_consent(host: impl Into<String>) -> Self {
         AppError::NeedsCloudConsent { host: host.into() }
     }
+    pub fn cap_exhausted() -> Self {
+        AppError::CapExhausted
+    }
 
     /// Short, user-facing one-liner for log / UI display. Maps NotFound
     /// to a sensible string instead of exposing the JSON shape.
@@ -120,6 +127,9 @@ impl AppError {
             AppError::NeedsCloudConsent { host } => {
                 format!("Confirm sending your selection to {host} before the first cloud call.")
             }
+            AppError::CapExhausted => {
+                "You've used your Throughline AI credits. Keep reading with your own API key, or switch to a local model.".to_string()
+            }
         }
     }
 
@@ -133,6 +143,7 @@ impl AppError {
             AppError::Config { .. } => "Config",
             AppError::NotFound { .. } => "NotFound",
             AppError::NeedsCloudConsent { .. } => "NeedsCloudConsent",
+            AppError::CapExhausted => "CapExhausted",
             AppError::Internal { .. } => "Internal",
         }
     }
