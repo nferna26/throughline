@@ -26,6 +26,11 @@ tauri-plugin-dialog = "2"
 # no-background-network posture. NOT tauri-plugin-http/shell (which stay banned).
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# Company-mode activation deep link (throughline://activate?token=…). Reader-
+# initiated (they click the post-purchase link); single-instance focuses the
+# running app instead of spawning a second one.
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }

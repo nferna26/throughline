@@ -269,6 +269,19 @@ export interface AiPreview {
   provider: string | null;
 }
 
+/** Company-mode ($20 bundle) status + credits (the fuel-gauge source). */
+export interface CompanyStatus {
+  provider_active: boolean;
+  has_license: boolean;
+}
+export interface CompanyCredits {
+  status: string; // active | exhausted | expired | revoked | uninit | unknown
+  remaining_micros: number;
+  budget_micros: number;
+  spent_micros: number;
+  approx_questions_left: number;
+}
+
 export interface SettingsDto {
   export_path: string;
   export_path_is_default: boolean;
@@ -299,12 +312,14 @@ export interface SettingsDto {
 
 /** Human label + privacy disclosure for a provider, used by onboarding + cards. */
 export const AI_PROVIDERS: Array<{
-  id: "local" | "openai" | "anthropic" | "codex";
+  id: "company" | "local" | "openai" | "anthropic" | "codex";
   label: string;
   /** Short where-your-text-goes disclosure shown before any call. */
   disclosure: string;
   remote: boolean;
 }> = [
+  { id: "company", label: "Throughline AI", remote: true,
+    disclosure: "Your selected passage (or section) is sent to Throughline's AI under your one-time purchase — never the whole book." },
   { id: "local", label: "Local (LM Studio)", remote: false,
     disclosure: "Runs entirely on this Mac. Nothing you read or select leaves your device." },
   { id: "openai", label: "OpenAI", remote: true,

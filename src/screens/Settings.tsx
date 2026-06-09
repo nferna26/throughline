@@ -4,6 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import TLIcon from "../components/TLIcon";
 import ModelSelect from "../components/ModelSelect";
 import AiUsageCard from "../components/AiUsageCard";
+import CompanyPanel from "../components/CompanyPanel";
 import CodexLogin from "../components/CodexLogin";
 import AiHistory from "./AiHistory";
 import UpdateChecker from "../components/UpdateChecker";
@@ -252,6 +253,8 @@ export default function Settings() {
               )}
             </div>
 
+            {providerDraft === "company" && <CompanyPanel onActivated={refresh} />}
+
             {providerDraft === "local" && (
               <>
                 <div className="tl-set-row col">
@@ -316,14 +319,17 @@ export default function Settings() {
               </div>
             )}
 
-            <div className="tl-set-row">
-              <button className="tl-btn tl-btn-ghost" style={{ padding: "8px 14px", fontSize: 13 }} disabled={testing} onClick={testConnection}>
-                {testing ? "Testing…" : "Test connection"}
-              </button>
-              <button className="tl-btn tl-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} disabled={savingAi} onClick={() => saveAi()}>
-                {savingAi ? "Saving…" : "Save AI settings"}
-              </button>
-            </div>
+            {/* Company mode activates via CompanyPanel, not the key/model Save flow. */}
+            {providerDraft !== "company" && (
+              <div className="tl-set-row">
+                <button className="tl-btn tl-btn-ghost" style={{ padding: "8px 14px", fontSize: 13 }} disabled={testing} onClick={testConnection}>
+                  {testing ? "Testing…" : "Test connection"}
+                </button>
+                <button className="tl-btn tl-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} disabled={savingAi} onClick={() => saveAi()}>
+                  {savingAi ? "Saving…" : "Save AI settings"}
+                </button>
+              </div>
+            )}
             {(aiMsg || conn || modelsErr) && (
               <div className="tl-set-row col">
                 {aiMsg && <p className={`tl-set-msg ${aiMsg.kind}`}>{aiMsg.text}</p>}

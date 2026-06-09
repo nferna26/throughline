@@ -68,6 +68,30 @@ export default function App() {
     refreshToday();
   }, []);
 
+  // Company-mode activation deep link (CM5). throughline://activate?token=… →
+  // the Rust handler emits "tl-activate"; we exchange it for a license here. The
+  // dynamic import + try/catch makes this a no-op outside Tauri (the harness).
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<string>("tl-activate", async (e) => {
+          try {
+            await invoke("cmd_activate_company", { activationToken: e.payload });
+            setTab("today");
+            await refreshToday();
+          } catch {
+            /* surfaced when the reader next opens Settings → Assistance */
+          }
+        });
+      } catch {
+        /* not running under Tauri — nothing to listen to */
+      }
+    })();
+    return () => unlisten?.();
+  }, []);
+
   // Export-folder preflight: catch a misconfigured path or an unmounted drive on
   // launch, BEFORE a session's notes are silently lost. A calm banner, not a block.
   const [exportWarning, setExportWarning] = useState<string | null>(null);

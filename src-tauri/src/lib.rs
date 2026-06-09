@@ -107,6 +107,22 @@ fn open_db_resilient() -> rusqlite::Connection {
     }
 }
 
+/// Parse a `throughline://activate?token=…` deep link, returning the token.
+/// Anything else (wrong scheme, wrong action, no token) yields None.
+fn parse_activate_token(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    if u.scheme() != "throughline" {
+        return None;
+    }
+    let is_activate = u.host_str() == Some("activate") || u.path().trim_matches('/') == "activate";
+    if !is_activate {
+        return None;
+    }
+    u.query_pairs()
+        .find(|(k, _)| k == "token")
+        .map(|(_, v)| v.into_owned())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize structured logging before anything else so DB migrations,
@@ -135,10 +151,39 @@ pub fn run() {
     let state = DbState(Mutex::new(conn));
 
     tauri::Builder::default()
+        // single-instance MUST be first: a second launch (e.g. a throughline://
+        // link click) forwards to the running app and focuses it.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            use tauri::Manager;
+            if let Some(w) = app.webview_windows().values().next() {
+                let _ = w.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(state)
+        .setup(|app| {
+            // Company-mode activation deep link (CM5). Handles warm-start (running)
+            // and cold-start (launched from the URL); emits the token to the webview,
+            // which calls cmd_activate_company. Verify on a signed release build —
+            // the scheme only registers from /Applications, not `tauri dev`.
+            #[cfg(desktop)]
+            {
+                use tauri::Emitter;
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        if let Some(token) = parse_activate_token(url.as_str()) {
+                            let _ = handle.emit("tl-activate", token);
+                        }
+                    }
+                });
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // ── books ──
             commands::books::cmd_import_book,
@@ -177,6 +222,9 @@ pub fn run() {
             commands::ai::cmd_get_usage_summary,
             commands::ai::cmd_set_monthly_spend_cap,
             commands::ai::cmd_confirm_cloud_send,
+            commands::ai::cmd_activate_company,
+            commands::ai::cmd_company_status,
+            commands::ai::cmd_company_credits,
             commands::ai::cmd_test_ai_connection,
             commands::ai::cmd_codex_device_start,
             commands::ai::cmd_codex_device_poll,
@@ -220,6 +268,22 @@ mod tests {
     use crate::models::PaceState;
     use crate::plan::{assigned_section_index, expected_completed, pace_state};
     use crate::{ai_client, db, export, paths};
+
+    #[test]
+    fn parses_activate_deep_link_only() {
+        use crate::parse_activate_token;
+        assert_eq!(
+            parse_activate_token("throughline://activate?token=ABCD-1234"),
+            Some("ABCD-1234".to_string())
+        );
+        // Wrong action, wrong scheme, or no token → ignored (no accidental activation).
+        assert_eq!(parse_activate_token("throughline://other?token=x"), None);
+        assert_eq!(
+            parse_activate_token("https://evil.example/activate?token=x"),
+            None
+        );
+        assert_eq!(parse_activate_token("throughline://activate"), None);
+    }
 
     #[test]
     fn test_sectionize_evenly_with_no_chapters() {

@@ -54,6 +54,9 @@ pub enum AiProvider {
     OpenAi,
     Anthropic,
     Codex,
+    /// Company-paid AI (the $20 bundle): Sonnet via the Throughline proxy, billed
+    /// to the company key and capped per-install. The license lives in the Keychain.
+    Company,
     Disabled,
     Unset,
 }
@@ -65,6 +68,7 @@ impl AiProvider {
             AiProvider::OpenAi => "openai",
             AiProvider::Anthropic => "anthropic",
             AiProvider::Codex => "codex",
+            AiProvider::Company => "company",
             AiProvider::Disabled => "none",
             AiProvider::Unset => "",
         }
@@ -75,6 +79,7 @@ impl AiProvider {
             "openai" => AiProvider::OpenAi,
             "anthropic" => AiProvider::Anthropic,
             "codex" => AiProvider::Codex,
+            "company" => AiProvider::Company,
             "none" => AiProvider::Disabled,
             _ => AiProvider::Unset,
         }
@@ -83,7 +88,7 @@ impl AiProvider {
     pub fn is_remote(self) -> bool {
         matches!(
             self,
-            AiProvider::OpenAi | AiProvider::Anthropic | AiProvider::Codex
+            AiProvider::OpenAi | AiProvider::Anthropic | AiProvider::Codex | AiProvider::Company
         )
     }
     /// The remote host the selection is sent to, for the cloud providers. None
@@ -93,6 +98,7 @@ impl AiProvider {
             AiProvider::OpenAi => Some("api.openai.com"),
             AiProvider::Anthropic => Some("api.anthropic.com"),
             AiProvider::Codex => Some("chatgpt.com"),
+            AiProvider::Company => Some("ai.readthroughline.com"),
             _ => None,
         }
     }
@@ -268,6 +274,20 @@ pub fn get_ai_base_url(conn: &Connection) -> String {
     get_string(conn, KEY_AI_BASE_URL).unwrap_or_else(|| DEFAULT_AI_BASE_URL.to_string())
 }
 
+/// Company-paid proxy endpoint. Overridable (so the backend can be re-pointed via
+/// DNS without an app update), defaulting to the production proxy.
+pub const KEY_COMPANY_BASE_URL: &str = "company_base_url";
+pub const DEFAULT_COMPANY_BASE_URL: &str = "https://ai.readthroughline.com";
+/// Set to "1" once a license is stored, so status checks never prompt the
+/// Keychain (mirrors the Codex-creds-present flag pattern).
+pub const KEY_COMPANY_ACTIVATED: &str = "company_activated";
+pub fn get_company_base_url(conn: &Connection) -> String {
+    get_string(conn, KEY_COMPANY_BASE_URL)
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_COMPANY_BASE_URL.to_string())
+}
+
 pub fn get_ai_model(conn: &Connection) -> String {
     get_string(conn, KEY_AI_MODEL).unwrap_or_else(|| DEFAULT_AI_MODEL.to_string())
 }
@@ -293,7 +313,8 @@ pub fn set_ai_model_for(conn: &Connection, provider: AiProvider, model: &str) ->
         AiProvider::OpenAi => KEY_AI_MODEL_OPENAI,
         AiProvider::Anthropic => KEY_AI_MODEL_ANTHROPIC,
         AiProvider::Codex => KEY_AI_MODEL_CODEX,
-        AiProvider::Disabled | AiProvider::Unset => return Ok(()),
+        // Company is locked to Sonnet — there is no per-reader model to store.
+        AiProvider::Company | AiProvider::Disabled | AiProvider::Unset => return Ok(()),
     };
     set_string(conn, key, model.trim())
 }
@@ -305,6 +326,8 @@ pub fn get_ai_model_for(conn: &Connection, provider: AiProvider) -> String {
         AiProvider::OpenAi => (KEY_AI_MODEL_OPENAI, DEFAULT_OPENAI_MODEL),
         AiProvider::Anthropic => (KEY_AI_MODEL_ANTHROPIC, DEFAULT_ANTHROPIC_MODEL),
         AiProvider::Codex => (KEY_AI_MODEL_CODEX, DEFAULT_CODEX_MODEL),
+        // Company is the $20 bundle — always Sonnet, never reader-tunable.
+        AiProvider::Company => return DEFAULT_ANTHROPIC_MODEL.to_string(),
         AiProvider::Disabled | AiProvider::Unset => return String::new(),
     };
     get_string(conn, key)
@@ -441,6 +464,24 @@ mod tests {
     fn rejects_empty_path() {
         assert!(validate_export_path("").is_err());
         assert!(validate_export_path("   ").is_err());
+    }
+
+    #[test]
+    fn company_provider_roundtrips_and_locks_to_sonnet() {
+        assert_eq!(AiProvider::from_str("company"), AiProvider::Company);
+        assert_eq!(AiProvider::Company.as_str(), "company");
+        assert!(AiProvider::Company.is_remote());
+        assert_eq!(
+            AiProvider::Company.remote_host(),
+            Some("ai.readthroughline.com")
+        );
+        assert_eq!(DEFAULT_COMPANY_BASE_URL, "https://ai.readthroughline.com");
+        // The model is locked regardless of any stored value.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        assert_eq!(
+            get_ai_model_for(&conn, AiProvider::Company),
+            DEFAULT_ANTHROPIC_MODEL
+        );
     }
 
     #[test]

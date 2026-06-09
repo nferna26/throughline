@@ -23,6 +23,7 @@ fn account_for(provider: &str) -> Option<&'static str> {
     match provider {
         "openai" => Some("ai_key_openai"),
         "anthropic" => Some("ai_key_anthropic"),
+        "company" => Some("ai_key_company"),
         _ => None,
     }
 }
