@@ -51,6 +51,11 @@ pub enum AppError {
         id: Option<String>,
     },
 
+    /// The reader enabled a cloud provider but hasn't confirmed the FIRST cloud
+    /// send. The frontend catches this, shows a consent sheet naming `host`, and
+    /// retries after cmd_confirm_cloud_send. (Epic C2.)
+    NeedsCloudConsent { host: String },
+
     /// Catch-all. Used by the `From<anyhow::Error>` impl for errors that
     /// haven't been classified into a more specific variant yet. Adding a
     /// specific variant later is non-breaking.
@@ -94,6 +99,9 @@ impl AppError {
             message: msg.into(),
         }
     }
+    pub fn needs_cloud_consent(host: impl Into<String>) -> Self {
+        AppError::NeedsCloudConsent { host: host.into() }
+    }
 
     /// Short, user-facing one-liner for log / UI display. Maps NotFound
     /// to a sensible string instead of exposing the JSON shape.
@@ -109,6 +117,9 @@ impl AppError {
                 Some(id) => format!("{} not found: {}", resource, id),
                 None => format!("{} not found", resource),
             },
+            AppError::NeedsCloudConsent { host } => {
+                format!("Confirm sending your selection to {host} before the first cloud call.")
+            }
         }
     }
 
@@ -121,6 +132,7 @@ impl AppError {
             AppError::Validation { .. } => "Validation",
             AppError::Config { .. } => "Config",
             AppError::NotFound { .. } => "NotFound",
+            AppError::NeedsCloudConsent { .. } => "NeedsCloudConsent",
             AppError::Internal { .. } => "Internal",
         }
     }

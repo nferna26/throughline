@@ -176,6 +176,7 @@ pub fn run() {
             commands::ai::cmd_finalize_ai_request,
             commands::ai::cmd_get_usage_summary,
             commands::ai::cmd_set_monthly_spend_cap,
+            commands::ai::cmd_confirm_cloud_send,
             commands::ai::cmd_test_ai_connection,
             commands::ai::cmd_codex_device_start,
             commands::ai::cmd_codex_device_poll,

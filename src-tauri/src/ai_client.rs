@@ -152,9 +152,21 @@ pub fn validate_base_url(base_url: &str, local_only: bool) -> Result<Url> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StreamEvent {
-    Delta { text: String },
+    Delta {
+        text: String,
+    },
     Done,
-    Error { message: String },
+    Error {
+        message: String,
+    },
+    /// Token usage for the call (B6). Emitted by the provider stream just before
+    /// Done; intercepted + recorded by cmd_ai_ask and NOT forwarded to the webview.
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_creation_tokens: u64,
+    },
 }
 
 #[derive(Debug, Deserialize)]

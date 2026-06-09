@@ -102,6 +102,8 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       // window.__TL_FAKE_EMPTY__ → no books yet; __TL_FAKE_BEHIND__ → behind + recovery.
       case "cmd_today":
         if (window.__TL_FAKE_EMPTY__) return null;
+        if (window.__TL_FAKE_DONE__) return Object.assign({}, TODAY, { section: null, pace: { kind: "done" }, plan_status: "active" });
+        if (window.__TL_FAKE_PLAN_READY__) return Object.assign({}, TODAY, { plan_status: "plan_ready", pace: { kind: "not_started" } });
         if (window.__TL_FAKE_BEHIND__) {
           return Object.assign({}, TODAY, {
             pace: { kind: "behind", days_behind: 6 },
@@ -118,7 +120,10 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
           });
         }
         return TODAY;
-      case "cmd_get_settings": return SETTINGS;
+      case "cmd_get_settings":
+        return window.__TL_FAKE_CLOUD__
+          ? Object.assign({}, SETTINGS, { ai_provider: "anthropic", ai_remote_allowed: true, ai_local_only: false, ai_posture: "Sends your selection to api.anthropic.com" })
+          : SETTINGS;
       case "cmd_list_books": return window.__TL_FAKE_EMPTY__ ? [] : [BOOK];
       case "cmd_assignable_sections": return SECTIONS;
       case "cmd_list_notes": return NOTES.slice();
@@ -167,6 +172,7 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
           by_lens: [{ key: "explain", calls: 18, cost_micros: 360000 }, { key: "historical", calls: 9, cost_micros: 180000 }],
         };
       case "cmd_set_monthly_spend_cap": return null;
+      case "cmd_confirm_cloud_send": window.__cloud_confirmed__ = true; return null;
       case "cmd_model_catalog": {
         const cat = {
           anthropic: [
@@ -220,6 +226,10 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
 
   // cmd_ai_ask streams via the Channel passed as args.onEvent, then resolves a handle.
   function handleAsk(args) {
+    // C2: first cloud send gated until confirmed (cmd_confirm_cloud_send).
+    if (window.__TL_FAKE_NEEDS_CONSENT__ && !window.__cloud_confirmed__) {
+      return Promise.reject({ kind: "NeedsCloudConsent", host: "api.anthropic.com" });
+    }
     const ch = args && args.onEvent;
     const emit = (ev) => { try { if (ch && typeof ch.onmessage === "function") ch.onmessage(ev); } catch (_) {} };
     const words = TUTOR_REPLY.split(" ");

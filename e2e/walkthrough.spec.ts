@@ -68,6 +68,24 @@ test("replan-decision", async ({ page }) => {
   await shoot(page, "14-replan-decision");
 });
 
+test("finished-book", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_DONE__ = true; });
+  await page.goto("/");
+  // The finishing moment is a calm card, not silence (Epic E1).
+  await expect(page.getByText(/You finished Meditations/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /Review your notes/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Find another book/i })).toBeVisible();
+  await shoot(page, "17-finished-book");
+});
+
+test("teaser-on-plan-ready", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_PLAN_READY__ = true; });
+  await page.goto("/");
+  // E2: the "Before you read" teaser shows even on a freshly-ready plan.
+  await expect(page.getByText(/BEFORE YOU READ/i)).toBeVisible();
+  await expect(page.getByText(/Begin the morning by saying to thyself/).first()).toBeVisible();
+});
+
 test("today", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Meditations" })).toBeVisible();
@@ -112,6 +130,30 @@ test("reader-margin-and-tutor", async ({ page }) => {
   await expect.soft(page.getByText(/Aurelius is bracing himself|telling himself|Stoic|cooperation/).first()).toBeVisible();
 });
 
+test("cloud-consent-gate", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_NEEDS_CONSENT__ = true; });
+  await page.goto("/");
+  await page.getByRole("button", { name: /session/i }).first().click();
+  await expect(page.locator(".tl-readcol p").first()).toBeVisible();
+  await page.evaluate(() => {
+    const ps = document.querySelectorAll(".tl-readcol p");
+    const p = ps[1] || ps[0];
+    if (!p) return;
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const sel = window.getSelection();
+    sel!.removeAllRanges();
+    sel!.addRange(range);
+    document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  await page.getByRole("button", { name: /^Explain/ }).click();
+  // The first cloud send is gated by the consent sheet (nothing left the Mac yet).
+  await expect(page.getByRole("dialog", { name: /confirm cloud ai/i })).toBeVisible();
+  await expect(page.getByText(/api\.anthropic\.com/i).first()).toBeVisible();
+  await expect(page.getByText(/book file never leaves this Mac/i)).toBeVisible();
+  await shoot(page, "16-cloud-consent");
+});
+
 test("export-warning", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EXPORT_BROKEN__ = true; });
   await page.goto("/");
@@ -132,6 +174,16 @@ test("model-picker-with-price-chip", async ({ page }) => {
   await expect(modelSel).toHaveValue("claude-sonnet-4-6");
   await expect(page.getByText(/\$3 \/ \$15/).first()).toBeVisible();
   await shoot(page, "10-model-picker");
+});
+
+test("cloud-trust-copy", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_CLOUD__ = true; });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  // With a cloud provider active, the trust card names the host + reassures.
+  await expect(page.getByText(/api\.anthropic\.com/i).first()).toBeVisible();
+  await expect(page.getByText(/your book file never does/i)).toBeVisible();
+  await shoot(page, "15-cloud-trust");
 });
 
 test("ai-usage-card", async ({ page }) => {

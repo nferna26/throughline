@@ -93,6 +93,7 @@ async fn mock_server_streams_deltas_to_client() {
     {
         match ev {
             StreamEvent::Delta { text } => full.push_str(&text),
+            StreamEvent::Usage { .. } => {}
             StreamEvent::Done => {
                 got_done = true;
                 break;

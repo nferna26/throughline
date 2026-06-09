@@ -166,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
                         {
                             match ev {
                                 ai_client::StreamEvent::Delta { text } => full.push_str(&text),
+                                ai_client::StreamEvent::Usage { .. } => {}
                                 ai_client::StreamEvent::Done => {
                                     done = true;
                                     break;

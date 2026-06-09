@@ -280,12 +280,30 @@ pub enum SseOutcome {
 
 /// Drive an SSE response body line-by-line through `parse`, emitting StreamEvents.
 /// Ends with a synthetic Done if the stream closes cleanly without a terminal event.
+/// Emit a Usage event if any tokens were seen (B6). Sent just before Done so
+/// cmd_ai_ask can record it. No-op when the stream reported no usage.
+async fn emit_usage(tx: &mpsc::Sender<StreamEvent>, u: &TokenUsage) {
+    if u.input_tokens > 0 || u.output_tokens > 0 {
+        let _ = tx
+            .send(StreamEvent::Usage {
+                input_tokens: u.input_tokens,
+                output_tokens: u.output_tokens,
+                cache_read_tokens: u.cache_read_tokens,
+                cache_creation_tokens: u.cache_creation_tokens,
+            })
+            .await;
+    }
+}
+
+// pump_sse is Anthropic-only (OpenAI/Local go through ai_client::run_chat_call),
+// so it accumulates Anthropic usage from message_start/message_delta inline.
 async fn pump_sse<F>(resp: reqwest::Response, tx: mpsc::Sender<StreamEvent>, parse: F)
 where
     F: Fn(&str) -> SseOutcome,
 {
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
+    let mut usage = TokenUsage::default();
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {
             Ok(b) => b,
@@ -302,11 +320,13 @@ where
         while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
             let line_bytes = buf.drain(..=pos).collect::<Vec<u8>>();
             let line = String::from_utf8_lossy(&line_bytes);
+            accumulate_anthropic_usage(&line, &mut usage);
             match parse(&line) {
                 SseOutcome::Delta(t) => {
                     let _ = tx.send(StreamEvent::Delta { text: t }).await;
                 }
                 SseOutcome::Done => {
+                    emit_usage(&tx, &usage).await;
                     let _ = tx.send(StreamEvent::Done).await;
                     return;
                 }
@@ -318,6 +338,7 @@ where
             }
         }
     }
+    emit_usage(&tx, &usage).await;
     let _ = tx.send(StreamEvent::Done).await;
 }
 
@@ -378,12 +399,28 @@ pub fn parse_anthropic_line(line: &str) -> SseOutcome {
 /// it can never be MORE restrictive than the reader's chosen tier. Pure →
 /// unit-tested so the brevity contract is pinned without a live call.
 fn anthropic_body(model: &str, prompt: &str, max_tokens: Option<u32>) -> serde_json::Value {
-    json!({
+    let mut body = json!({
         "model": model,
         "max_tokens": max_tokens.unwrap_or(1024),
-        "messages": [{ "role": "user", "content": prompt }],
         "stream": true,
-    })
+    });
+    // Prompt caching (B5): put the stable instruction prefix in a cached `system`
+    // block and keep the per-call fenced passage as the user message. Falls back to
+    // a single user message when there's no fence to split on.
+    match crate::ai_stub::cache_split(prompt) {
+        Some((stable, volatile)) if !stable.is_empty() => {
+            body["system"] = json!([{
+                "type": "text",
+                "text": stable,
+                "cache_control": { "type": "ephemeral" }
+            }]);
+            body["messages"] = json!([{ "role": "user", "content": volatile }]);
+        }
+        _ => {
+            body["messages"] = json!([{ "role": "user", "content": prompt }]);
+        }
+    }
+    body
 }
 
 async fn run_anthropic(
@@ -1381,6 +1418,27 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_body_caches_the_stable_instruction_prefix() {
+        let prompt = "You are a tutor. Instructions here.\n\n<<<UNTRUSTED_PASSAGE>>>\n> hi there\n<<<END_UNTRUSTED_PASSAGE>>>\n";
+        let body = anthropic_body("claude-sonnet-4-6", prompt, Some(200));
+        // The stable instruction prefix becomes a cached system block...
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        let sys = body["system"][0]["text"].as_str().unwrap();
+        assert!(sys.contains("Instructions here"));
+        assert!(
+            !sys.contains("UNTRUSTED_PASSAGE"),
+            "the volatile passage must stay OUT of the cached prefix"
+        );
+        // ...and the fenced passage is the per-call user message.
+        let user = body["messages"][0]["content"].as_str().unwrap();
+        assert!(user.contains("UNTRUSTED_PASSAGE") && user.contains("hi there"));
+        // No fence → a single user message, no system block.
+        assert!(anthropic_body("claude-sonnet-4-6", "hi", Some(200))
+            .get("system")
+            .is_none());
+    }
+
+    #[test]
     fn codex_body_carries_the_callers_brevity_cap_as_max_output_tokens() {
         // The Responses API uses `max_output_tokens` for the generated-token ceiling.
         let brief = codex_responses_body("gpt-5.5", "hi", Some(200));
@@ -1430,6 +1488,7 @@ mod tests {
             match ev {
                 StreamEvent::Delta { text } => got.push_str(&text),
                 StreamEvent::Done => break,
+                StreamEvent::Usage { .. } => {}
                 StreamEvent::Error { message } => panic!("anthropic stream error: {message}"),
             }
         }
@@ -1471,6 +1530,7 @@ mod tests {
             match ev {
                 StreamEvent::Delta { text } => got.push_str(&text),
                 StreamEvent::Done => break,
+                StreamEvent::Usage { .. } => {}
                 StreamEvent::Error { message } => {
                     // Codex backend is an unofficial/fragile contract — report, don't fail.
                     println!("[codex-brevity] stream error: {message}");
@@ -1519,6 +1579,7 @@ mod tests {
                     done = true;
                     break;
                 }
+                StreamEvent::Usage { .. } => {}
                 StreamEvent::Error { message } => panic!("anthropic stream error: {message}"),
             }
         }
@@ -1616,6 +1677,7 @@ mod tests {
                         match ev {
                             StreamEvent::Delta { text } => got.push_str(&text),
                             StreamEvent::Done => break,
+                            StreamEvent::Usage { .. } => {}
                             StreamEvent::Error { message } => {
                                 println!("[codex] stream error: {message}");
                                 break;
@@ -1664,6 +1726,7 @@ mod tests {
                     done = true;
                     break;
                 }
+                StreamEvent::Usage { .. } => {}
                 StreamEvent::Error { message } => panic!("openai stream error: {message}"),
             }
         }

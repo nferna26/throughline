@@ -328,6 +328,7 @@ pub async fn cmd_ai_ask(
     // the small unblock-and-return answer; deep is the reader-pulled elaboration.
     depth: Option<String>,
     on_event: tauri::ipc::Channel<ai_client::StreamEvent>,
+    app: tauri::AppHandle,
     state: State<'_, DbState>,
 ) -> Result<AskHandle, AppError> {
     let stub_mode = ai_stub::StubMode::from_str(&mode)
@@ -397,6 +398,15 @@ pub async fn cmd_ai_ask(
             settings::AiProvider::Codex => "chatgpt.com".to_string(),
             _ => String::new(),
         };
+
+        // First-cloud-call consent (C2): a remote provider must be confirmed once
+        // before the first send. The frontend catches this, shows a consent sheet,
+        // then retries after cmd_confirm_cloud_send.
+        if provider.is_remote()
+            && settings::get_string(&conn, settings::KEY_FIRST_CLOUD_CONFIRMED_AT).is_none()
+        {
+            return Err(AppError::needs_cloud_consent(provider_host.clone()));
+        }
 
         let ctx = ai_stub::PromptContext {
             book_title: book.title.clone(),
@@ -475,9 +485,33 @@ pub async fn cmd_ai_ask(
     let log_locator = locator.clone();
     let log_provider = provider_host.clone();
     let log_chars = trimmed.chars().count();
+    let rec_ai_id = ai_id.clone();
+    let rec_provider = provider.as_str().to_string();
+    let rec_model = model.clone();
     tauri::async_runtime::spawn(async move {
         let mut saw_error = false;
         while let Some(ev) = rx.recv().await {
+            // B6 live capture: intercept the Usage event — record it to
+            // ai_request_usage and DO NOT forward it to the webview.
+            if let ai_client::StreamEvent::Usage {
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
+            } = ev
+            {
+                use tauri::Manager;
+                let usage = crate::ai_providers::TokenUsage {
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
+                };
+                if let Ok(conn) = app.state::<DbState>().0.lock() {
+                    let _ = write_usage_row(&conn, &rec_ai_id, &rec_provider, &rec_model, &usage);
+                }
+                continue;
+            }
             if matches!(ev, ai_client::StreamEvent::Error { .. }) {
                 saw_error = true;
             }
@@ -600,6 +634,19 @@ pub fn cmd_set_monthly_spend_cap(cents: i64, state: State<DbState>) -> Result<()
     .map_err(AppError::from)
 }
 
+/// Record the reader's first-cloud-call consent (Epic C2). After this, cmd_ai_ask
+/// no longer gates cloud calls behind the consent sheet.
+#[tauri::command]
+pub fn cmd_confirm_cloud_send(state: State<DbState>) -> Result<(), AppError> {
+    let conn = state.0.lock()?;
+    settings::set_string(
+        &conn,
+        settings::KEY_FIRST_CLOUD_CONFIRMED_AT,
+        &Utc::now().to_rfc3339(),
+    )
+    .map_err(AppError::from)
+}
+
 /// Record token usage + computed cost for a finished AI request (Epic B3). The
 /// streaming layer accumulates the provider's usage block; this persists it as
 /// the COGS row the usage panel (B4) reads. Idempotent per request_id.
@@ -614,15 +661,27 @@ pub fn cmd_finalize_ai_request(
     cache_creation_tokens: Option<u64>,
     state: State<DbState>,
 ) -> Result<i64, AppError> {
-    use crate::ai_providers::{cost_micros, TokenUsage};
-    let usage = TokenUsage {
+    let usage = crate::ai_providers::TokenUsage {
         input_tokens,
         output_tokens,
         cache_read_tokens: cache_read_tokens.unwrap_or(0),
         cache_creation_tokens: cache_creation_tokens.unwrap_or(0),
     };
-    let cost = cost_micros(settings::AiProvider::from_str(&provider), &model, &usage);
     let conn = state.0.lock()?;
+    write_usage_row(&conn, &request_id, &provider, &model, &usage).map_err(AppError::from)
+}
+
+/// Compute cost + upsert a usage row. Shared by cmd_finalize_ai_request and the
+/// live-capture path in cmd_ai_ask (B6). Returns the cost in micro-dollars.
+pub(crate) fn write_usage_row(
+    conn: &rusqlite::Connection,
+    request_id: &str,
+    provider: &str,
+    model: &str,
+    usage: &crate::ai_providers::TokenUsage,
+) -> rusqlite::Result<i64> {
+    let cost =
+        crate::ai_providers::cost_micros(settings::AiProvider::from_str(provider), model, usage);
     conn.execute(
         "INSERT INTO ai_request_usage
            (request_id, provider, model, input_tokens, output_tokens,
@@ -638,14 +697,13 @@ pub fn cmd_finalize_ai_request(
             request_id,
             provider,
             model,
-            input_tokens as i64,
-            output_tokens as i64,
+            usage.input_tokens as i64,
+            usage.output_tokens as i64,
             usage.cache_read_tokens as i64,
             usage.cache_creation_tokens as i64,
             cost,
         ],
-    )
-    .map_err(AppError::from)?;
+    )?;
     Ok(cost)
 }
 
@@ -791,6 +849,64 @@ mod tests {
         assert!(!spend_cap_exceeded(500, 4_999_999)); // just under
         assert!(spend_cap_exceeded(500, 5_000_000)); // exactly at the cap
         assert!(spend_cap_exceeded(500, 9_000_000)); // over
+    }
+
+    #[test]
+    fn write_usage_row_records_cost_and_tokens() {
+        // The B6 live-capture recording path (what cmd_ai_ask calls on a Usage event).
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO books (id,title,source_type,source_path,source_sha256,created_at)
+               VALUES ('b','T','txt','/p','h','2026-01-01')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ai_requests (id,book_id,mode,created_at) VALUES ('req1','b','explain','2026-01-01')",
+            [],
+        )
+        .unwrap();
+        let usage = crate::ai_providers::TokenUsage {
+            input_tokens: 4750,
+            output_tokens: 400,
+            ..Default::default()
+        };
+        // 4750·$3 + 400·$15 per Mtok = 20,250 micro-dollars.
+        let cost = super::write_usage_row(&conn, "req1", "anthropic", "claude-sonnet-4-6", &usage)
+            .unwrap();
+        assert_eq!(cost, 20_250);
+        let (it, ot, cm): (i64, i64, i64) = conn
+            .query_row(
+                "SELECT input_tokens, output_tokens, cost_usd_micros FROM ai_request_usage WHERE request_id='req1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((it, ot, cm), (4750, 400, 20_250));
+    }
+
+    #[test]
+    fn cloud_consent_gate_blocks_until_confirmed() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        let confirmed = |c: &Connection| {
+            settings::get_string(c, settings::KEY_FIRST_CLOUD_CONFIRMED_AT).is_some()
+        };
+        // Remote providers gate (until confirmed); local never gates.
+        assert!(settings::AiProvider::Anthropic.is_remote());
+        assert!(!settings::AiProvider::Local.is_remote());
+        assert!(!confirmed(&conn), "unconfirmed by default → the gate fires");
+        settings::set_string(
+            &conn,
+            settings::KEY_FIRST_CLOUD_CONFIRMED_AT,
+            "2026-06-08T00:00:00Z",
+        )
+        .unwrap();
+        assert!(
+            confirmed(&conn),
+            "confirmed after cmd_confirm_cloud_send → gate clears"
+        );
     }
 
     /// The brevity contract is cross-provider: the cap that `cmd_ai_ask` threads
