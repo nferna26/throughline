@@ -5,6 +5,27 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 3)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.3.0] - 2026-06-09
+
+### Added
+
+- **Throughline AI — the tutor, set up for you ($20 once, no API key).** A new
+  "Throughline AI" provider activates Claude Sonnet through Throughline's hosted
+  proxy, so the margin tutor works out of the box — no key to paste, no
+  subscription. A per-install allowance with a calm "credits" fuel gauge, and a
+  graceful fall to your own API key or a local model when it's spent. Still
+  reader-initiated and selection-scoped; your book file never leaves the Mac.
+- **Purchase + activation.** Buy from Settings → Assistance, or activate a code
+  from the website — a typed `XXXX-XXXX-XXXX` code or a `throughline://activate`
+  deep link.
+- **Finished-book moment.** Today shows a calm completion card — your notes and
+  highlights, "Review your notes", and "Find another book" — instead of silence.
+
+### Changed
+
+- Settings' data-trust copy now names the exact endpoint a selection is sent to,
+  and confirms your book file never leaves the Mac.
+
 ## [0.2.0] - 2026-06-05
 
 ### Added
