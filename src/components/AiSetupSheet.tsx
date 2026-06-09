@@ -101,6 +101,11 @@ export default function AiSetupSheet(props: {
    *  lens request immediately (no Settings detour). For `unavailable` "Check
    *  again" it is called with "" — the caller just retries the live provider. */
   onConnected: (provider: string) => void;
+  /** Override the `not_connected` headline + sub. The cap-hit screen uses this
+   *  ("Keep going free") — the default copy claims nothing was sent, which is
+   *  wrong there (a send was attempted and refused before any stream). */
+  title?: string;
+  subtitle?: string;
 }) {
   const { ctx } = props;
   const [state, setState] = useState<SetupState>(props.initialState ?? "not_connected");
@@ -255,9 +260,10 @@ export default function AiSetupSheet(props: {
 
       {state === "not_connected" && (
         <div className="tl-aiset-body">
-          <h3 style={sx.title}>Tutor not connected</h3>
+          <h3 style={sx.title}>{props.title ?? "Tutor not connected"}</h3>
           <p style={sx.sub}>
-            This lens is ready. It just needs somewhere to run. Nothing has been sent.
+            {props.subtitle ??
+              "This lens is ready. It just needs somewhere to run. Nothing has been sent."}
           </p>
           <div style={sx.actions}>
             <button className="tl-btn tl-btn-primary" onClick={() => setState("paste_key")}>

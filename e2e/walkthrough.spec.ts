@@ -171,10 +171,76 @@ test("cap-exhausted-fallback", async ({ page }) => {
     document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   });
   await page.getByRole("button", { name: /^Explain/ }).click();
-  // Credits spent → a calm fallback to the BYO/local floor, never a dead end.
-  await expect(page.getByText(/used your Throughline AI credits/i)).toBeVisible();
-  await expect(page.getByText(/plan and notes are untouched/i)).toBeVisible();
+  // Credits spent → the three-door cap screen, free path first, never a dead end.
+  await expect(page.getByText(/included Throughline AI is used up/i)).toBeVisible();
+  await expect(page.getByText(/Reading and notes are untouched/i)).toBeVisible();
+  // PRIMARY free door (the only tl-btn-primary), SECONDARY $20 ghost, TERTIARY quiet link.
+  await expect(page.getByText("Keep going free")).toBeVisible();
+  const freeBtn = page.getByRole("button", { name: /Paste API key & ask/i });
+  await expect(freeBtn).toHaveClass(/tl-btn-primary/);
+  const buyBtn = page.getByRole("button", { name: /another full allowance — \$20/i });
+  await expect(buyBtn).toBeVisible();
+  await expect(buyBtn).not.toHaveClass(/tl-btn-primary/);
+  await expect(page.getByRole("button", { name: /Let me know/i })).toBeVisible();
   await shoot(page, "20-cap-exhausted");
+  // The $20 door reuses checkout and offers the post-activation retry.
+  await buyBtn.click();
+  await expect(page.getByText(/Opening checkout in your browser/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /try again/i })).toBeVisible();
+  await shoot(page, "20b-cap-topup");
+});
+
+test("tutor-fuel-nudge-75", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_COMPANY_ACTIVE__ = true;
+    w.__TL_FAKE_REMAINING_FRACTION__ = 0.2; // 80% used → gentle nudge
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /session/i }).first().click();
+  await expect(page.locator(".tl-readcol p").first()).toBeVisible();
+  await page.evaluate(() => {
+    const ps = document.querySelectorAll(".tl-readcol p");
+    const p = ps[1] || ps[0];
+    if (!p) return;
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const sel = window.getSelection();
+    sel!.removeAllRanges();
+    sel!.addRange(range);
+    document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  await page.getByRole("button", { name: /^Explain/ }).click();
+  // The answer still streams (non-blocking), with the gentle free-path nudge below.
+  await expect(page.getByText(/About a quarter of your included AI left/i)).toBeVisible();
+  await expect(page.getByText(/keep going free with your own key or a local model/i)).toBeVisible();
+  await shoot(page, "22-fuel-nudge75");
+});
+
+test("tutor-fuel-nudge-90", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_COMPANY_ACTIVE__ = true;
+    w.__TL_FAKE_REMAINING_FRACTION__ = 0.07; // 93% used → clearer nudge
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /session/i }).first().click();
+  await expect(page.locator(".tl-readcol p").first()).toBeVisible();
+  await page.evaluate(() => {
+    const ps = document.querySelectorAll(".tl-readcol p");
+    const p = ps[1] || ps[0];
+    if (!p) return;
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const sel = window.getSelection();
+    sel!.removeAllRanges();
+    sel!.addRange(range);
+    document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  await page.getByRole("button", { name: /^Explain/ }).click();
+  await expect(page.getByText(/included AI is almost done/i)).toBeVisible();
+  await expect(page.getByText(/LM Studio on this Mac, about two minutes/i)).toBeVisible();
+  await shoot(page, "23-fuel-nudge90");
 });
 
 test("export-warning", async ({ page }) => {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Reac
 import { invoke, Channel } from "@tauri-apps/api/core";
 import TLIcon from "./TLIcon";
 import AiSetupSheet from "./AiSetupSheet";
+import TutorFuel from "./TutorFuel";
 import { aiProviderLabel, type Note, type AskHandle, type SettingsDto, type StreamEvent } from "../types";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
 import "../tl-tutor.css";
@@ -159,6 +160,8 @@ export default function MarginTutorCard(props: {
   const [cloudConsent, setCloudConsent] = useState<{ host: string; which: TutorMode; tier: Depth } | null>(null);
   // Company-mode cap spent (CM6): set when cmd_ai_ask returns CapExhausted.
   const [capExhausted, setCapExhausted] = useState(false);
+  // The cap screen's $20 door (reuses the existing buy→activate flow).
+  const [topUpUrl, setTopUpUrl] = useState<string | null>(null);
   const [modelName, setModelName] = useState("the local model");
   // Provider posture, loaded from settings. Drives the badge + consent copy
   // (WHERE the passage goes). Disabled only when no provider is chosen. null =
@@ -357,6 +360,23 @@ export default function MarginTutorCard(props: {
     startStream(lens, deepRequested ? "deep" : "brief");
   }, [lens, deepRequested, startStream]);
 
+  // Cap-hit $20 door: same buy→activate flow as Settings — a fresh purchase is a
+  // fresh full allowance. Rust opens the browser; the URL is the visible fallback.
+  const topUp = useCallback(async () => {
+    try {
+      setTopUpUrl(await invoke<string>("cmd_company_checkout"));
+    } catch {
+      setTopUpUrl(""); // signal "couldn't start checkout" without a red wall
+    }
+  }, []);
+
+  // After the deep link activates the new license, the reader retries by hand.
+  const retryAfterTopUp = useCallback(() => {
+    setCapExhausted(false);
+    setTopUpUrl(null);
+    startStream(lens, "brief");
+  }, [lens, startStream]);
+
   const doSave = useCallback(async () => {
     if (!aiReqRef.current || !briefRef.current.trim()) return;
     setSaving(true);
@@ -444,12 +464,14 @@ export default function MarginTutorCard(props: {
       </button>
 
       {capExhausted ? (
-        // Company-paid credits spent (CM6). A calm message, then the BYO-key /
-        // local floor right here — reading and notes are untouched.
-        <div className="tl-tutor-consent">
+        // Cap-hit (CM6): three calm doors, free first. The proxy refused BEFORE
+        // any stream started, so nothing was truncated; reading and notes are
+        // untouched. Hierarchy: free path primary, $20 re-up secondary (ghost),
+        // "ask for more" a quiet tertiary link — never a paywall.
+        <div className="tl-tutor-consent tl-caphit">
           <p>
-            You've used your <strong>Throughline AI</strong> credits. Keep reading with your own
-            API key, or switch to a local model — your plan and notes are untouched.
+            <strong>Your included Throughline AI is used up.</strong> Reading and notes are
+            untouched. Pick how the tutor keeps answering:
           </p>
           <AiSetupSheet
             ctx={{
@@ -460,8 +482,40 @@ export default function MarginTutorCard(props: {
               sectionLabel: draft.chapter || null,
             }}
             initialState="not_connected"
+            title="Keep going free"
+            subtitle="Use your own API key, or run a local model on this Mac — free either way."
             onConnected={onSetupConnected}
           />
+          <div className="tl-caphit-doors">
+            <button
+              className="tl-tutor-ghost"
+              onClick={(e) => { e.stopPropagation(); topUp(); }}
+            >
+              Get another full allowance — $20
+            </button>
+            {topUpUrl !== null && (
+              <p className="tl-tutorfuel-note" role="status">
+                {topUpUrl === "" ? (
+                  <>Couldn't start checkout. Try again in a moment.</>
+                ) : (
+                  <>
+                    Opening checkout in your browser… If it doesn't open,{" "}
+                    <a href={topUpUrl} target="_blank" rel="noopener noreferrer">continue here</a>.
+                    After you buy, activation happens automatically — then{" "}
+                    <button className="tl-caphit-link" onClick={(e) => { e.stopPropagation(); retryAfterTopUp(); }}>
+                      try again
+                    </button>.
+                  </>
+                )}
+              </p>
+            )}
+            <button
+              className="tl-caphit-link"
+              onClick={(e) => { e.stopPropagation(); void invoke("cmd_open_support_email").catch(() => {}); }}
+            >
+              Think you should get more included? Let me know →
+            </button>
+          </div>
         </div>
       ) : phase === "blocked" || (phase === "consent" && (provider === "none" || provider === "")) ? (
         // Cold-start: no provider wired up. Setup at the moment of intent —
@@ -613,6 +667,10 @@ export default function MarginTutorCard(props: {
           )}
         </>
       )}
+
+      {/* Company-mode fuel strip: quiet early, nudges at 75%/90% used (the cap
+          screen above owns the exhausted state). */}
+      {!capExhausted && <TutorFuel provider={provider} />}
 
       {cloudConsent && (
         <div
