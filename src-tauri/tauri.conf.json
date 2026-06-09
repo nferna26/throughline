@@ -24,6 +24,11 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["throughline"]
+      }
+    },
     "updater": {
       "endpoints": [
         "https://github.com/nferna26/throughline/releases/latest/download/latest.json"
