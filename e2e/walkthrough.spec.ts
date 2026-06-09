@@ -221,6 +221,17 @@ test("company-activation", async ({ page }) => {
   await shoot(page, "18-company-activate");
 });
 
+test("company-checkout", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.selectOption('select[aria-label="AI provider"]', "company");
+  // Clicking buy hits cmd_company_checkout (which opens the browser) and shows a fallback link.
+  await page.getByRole("button", { name: /Get Throughline AI — \$20/i }).click();
+  await expect(page.getByText(/Opening checkout in your browser/i)).toBeVisible();
+  await expect(page.getByRole("link", { name: /continue here/i })).toBeVisible();
+  await shoot(page, "21-company-checkout");
+});
+
 test("company-fuel-gauge", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_COMPANY_ACTIVE__ = true; });
   await page.goto("/");

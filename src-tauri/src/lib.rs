@@ -225,6 +225,7 @@ pub fn run() {
             commands::ai::cmd_activate_company,
             commands::ai::cmd_company_status,
             commands::ai::cmd_company_credits,
+            commands::ai::cmd_company_checkout,
             commands::ai::cmd_test_ai_connection,
             commands::ai::cmd_codex_device_start,
             commands::ai::cmd_codex_device_poll,

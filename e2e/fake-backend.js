@@ -135,6 +135,8 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_activate_company":
         window.__TL_FAKE_COMPANY_ACTIVE__ = true;
         return { provider_active: true, has_license: true };
+      case "cmd_company_checkout":
+        return "https://checkout.stripe.com/c/pay/cs_test_fake123";
       case "cmd_list_books": return window.__TL_FAKE_EMPTY__ ? [] : [BOOK];
       case "cmd_assignable_sections": return SECTIONS;
       case "cmd_list_notes": return NOTES.slice();
