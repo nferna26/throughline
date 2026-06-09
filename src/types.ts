@@ -276,9 +276,8 @@ export interface CompanyStatus {
 }
 export interface CompanyCredits {
   status: string; // active | exhausted | expired | revoked | uninit | unknown
-  remaining_micros: number;
-  budget_micros: number;
-  spent_micros: number;
+  /** 0–1 of the included allowance remaining — the server never sends dollars. */
+  remaining_fraction: number;
   approx_questions_left: number;
 }
 

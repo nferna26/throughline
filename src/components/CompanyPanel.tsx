@@ -6,7 +6,7 @@ import type { CompanyStatus, CompanyCredits } from "../types";
 /** Three-state fuel gauge — robust to price changes (no exact "N questions"). */
 function fuel(credits: CompanyCredits | null): { label: string; level: "ok" | "low" | "empty" } {
   if (!credits || credits.status !== "active") return { label: "Almost out", level: "empty" };
-  const frac = credits.budget_micros > 0 ? credits.remaining_micros / credits.budget_micros : 0;
+  const frac = credits.remaining_fraction;
   if (frac > 0.33) return { label: "Plenty of AI left", level: "ok" };
   if (frac > 0.1) return { label: "Running low", level: "low" };
   return { label: "Almost out", level: "empty" };

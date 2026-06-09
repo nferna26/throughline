@@ -186,6 +186,68 @@ describe("MarginTutorCard — brief default + go deeper", () => {
   });
 });
 
+describe("MarginTutorCard — cap-hit three doors (CM6)", () => {
+  // Company mode, proxy says the allowance is spent: cmd_ai_ask rejects with
+  // CapExhausted BEFORE any stream — the card must show three doors, free first.
+  function setCapHit() {
+    mocks.invoke.mockReset();
+    mocks.invoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings":
+          return Promise.resolve({ export_path: "/x", ai_provider: "company", ai_requests_retention_days: 90 });
+        case "cmd_ai_ask":
+          return Promise.reject({ kind: "CapExhausted" });
+        case "cmd_company_checkout":
+          return Promise.resolve("https://checkout.stripe.com/c/pay/cs_test_x");
+        case "cmd_company_credits":
+          return Promise.resolve({ status: "exhausted", remaining_fraction: 0, approx_questions_left: 0 });
+        default:
+          return Promise.resolve(null);
+      }
+    });
+  }
+
+  beforeEach(() => {
+    localStorage.setItem("rg.tutorEnabled", "true");
+    setCapHit();
+  });
+
+  it("renders the three doors with the free path as the only primary", async () => {
+    render(card());
+    expect(await screen.findByText(/included Throughline AI is used up/i)).toBeInTheDocument();
+    // PRIMARY: the free door (AiSetupSheet with cap framing) holds the only
+    // tl-btn-primary on the screen.
+    expect(screen.getByText("Keep going free")).toBeInTheDocument();
+    const freeBtn = screen.getByRole("button", { name: /Paste API key & ask/i });
+    expect(freeBtn.className).toContain("tl-btn-primary");
+    // SECONDARY: the $20 door is a ghost button, never primary.
+    const buyBtn = screen.getByRole("button", { name: /another full allowance — \$20/i });
+    expect(buyBtn.className).not.toContain("tl-btn-primary");
+    // TERTIARY: the quiet mailto link.
+    expect(screen.getByRole("button", { name: /Let me know/i })).toBeInTheDocument();
+    // The stale "nothing has been sent" framing must not appear at the cap.
+    expect(screen.queryByText(/Nothing has been sent/i)).toBeNull();
+  });
+
+  it("the $20 door reuses the buy→activate flow and offers a retry", async () => {
+    render(card());
+    fireEvent.click(await screen.findByRole("button", { name: /another full allowance — \$20/i }));
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_company_checkout"));
+    expect(await screen.findByText(/Opening checkout in your browser/i)).toBeInTheDocument();
+    // "try again" clears the cap state and refires the lens.
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.objectContaining({ depth: "brief" })),
+    );
+  });
+
+  it("the quiet door opens the fixed support email (no payload from the app)", async () => {
+    render(card());
+    fireEvent.click(await screen.findByRole("button", { name: /Let me know/i }));
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_open_support_email"));
+  });
+});
+
 describe("MarginTutorCard — provider gate", () => {
   // No AI provider chosen → the tutor must refuse to call and say so.
   function setNoProvider() {

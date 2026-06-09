@@ -375,7 +375,10 @@ pub async fn cmd_ai_ask(
 
         // Monthly spend cap (Epic B4): refuse a cloud call once month-to-date cost
         // reaches the reader's ceiling. Local has no spend, so it's never capped.
-        if provider.is_remote() {
+        // Company is exempt: the proxy meters it server-side (the authoritative
+        // cap), and this gate's refusal speaks dollars — which company mode must
+        // never surface.
+        if local_spend_cap_applies(provider) {
             let cap = settings::get_string(&conn, settings::KEY_AI_SPEND_CAP_CENTS)
                 .and_then(|s| s.parse::<i64>().ok())
                 .unwrap_or(0);
@@ -580,6 +583,13 @@ fn spend_cap_exceeded(cap_cents: i64, mtd_micros: i64) -> bool {
     cap_cents > 0 && mtd_micros >= cap_cents * 10_000
 }
 
+/// The local monthly spend cap governs the reader's own BYO cloud spend. Company
+/// mode is metered server-side (the proxy cap is authoritative) and must never
+/// surface a dollar-denominated refusal, so it is exempt. Local never spends.
+fn local_spend_cap_applies(provider: settings::AiProvider) -> bool {
+    provider.is_remote() && !matches!(provider, settings::AiProvider::Company)
+}
+
 /// Month-to-date cloud-AI spend in micro-dollars (for the spend cap).
 fn month_to_date_micros(conn: &rusqlite::Connection) -> i64 {
     conn.query_row(
@@ -678,10 +688,37 @@ pub struct CompanyStatus {
 #[derive(Serialize, Default)]
 pub struct CompanyCredits {
     pub status: String, // active | exhausted | expired | revoked | uninit | unknown
-    pub remaining_micros: i64,
-    pub budget_micros: i64,
-    pub spent_micros: i64,
+    /// 0.0–1.0 of the included allowance remaining. The proxy sends fractions and
+    /// question estimates only — dollar amounts never reach the client.
+    pub remaining_fraction: f64,
     pub approx_questions_left: i64,
+}
+
+/// Parse the proxy's /v1/credits payload. Status comes only from the explicit
+/// `ok`/`reason` fields (never inferred from numbers); missing numerics read as
+/// 0 — the conservative side for an eligibility-ish display.
+fn parse_company_credits(body: &serde_json::Value) -> CompanyCredits {
+    let ok = body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let reason = body.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+    let status = if ok {
+        "active".to_string()
+    } else if !reason.is_empty() {
+        reason.to_string()
+    } else {
+        "unknown".to_string()
+    };
+    CompanyCredits {
+        status,
+        remaining_fraction: body
+            .get("remaining_fraction")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0),
+        approx_questions_left: body
+            .get("approx_questions_left")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0),
+    }
 }
 
 fn company_http() -> Result<reqwest::Client, AppError> {
@@ -824,23 +861,27 @@ pub async fn cmd_company_credits(state: State<'_, DbState>) -> Result<CompanyCre
         .await
         .map_err(|e| AppError::ai(format!("Couldn't reach Throughline AI: {e}")))?;
     let body: serde_json::Value = resp.json().await.unwrap_or_default();
-    let ok = body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
-    let reason = body.get("reason").and_then(|v| v.as_str()).unwrap_or("");
-    let status = if ok {
-        "active".to_string()
-    } else if !reason.is_empty() {
-        reason.to_string()
-    } else {
-        "unknown".to_string()
-    };
-    let i = |k: &str| body.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
-    Ok(CompanyCredits {
-        status,
-        remaining_micros: i("remaining_micros"),
-        budget_micros: i("budget_micros"),
-        spent_micros: i("spent_micros"),
-        approx_questions_left: i("approx_questions_left"),
-    })
+    Ok(parse_company_credits(&body))
+}
+
+/// The cap-hit screen's quiet third door. Fixed recipient + subject and a short
+/// editable greeting — a compile-time constant, so by construction it can never
+/// carry usage data, book identity, or passage content.
+const SUPPORT_EMAIL_MAILTO: &str = "mailto:nick@readthroughline.com\
+?subject=Throughline%20%E2%80%94%20request%20for%20more%20included%20allowance\
+&body=Hi%20Nick%2C%0A%0AI%27ve%20used%20up%20my%20included%20Throughline%20AI%20and%20would%20like%20more%20headroom.%0A%0A";
+
+/// Open the reader's mail client for the "more included allowance" request.
+/// A narrow targeted exec of one fixed mailto: URL, mirroring `open_in_browser`
+/// — not a general shell/open surface, and no dynamic input.
+#[tauri::command]
+pub fn cmd_open_support_email() {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg(SUPPORT_EMAIL_MAILTO)
+            .spawn();
+    }
 }
 
 /// Record token usage + computed cost for a finished AI request (Epic B3). The
@@ -1046,6 +1087,59 @@ mod tests {
         // Anything else stays a generic Ai error.
         let other = classify_provider_error(&anyhow::anyhow!("connection refused"));
         assert_eq!(other.kind(), "Ai");
+    }
+
+    #[test]
+    fn local_spend_cap_exempts_company_mode() {
+        use settings::AiProvider;
+        // BYO cloud providers are governed by the reader's local monthly cap…
+        assert!(local_spend_cap_applies(AiProvider::OpenAi));
+        assert!(local_spend_cap_applies(AiProvider::Anthropic));
+        assert!(local_spend_cap_applies(AiProvider::Codex));
+        // …but Company is metered server-side (the proxy cap is authoritative) and
+        // must never hit the dollar-denominated local refusal. Local never spends.
+        assert!(!local_spend_cap_applies(AiProvider::Company));
+        assert!(!local_spend_cap_applies(AiProvider::Local));
+    }
+
+    #[test]
+    fn parse_company_credits_reads_explicit_fields_only() {
+        // Active license: status from ok, fraction + questions pass through.
+        let active = parse_company_credits(&serde_json::json!({
+            "ok": true, "remaining_fraction": 0.75, "approx_questions_left": 300,
+            "expires_at": "2028-06-08T00:00:00Z"
+        }));
+        assert_eq!(active.status, "active");
+        assert!((active.remaining_fraction - 0.75).abs() < f64::EPSILON);
+        assert_eq!(active.approx_questions_left, 300);
+
+        // Exhausted: status comes from the explicit reason, never inferred.
+        let spent = parse_company_credits(&serde_json::json!({
+            "ok": false, "reason": "exhausted", "remaining_fraction": 0.0,
+            "approx_questions_left": 0
+        }));
+        assert_eq!(spent.status, "exhausted");
+        assert_eq!(spent.remaining_fraction, 0.0);
+
+        // Garbage / missing fields: conservative — unknown status, zeroed numbers.
+        let junk = parse_company_credits(&serde_json::json!({ "surprise": 1 }));
+        assert_eq!(junk.status, "unknown");
+        assert_eq!(junk.remaining_fraction, 0.0);
+        assert_eq!(junk.approx_questions_left, 0);
+    }
+
+    #[test]
+    fn support_email_mailto_is_fixed_and_content_free() {
+        // The tertiary cap-hit door: fixed recipient + subject, short editable
+        // body. A compile-time constant, so by construction it can never carry
+        // usage data, book identity, or passage content.
+        assert!(SUPPORT_EMAIL_MAILTO.starts_with("mailto:nick@readthroughline.com?"));
+        assert!(SUPPORT_EMAIL_MAILTO.contains(
+            "subject=Throughline%20%E2%80%94%20request%20for%20more%20included%20allowance"
+        ));
+        assert!(SUPPORT_EMAIL_MAILTO.contains("&body="));
+        // No dollars anywhere near the reader-facing door.
+        assert!(!SUPPORT_EMAIL_MAILTO.contains('$') && !SUPPORT_EMAIL_MAILTO.contains("%24"));
     }
 
     #[test]

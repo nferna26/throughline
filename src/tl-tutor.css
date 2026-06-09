@@ -373,6 +373,40 @@
   box-shadow: 0 0 0 2px var(--tl-paper), 0 0 0 4px var(--tl-accent);
 }
 
+/* ── company-mode tutor fuel: thin strip, nudges at 75%/90% used ── */
+.tl-tutorfuel { margin-top: var(--tl-3); }
+.tl-tutorfuel .tl-fuel-bar { display: block; width: 100%; height: 4px; border-radius: 999px; background: var(--tl-line); overflow: hidden; }
+.tl-tutorfuel .fill { display: block; height: 100%; border-radius: 999px; background: var(--tl-accent); opacity: 0.45; }
+.tl-tutorfuel.nudge .fill, .tl-tutorfuel.low .fill { background: #b8860b; opacity: 1; }
+.tl-tutorfuel-note {
+  margin: var(--tl-2) 0 0;
+  font-family: var(--tl-sans);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--tl-muted);
+}
+
+/* ── cap-hit doors: $20 re-up (ghost) + the quiet "ask for more" link ── */
+.tl-caphit-doors {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--tl-2);
+  margin-top: var(--tl-3);
+  padding-top: var(--tl-3);
+  border-top: 1px solid var(--tl-line);
+}
+.tl-caphit-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--tl-sans);
+  font-size: 12px;
+  color: var(--tl-muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* ── reduced motion: no blink, no pulse (text still appears progressively) ── */
 @media (prefers-reduced-motion: reduce) {
   .tl-caret { animation: none; opacity: 1; }

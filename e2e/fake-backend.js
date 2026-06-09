@@ -130,13 +130,21 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
         return window.__TL_FAKE_COMPANY_ACTIVE__
           ? { provider_active: true, has_license: true }
           : { provider_active: false, has_license: false };
-      case "cmd_company_credits":
-        return { status: "active", remaining_micros: 6000000, budget_micros: 8000000, spent_micros: 2000000, approx_questions_left: 9000 };
+      case "cmd_company_credits": {
+        // Fraction-only credits (the proxy never sends dollars). Scenarios set
+        // __TL_FAKE_REMAINING_FRACTION__ to drive the 75%/90%-used nudges.
+        const rem = typeof window.__TL_FAKE_REMAINING_FRACTION__ === "number"
+          ? window.__TL_FAKE_REMAINING_FRACTION__ : 0.75;
+        return { status: "active", remaining_fraction: rem, approx_questions_left: Math.round(rem * 400) };
+      }
       case "cmd_activate_company":
         window.__TL_FAKE_COMPANY_ACTIVE__ = true;
         return { provider_active: true, has_license: true };
       case "cmd_company_checkout":
         return "https://checkout.stripe.com/c/pay/cs_test_fake123";
+      case "cmd_open_support_email":
+        window.__TL_FAKE_MAILTO_OPENED__ = true;
+        return null;
       case "cmd_list_books": return window.__TL_FAKE_EMPTY__ ? [] : [BOOK];
       case "cmd_assignable_sections": return SECTIONS;
       case "cmd_list_notes": return NOTES.slice();
