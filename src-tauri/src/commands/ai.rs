@@ -768,6 +768,46 @@ pub fn cmd_company_status(state: State<DbState>) -> Result<CompanyStatus, AppErr
     })
 }
 
+/// Open the system browser at the URL (reader-initiated, validated https only).
+/// A narrow targeted exec, not a general shell surface.
+#[cfg(target_os = "macos")]
+fn open_in_browser(url: &str) {
+    let _ = std::process::Command::new("open").arg(url).spawn();
+}
+#[cfg(not(target_os = "macos"))]
+fn open_in_browser(_url: &str) {}
+
+/// Start a $20 Checkout: ask the proxy for a session URL and open it in the
+/// browser. Returns the URL too, so the UI can offer a "continue here" fallback.
+#[tauri::command]
+pub async fn cmd_company_checkout(state: State<'_, DbState>) -> Result<String, AppError> {
+    let base_url = {
+        let conn = state.0.lock()?;
+        settings::get_company_base_url(&conn)
+    };
+    let resp = company_http()?
+        .post(format!("{base_url}/v1/checkout"))
+        .send()
+        .await
+        .map_err(|e| AppError::ai(format!("Couldn't reach Throughline AI: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(AppError::ai(
+            "Couldn't start checkout. Try again in a moment.",
+        ));
+    }
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    let url = body
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if !url.starts_with("https://") {
+        return Err(AppError::ai("Checkout returned no URL."));
+    }
+    open_in_browser(&url);
+    Ok(url)
+}
+
 /// Read-only credits view for the fuel gauge (the server is authoritative).
 #[tauri::command]
 pub async fn cmd_company_credits(state: State<'_, DbState>) -> Result<CompanyCredits, AppError> {

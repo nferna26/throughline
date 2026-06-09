@@ -3,19 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import TLIcon from "./TLIcon";
 import type { CompanyStatus, CompanyCredits } from "../types";
 
-/** Placeholder until phase 3 (Stripe Checkout). Re-pointed without an app change. */
-const CHECKOUT_URL = "https://readthroughline.com/get-ai";
-
-function openExternal(url: string) {
-  // Tauri intercepts in-app navigation; a new-tab open is handled by the shell.
-  // In the harness this is a no-op popup we can still assert was attempted.
-  try {
-    window.open(url, "_blank", "noopener");
-  } catch {
-    /* ignore */
-  }
-}
-
 /** Three-state fuel gauge — robust to price changes (no exact "N questions"). */
 function fuel(credits: CompanyCredits | null): { label: string; level: "ok" | "low" | "empty" } {
   if (!credits || credits.status !== "active") return { label: "Almost out", level: "empty" };
@@ -36,7 +23,22 @@ export default function CompanyPanel({ onActivated }: { onActivated: () => void 
   const [credits, setCredits] = useState<CompanyCredits | null>(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
+  const [buying, setBuying] = useState(false);
+  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
   const [err, setErr] = useState("");
+
+  const buy = useCallback(async () => {
+    setBuying(true);
+    setErr("");
+    try {
+      const url = await invoke<string>("cmd_company_checkout");
+      setCheckoutUrl(url); // Rust opened the browser; this is the visible fallback.
+    } catch {
+      setErr("Couldn't start checkout. Try again in a moment.");
+    } finally {
+      setBuying(false);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     const s = await invoke<CompanyStatus>("cmd_company_status").catch(() => null);
@@ -99,9 +101,15 @@ export default function CompanyPanel({ onActivated }: { onActivated: () => void 
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--tl-3)" }}>
-        <button className="tl-btn tl-btn-primary" style={{ alignSelf: "flex-start", padding: "8px 16px" }} onClick={() => openExternal(CHECKOUT_URL)}>
-          <TLIcon name="search" size={16} /> Get Throughline AI — $20
+        <button className="tl-btn tl-btn-primary" style={{ alignSelf: "flex-start", padding: "8px 16px" }} disabled={buying} onClick={buy}>
+          <TLIcon name="search" size={16} /> {buying ? "Starting checkout…" : "Get Throughline AI — $20"}
         </button>
+        {checkoutUrl && (
+          <p className="tl-set-msg" style={{ color: "var(--tl-muted)" }}>
+            Opening checkout in your browser… If it doesn't open,{" "}
+            <a href={checkoutUrl} target="_blank" rel="noopener noreferrer">continue here</a>.
+          </p>
+        )}
         <div className="tl-activate">
           <label className="tl-activate-lbl" htmlFor="tl-activate-code">Already bought? Paste your activation code</label>
           <div style={{ display: "flex", gap: "var(--tl-2)" }}>
