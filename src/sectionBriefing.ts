@@ -94,6 +94,55 @@ export function resetBriefingCache(): void {
   cache.clear();
 }
 
+// ── Session attempt markers (FT-13 / CORE-1046) ────────────────────────────
+// A failed briefing must NOT silently re-fire every time the reader remounts
+// the card — the reader nav remounts it on each Next/Prev (key={section.id})
+// and on re-entering the reader, and a failed generate() is one cmd_ai_ask =
+// one history row + one metered section-text send. The mount effect may
+// auto-fire only when there is no attempt this session; a recorded "failed"
+// mounts straight into the error state, and only a deliberate reader action
+// (Prepare / Try again / regenerate) clears the marker and re-sends.
+//
+// Session-only by the same policy as the cache: process memory, dies with the
+// app. The key is the same trio so a new section / re-import / mode change is a
+// fresh attempt.
+export type BriefingAttempt = "failed" | "ok";
+
+const attempts = new Map<string, BriefingAttempt>();
+
+export function getBriefingAttempt(
+  bookId: string,
+  sectionId: string,
+  sha: string,
+  mode: string,
+): BriefingAttempt | null {
+  return attempts.get(cacheKey(bookId, sectionId, sha, mode)) ?? null;
+}
+
+export function setBriefingAttempt(
+  bookId: string,
+  sectionId: string,
+  sha: string,
+  mode: string,
+  outcome: BriefingAttempt,
+): void {
+  attempts.set(cacheKey(bookId, sectionId, sha, mode), outcome);
+}
+
+export function clearBriefingAttempt(
+  bookId: string,
+  sectionId: string,
+  sha: string,
+  mode: string,
+): void {
+  attempts.delete(cacheKey(bookId, sectionId, sha, mode));
+}
+
+/** Drop every attempt marker this session. Test hook (module-level map). */
+export function resetBriefingAttempts(): void {
+  attempts.clear();
+}
+
 /** One-time startup cleanup (App.tsx): earlier builds persisted briefings in
  *  localStorage under the legacy briefing prefix, which the counsel posture
  *  forbids — remove any leftovers so no unsaved AI output survives on disk. */

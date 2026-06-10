@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import TextReader, { clampToolbarPosition, clampPanelWidth, panelDragOutcome, DEFAULT_PANEL_WIDTH, splitParagraphs } from "./TextReader";
 import type { TodayCard, BookSection, Note } from "../types";
@@ -112,6 +112,53 @@ describe("TextReader Companion Margin", () => {
   });
 });
 
+// FT-32: the margin card's X is a soft delete — it shows an Undo toast and only
+// calls cmd_delete_note after the 6-second timer lapses. Undo cancels it entirely.
+describe("TextReader margin note delete — Undo (FT-32)", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    localStorage.setItem("tl.panelOpen", "true");
+    vi.useFakeTimers();
+  });
+  afterEach(() => { vi.runOnlyPendingTimers(); vi.useRealTimers(); });
+
+  it("deletes via an Undo toast and never calls cmd_delete_note when undone", async () => {
+    mockBackend([note({ note_type: "Highlight", body: "" })]);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
+
+    // Click the card's X (aria-label "Delete note") — kept the same label.
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+
+    // No backend delete yet, and a removal notice with an Undo button is shown.
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(false);
+    const status = screen.getByRole("status");
+    expect(status).toBeInTheDocument();
+    const undo = screen.getByRole("button", { name: /Undo/i });
+
+    // Undo cancels the pending delete; let the would-be timer elapse anyway.
+    fireEvent.click(undo);
+    act(() => { vi.advanceTimersByTime(7000); });
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(false);
+    // The card returns.
+    expect(container.querySelector("mark.tl-hl")).not.toBeNull();
+  });
+
+  it("commits exactly one cmd_delete_note after the 6s timer lapses", async () => {
+    mockBackend([note({ note_type: "Highlight", body: "" })]);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(false);
+
+    await act(async () => { vi.advanceTimersByTime(6000); });
+    const deletes = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "cmd_delete_note");
+    expect(deletes.length).toBe(1);
+    expect((deletes[0][1] as { noteId: string }).noteId).toBe("n1");
+  });
+});
+
 // A two-section book so the recap's "next section" preview has something to show.
 const section2: BookSection = {
   id: "s2", book_id: "b1", label: "Chapter 2", href: null,
@@ -219,6 +266,49 @@ describe("TextReader session recap", () => {
   });
 });
 
+// FT-29: leaving the reader by the toolbar "‹ Today" back button must flush the
+// sitting (cmd_end_session with the completed sections + minutes), not silently
+// discard it — and finishing normally must still end the session exactly once.
+describe("TextReader toolbar back-exit flush (FT-29)", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("flushes the session on the toolbar 'Today' back button before exiting", async () => {
+    mockTwoSections();
+    const onExit = vi.fn();
+    const { container } = render(<TextReader today={card()} mode="full" onExit={onExit} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    // Read s1, then advance — s1 is now visited-and-passed.
+    fireEvent.click(screen.getByRole("button", { name: /Next section/i }));
+    await waitFor(() => expect(screen.getByText(/Chapter 2/)).toBeInTheDocument());
+
+    // Leave via the toolbar back button (named "Today"), NOT Finish.
+    fireEvent.click(screen.getByRole("button", { name: /Today/ }));
+
+    await waitFor(() => {
+      const call = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_end_session");
+      expect(call).toBeTruthy();
+      expect((call![1] as { completedSectionIds: string[] }).completedSectionIds).toContain("s1");
+      expect((call![1] as { minutes: number }).minutes).toBeGreaterThanOrEqual(1);
+    });
+    expect(onExit).toHaveBeenCalled();
+  });
+
+  it("ends the session exactly once when finishing normally (no double-end)", async () => {
+    mockTwoSections();
+    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    const finishButtons = screen.getAllByRole("button", { name: /^Finish$/ });
+    fireEvent.click(finishButtons[finishButtons.length - 1]);
+
+    await waitFor(() =>
+      expect(vi.mocked(invoke).mock.calls.filter((c) => c[0] === "cmd_end_session").length).toBe(1),
+    );
+  });
+});
+
 // FT-09: finishing a section by READING it must be reachable. These tests pin
 // the contents of completedSectionIds sent to cmd_end_session: scrolled to the
 // bottom → the current section counts; barely started → it doesn't; a section
@@ -291,6 +381,35 @@ describe("TextReader section completion (endReached)", () => {
     const ids = (await endSessionArgs()).completedSectionIds;
     expect(ids).toContain("s2"); // short section: end reached without scrolling
     expect(ids).toContain("s1"); // visited-and-passed rule unchanged
+  });
+});
+
+// FT-31: the reader's scroll container must be keyboard-pageable — Space pages
+// down, Shift+Space pages back, the most ingrained reading gesture on a Mac.
+describe("TextReader keyboard paging (FT-31)", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("makes the scroll container focusable and pages with Space / Shift+Space", async () => {
+    mockBackend([]);
+    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    const main = container.querySelector(".tl-reader-main") as HTMLElement;
+    // Focusable for keyboard users (WCAG 2.1.1).
+    expect(main.tabIndex).toBe(0);
+
+    // jsdom has no layout: supply the geometry the scroll math reads.
+    Object.defineProperty(main, "clientHeight", { value: 800, configurable: true });
+    Object.defineProperty(main, "scrollHeight", { value: 4000, configurable: true });
+    Object.defineProperty(main, "scrollTop", { value: 0, writable: true, configurable: true });
+
+    // Space pages down by ~0.9 × clientHeight (720).
+    fireEvent.keyDown(main, { key: " " });
+    expect(main.scrollTop).toBeCloseTo(720, 0);
+
+    // Shift+Space pages back the same distance.
+    fireEvent.keyDown(main, { key: " ", shiftKey: true });
+    expect(main.scrollTop).toBeCloseTo(0, 0);
   });
 });
 
@@ -525,6 +644,72 @@ describe("TextReader New-note modal — save failure", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByDisplayValue("a thought")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save note" })).toBeEnabled();
+  });
+});
+
+// FT-33: a failed section load must surface an honest, retryable error (never a
+// blank column); a failed session start must NOT swallow a typed takeaway on
+// "Save & finish".
+describe("TextReader failed section load (FT-33)", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("shows an honest in-column error with a Try again that re-reads the text", async () => {
+    let attempts = 0;
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text":
+          attempts += 1;
+          return attempts === 1
+            ? Promise.reject({ message: "Throughline couldn't open this book's file." })
+            : Promise.resolve(TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Throughline couldn't open this book's file.");
+
+    // Try again re-invokes the read and, on success, paints the text.
+    fireEvent.click(screen.getByRole("button", { name: /Try again/i }));
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("TextReader failed session start keeps the takeaway (FT-33)", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("saves the typed takeaway note even when the session failed to start", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section, section2]);
+        case "cmd_start_session": return Promise.reject({ message: "Throughline couldn't start this session." });
+        case "cmd_read_section_text": return Promise.resolve(TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    fireEvent.click(screen.getByRole("button", { name: /Add a takeaway/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Your one line/i), { target: { value: "the takeaway survives" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save & finish/i }));
+
+    await waitFor(() => {
+      const call = vi.mocked(invoke).mock.calls.find(
+        (c) => c[0] === "cmd_save_note" && (c[1] as { noteType?: string }).noteType === "Takeaway",
+      );
+      expect(call).toBeTruthy();
+      const args = call![1] as { body: string; sessionId: string | null };
+      expect(args.body).toBe("the takeaway survives");
+      expect(args.sessionId).toBeNull();
+    });
   });
 });
 

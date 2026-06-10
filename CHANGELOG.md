@@ -5,6 +5,44 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.4.4] - 2026-06-10
+
+The rest of the field-test polish — the reader-felt seams across Today, the
+reader, and the smaller corners.
+
+### Changed
+
+- **A calmer Today.** The home screen no longer re-prints the opening of the
+  section you're about to read (that "before you read" excerpt only appears now
+  when you're resuming mid-section), no longer says "plan ready" three times,
+  and no longer greets a brand-new book with "0% complete" or "you read 0 of the
+  last 7 days." The first reading prompt reads true for any book, not just
+  argument-driven nonfiction.
+- **The margin reading-help gauge is visible again** (its fill had no color),
+  and shows amber when it's running low.
+
+### Added
+
+- **Keyboard paging in the reader.** Space, Shift-Space, Page Up/Down, the arrow
+  keys, Home and End all move through the text.
+
+### Fixed
+
+- **Leaving the reader keeps your progress.** Exiting with the back button (not
+  just "Finish") now records the sections you read and the time you spent — Today
+  won't hand you a chapter you've already finished.
+- **Undo for a deleted highlight.** The × on a margin card now offers a few
+  seconds to undo instead of deleting on the spot.
+- **No more silent failures.** A book that can't be opened shows a clear message
+  with a retry instead of a blank page; a takeaway you type is saved even if the
+  session had trouble starting; a failed "Get" in Discover says what happened;
+  the paid assistant's error card never shows raw technical text; and a failed
+  update check explains itself in plain words.
+- **Quieter assistant.** A reading briefing that fails no longer silently
+  re-sends itself as you move between sections.
+- Saved tutor answers are labeled "Tutor card" in your notebook (not a raw
+  internal name); recovery-plan errors read as alerts, not calm green.
+
 ## [0.4.3] - 2026-06-10
 
 ### Added

@@ -173,6 +173,9 @@ export default function Discover({ onBack, onPicked }: Props) {
   const d = useDiscover();
   const shelves = useShelves();
   const [dl, setDl] = useState<Record<number, DlState>>({});
+  // A failed Get speaks up rather than silently flipping to "Retry" (FT-30).
+  // One screen-level line; cleared the moment the reader tries again.
+  const [getError, setGetError] = useState<string | null>(null);
   // After a genuinely-new book is saved we pause on a calm confirmation rather
   // than yanking the reader onward — the loop's intent is to return to Today and
   // build a plan, on the reader's click. A dedup needs no fanfare; it just hands
@@ -188,6 +191,7 @@ export default function Discover({ onBack, onPicked }: Props) {
     const st = dl[b.id];
     if (st === "loading" || st === "done") return;
     if (!b.has_txt && !b.has_epub) return; // nothing importable
+    setGetError(null); // clear any prior failure as the reader tries again
     setDl((m) => ({ ...m, [b.id]: "loading" }));
     invoke<ImportOutcome>("cmd_import_from_gutendex", {
       book: { txt_url: b.txt_url, epub_url: b.epub_url },
@@ -202,8 +206,16 @@ export default function Discover({ onBack, onPicked }: Props) {
           onPicked(outcome);
         }
       })
-      .catch(() => {
-        // Calm, reversible: drop back so the row can be retried.
+      .catch((e) => {
+        // Calm, reversible: drop back so the row can be retried — and say what
+        // happened, never just a silent flip to "Retry" (FT-30). Prefer the
+        // backend's reason when it has one; otherwise a plain what-to-do line.
+        const why = errorMessage(e);
+        setGetError(
+          why && why !== "(no error)"
+            ? `Couldn’t download “${b.title}” — ${why} Check your connection, then try again.`
+            : `Couldn’t download “${b.title}” — check your connection, then try again.`,
+        );
         setDl((m) => ({ ...m, [b.id]: "error" }));
       });
   }
@@ -258,6 +270,12 @@ export default function Discover({ onBack, onPicked }: Props) {
             onChange={(e) => d.setQuery(e.target.value)}
           />
         </div>
+
+        {/* A Get that failed speaks up here (FT-30) — above the shelves and
+            results both, so it's visible wherever the reader clicked Get. */}
+        {getError && (
+          <p className="tl-disc-geterror" role="alert">{getError}</p>
+        )}
 
         {/* ── Idle (no query): curated editorial shelves ── */}
         {!searching ? (

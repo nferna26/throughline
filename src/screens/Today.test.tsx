@@ -169,11 +169,58 @@ describe("Today", () => {
     c.recovery = null;
     render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
     expect(screen.getByText(/Plan ready\. You are not behind/i)).toBeInTheDocument();
+    // FT-19 (CORE-1052): the plan-ready fact is stated exactly once — no kicker
+    // echo, no meta chip repeat. One calm statement is the bar.
+    expect((document.body.textContent ?? "").match(/plan ready/gi)).toHaveLength(1);
     // The accusatory pace chip ("Behind · N days") and the recovery panel must
     // not appear for a not-yet-started plan.
     expect(screen.queryByText(/Behind ·/)).toBeNull();
     expect(screen.queryByText(/A little behind/)).toBeNull();
     expect(screen.queryByText(/Recovery/)).toBeNull();
+  });
+
+  // FT-34 (CORE-1067): a not-yet-started book has monthly_pct 0 — a true but
+  // useless "0% complete" stat at the exact moment the app should feel like an
+  // invitation. Hide it until there is progress; the meta row must not then show
+  // two separators in a row.
+  it("hides the progress stat until there is progress", () => {
+    const c = card();
+    c.plan_status = "plan_ready";
+    c.plan.status = "plan_ready";
+    c.pace = { kind: "not_started" };
+    c.forecast = null;
+    c.recovery = null;
+    c.monthly_pct = 0;
+    const { container } = render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.queryByText(/0% complete/)).toBeNull();
+    // No double separator left behind where the stat was.
+    expect(container.querySelectorAll(".tl-meta .sep").length).toBe(1);
+  });
+
+  it("still shows the progress stat for an in-progress book", () => {
+    render(<Today today={card()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.getByText(/12% complete/)).toBeInTheDocument();
+  });
+
+  // FT-20 (CORE-1053): a brand-new install must not meet a zero-count ledger.
+  // Before the first session the streak row (the seven dots + "You read 0 of the
+  // last 7 days.") stays silent — mirroring LastTime's fresh-book quiet.
+  it("stays silent about the last 7 days before the first session", () => {
+    const c = card();
+    c.plan_status = "plan_ready";
+    c.plan.status = "plan_ready";
+    c.pace = { kind: "not_started" };
+    c.forecast = null;
+    c.recovery = null;
+    c.streak = { days_read_last_7: 0, minutes_last_7: 0 };
+    const { container } = render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.queryByText(/You read 0 of the last 7 days/)).toBeNull();
+    expect(container.querySelector(".tl-dots")).toBeNull();
+  });
+
+  it("still shows the 7-day count once the reader has read", () => {
+    render(<Today today={card()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.getByText(/You read 4 of the last 7 days/)).toBeInTheDocument();
   });
 
   // CORE-1004: a book whose last plan was let go gets a plan-less Today card
@@ -301,6 +348,59 @@ describe("Today — recovery options are honest", () => {
     expect(invoke).toHaveBeenCalledWith("cmd_extend_finish_date", { bookId: "b1", addDays: 3 });
     expect(onRefresh).toHaveBeenCalled();
     vi.mocked(invoke).mockReset();
+  });
+
+  it("a failed re-pace announces an alert in the app's voice, not calm green (FT-39)", async () => {
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "cmd_extend_finish_date") return Promise.reject({ message: "Could not re-pace the plan." });
+      return [];
+    });
+    render(<Today today={behindCard()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Re-pace to finish by 2026-06-04/i }));
+
+    // The failure is announced (screen readers must hear it)…
+    const alert = await screen.findByRole("alert");
+    // …routed through errorMessage — no raw "Failed:" prefix, no "[object Object]"…
+    expect(alert.textContent).not.toMatch(/^Failed:/);
+    expect(alert.textContent).not.toMatch(/\[object Object\]/);
+    expect(alert.textContent).toMatch(/couldn.t update the plan/i);
+    // …and it must not wear the success-green ok tone.
+    expect(alert.getAttribute("style") ?? "").not.toMatch(/--tl-ok/);
+    vi.mocked(invoke).mockReset();
+  });
+});
+
+// FT-16 (CORE-1049): the new-section teaser only re-prints the section's own
+// opening the reader meets the instant they tap Start — redundant by design. We
+// keep ONLY the resume "Where you left off" variant; a fresh section pre-prints
+// nothing above the Start button.
+describe("Today — teaser shows only the resume variant", () => {
+  it("does not re-print the section's opening for a fresh section", () => {
+    const c = card();
+    c.teaser = {
+      excerpt: "It is very seldom that mere ordinary people…",
+      prompt: "Read for the image — what picture does this section leave behind?",
+      locator: "char:0",
+      is_resume_excerpt: false,
+    };
+    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.queryByText(/It is very seldom/)).toBeNull();
+    expect(screen.queryByRole("note", { name: /Before you read/i })).toBeNull();
+  });
+
+  it("still shows the resume teaser as 'Where you left off'", () => {
+    const c = card();
+    c.teaser = {
+      excerpt: "Now the middle paragraph the reader is returning to begins here.",
+      prompt: "Read for the thread — what is this paragraph carrying forward?",
+      locator: "char:240",
+      is_resume_excerpt: true,
+    };
+    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.getByText(/Where you left off/i)).toBeInTheDocument();
+    expect(screen.getByText(/Now the middle paragraph/)).toBeInTheDocument();
   });
 });
 

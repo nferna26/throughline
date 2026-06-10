@@ -178,7 +178,7 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
     <div className="tl-col tl-today">
       <div className="tl-kicker">
         <span className="dot" />
-        {planReady ? "Today — plan ready" : paused ? "Paused — resume whenever you're ready" : `Today — day ${day_index} of ${total_days}`}
+        {planReady ? "Today" : paused ? "Paused — resume whenever you're ready" : `Today — day ${day_index} of ${total_days}`}
         {plansCount > 1 && (
           <button className="tl-plans-link" onClick={() => setShowPlans(true)} aria-label="See plans for this book">
             <TLIcon name="swap" size={14} /> Plans <span className="cnt">· {plansCount - 1} earlier</span>
@@ -195,13 +195,19 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
           <div className="tl-meta">
             <span className="item"><TLIcon name="clock" size={15} /> ≈ {estimated_minutes} min</span>
             <span className="sep" />
-            <span className="item">{monthly_pct}% complete</span>
-            <span className="sep" />
-            {planReady ? (
-              <span className="tl-pace on" aria-label="Plan ready — you are not behind">
-                <TLIcon name="flag" size={15} /> Plan ready
-              </span>
-            ) : paused ? (
+            {/* CORE-1067: "0% complete" on a not-yet-started book is a true but
+                useless stat at the moment the app should feel like an invitation.
+                Show progress (and its separator) only once there is some. */}
+            {monthly_pct > 0 && (
+              <>
+                <span className="item">{monthly_pct}% complete</span>
+                <span className="sep" />
+              </>
+            )}
+            {/* FT-19 (CORE-1052): the plan-ready fact lives in the single note
+                below — the chip must not echo it. A not-yet-started plan reads
+                its calm pace ("Not started"); a paused plan reads "Paused". */}
+            {paused ? (
               <span className="tl-pace on" aria-label="Pace: Paused">
                 <TLIcon name="clock" size={15} /> Paused
               </span>
@@ -244,11 +250,13 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
         </div>
       )}
 
-      {/* "Before you read" — the prepared encounter. Sits between the section
-          metadata above and the primary CTA below; progress/pace stay but become
-          supporting. The book's own first sentences + one hand-written prompt;
-          no AI, no gamification. Only shown when a section is assigned. */}
-      {section && <TodayTeaser teaser={teaser ?? null} completed={section_completed} />}
+      {/* "Where you left off" — the resume thread. A fresh section's opening is
+          NOT pre-printed (the reader meets it the instant they tap Start), so this
+          shows ONLY when the teaser is the resume excerpt: the sentence being
+          returned to, plus one hand-written prompt. No AI, no gamification. */}
+      {section && !section_completed && teaser?.is_resume_excerpt && (
+        <TodayTeaser teaser={teaser} />
+      )}
 
       {isResuming && (
         <p className="tl-resume-note" role="note">
@@ -268,14 +276,19 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
         </>
       )}
 
-      <div className="tl-streak">
-        <span className="tl-dots" aria-hidden="true">
-          {Array.from({ length: 7 }, (_, i) => (
-            <span key={i} className={i < streak.days_read_last_7 ? "d read" : "d"} />
-          ))}
-        </span>
-        <span>You read {streak.days_read_last_7} of the last 7 days.</span>
-      </div>
+      {/* CORE-1053: a fresh install must not meet a zero-count ledger (seven
+          hollow dots under "You read 0 of the last 7 days."). Stay silent until
+          there's a day to count — mirroring LastTime's fresh-book quiet. */}
+      {streak.days_read_last_7 > 0 && (
+        <div className="tl-streak">
+          <span className="tl-dots" aria-hidden="true">
+            {Array.from({ length: 7 }, (_, i) => (
+              <span key={i} className={i < streak.days_read_last_7 ? "d read" : "d"} />
+            ))}
+          </span>
+          <span>You read {streak.days_read_last_7} of the last 7 days.</span>
+        </div>
+      )}
 
       <LastTime memory={memory} />
 
@@ -363,7 +376,9 @@ function RecoveryPanel(props: {
   onRefresh: () => Promise<void> | void;
 }) {
   const [working, setWorking] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  // The message slot carries its own tone: the happy path stays calm green; a
+  // failure speaks up as an alert, never in success-green (FT-39).
+  const [message, setMessage] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
 
   async function actOn(option: RecoveryOption) {
     setMessage(null);
@@ -371,25 +386,27 @@ function RecoveryPanel(props: {
     try {
       switch (option.kind) {
         case "ResumeToday":
-          setMessage("Just start reading — the next assigned section is ready.");
+          setMessage({ tone: "ok", text: "Just start reading — the next assigned section is ready." });
           break;
         // Advice options (CORE-1007): no backend call, no persistence — so the
         // message must read as advice, never as a saved plan change.
         case "GentleCatchup":
-          setMessage(`Try adding ${option.extra_minutes} minutes to your next few sittings — no setting to change, just sit a little longer.`);
+          setMessage({ tone: "ok", text: `Try adding ${option.extra_minutes} minutes to your next few sittings — no setting to change, just sit a little longer.` });
           break;
         case "WeekendCatchup":
-          setMessage("Use the weekend window when it comes — no weekday pressure, nothing to change.");
+          setMessage({ tone: "ok", text: "Use the weekend window when it comes — no weekday pressure, nothing to change." });
           break;
         case "ExtendFinish": {
           const r = await invoke<RecomputedPlan>("cmd_extend_finish_date", { bookId: props.bookId, addDays: option.add_days });
-          setMessage(`Finish date is now ${r.new_target_finish_date}. ${r.remaining_sections} section${r.remaining_sections === 1 ? "" : "s"} across ${r.remaining_days} day${r.remaining_days === 1 ? "" : "s"}.`);
+          setMessage({ tone: "ok", text: `Finish date is now ${r.new_target_finish_date}. ${r.remaining_sections} section${r.remaining_sections === 1 ? "" : "s"} across ${r.remaining_days} day${r.remaining_days === 1 ? "" : "s"}.` });
           await props.onRefresh();
           break;
         }
       }
-    } catch (e: any) {
-      setMessage(`Failed: ${e?.message ?? e}`);
+    } catch {
+      // Nothing was changed — say so plainly, in the app's voice, and announce
+      // it. The raw error never reaches the reader (FT-39).
+      setMessage({ tone: "error", text: "Couldn’t update the plan — nothing changed. Try again in a moment." });
     } finally {
       setWorking(null);
     }
@@ -415,7 +432,19 @@ function RecoveryPanel(props: {
           );
         })}
       </div>
-      {message && <p className="lead" style={{ marginTop: "var(--tl-3)", marginBottom: 0, color: "var(--tl-ok)" }}>{message}</p>}
+      {message && (
+        <p
+          className="lead"
+          role={message.tone === "error" ? "alert" : undefined}
+          style={{
+            marginTop: "var(--tl-3)",
+            marginBottom: 0,
+            color: message.tone === "error" ? "var(--tl-alert)" : "var(--tl-ok)",
+          }}
+        >
+          {message.text}
+        </p>
+      )}
     </div>
   );
 }

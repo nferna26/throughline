@@ -2,11 +2,10 @@ import TLIcon from "./TLIcon";
 import type { TodayTeaser as Teaser } from "../types";
 
 interface Props {
-  /** The prepared teaser from the backend, or null when the section text can't
-   *  be read (the calm "unavailable" fallback is shown then). */
-  teaser: Teaser | null;
-  /** True once the reader has finished today's assigned section. */
-  completed: boolean;
+  /** The resume teaser from the backend (the reader stopped mid-section). The
+   *  caller renders this ONLY for a resume excerpt — a fresh section's opening is
+   *  never pre-printed, since the reader meets it the instant they tap Start. */
+  teaser: Teaser;
 }
 
 // Inline styles, not new stylesheet rules: this unit owns only its component,
@@ -44,59 +43,23 @@ const promptStyle: React.CSSProperties = {
   lineHeight: 1.5,
   color: "var(--tl-muted)",
 };
-const fallbackStyle: React.CSSProperties = {
-  margin: "var(--tl-2) 0 0",
-  fontFamily: "var(--tl-serif)",
-  fontSize: "16px",
-  lineHeight: 1.45,
-  color: "var(--tl-muted)",
-};
 
 /**
- * "Before you read" — a prepared reading encounter on Today. Shows the book's
- * OWN first (or, when resuming mid-section, resume-adjacent) sentence(s) as a
- * quiet pull-quote, with one hand-written reading prompt beneath it. Pace and
- * progress stay on Today but become supporting; this block is the invitation in.
+ * "Where you left off" — the resume thread on Today. When the reader stopped
+ * mid-section, this shows the book's OWN resume-adjacent sentence(s) as a quiet
+ * pull-quote, with one hand-written prompt beneath, so re-entry feels like
+ * picking a thought back up rather than restarting.
  *
+ * It is deliberately resume-only (CORE-1049): a fresh section's opening earns
+ * nothing pre-printed — it's the very text the reader meets on tapping Start.
  * It carries no AI and no gamification: the excerpt is the local source text and
- * the prompt is a fixed, hand-written lens chosen on the backend. States:
- *   completed   → the reader finished; let the note be enough.
- *   resume      → the thread the paragraph is carrying forward.
- *   new         → the section's opening, read for one of the prompts.
- *   unavailable → no readable text yet; a calm "section is ready" line.
+ * the prompt is a fixed, hand-written lens chosen on the backend.
  */
-export default function TodayTeaser({ teaser, completed }: Props) {
-  if (completed) {
-    return (
-      <div style={wrapStyle} role="note" aria-label="Before you read">
-        <span style={kickerStyle}>
-          <TLIcon name="check" size={13} /> Before you read
-        </span>
-        <p style={fallbackStyle}>
-          You've finished today's section. Let the note be enough.
-        </p>
-      </div>
-    );
-  }
-
-  if (!teaser) {
-    return (
-      <div style={wrapStyle} role="note" aria-label="Before you read">
-        <span style={kickerStyle}>
-          <TLIcon name="book" size={13} /> Before you read
-        </span>
-        <p style={fallbackStyle}>
-          Today's section is ready. Read for one sentence worth keeping.
-        </p>
-      </div>
-    );
-  }
-
+export default function TodayTeaser({ teaser }: Props) {
   return (
-    <div style={wrapStyle} role="note" aria-label="Before you read">
+    <div style={wrapStyle} role="note" aria-label="Where you left off">
       <span style={kickerStyle}>
-        <TLIcon name="book" size={13} />{" "}
-        {teaser.is_resume_excerpt ? "Where you left off" : "Before you read"}
+        <TLIcon name="book" size={13} /> Where you left off
       </span>
       <p style={excerptStyle}>{teaser.excerpt}</p>
       <p style={promptStyle}>{teaser.prompt}</p>

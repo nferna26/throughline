@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
 import SectionBriefingCard from "./SectionBriefingCard";
-import { setCachedBriefing, resetBriefingCache } from "../sectionBriefing";
+import { setCachedBriefing, resetBriefingCache, resetBriefingAttempts } from "../sectionBriefing";
 
 const mocks = vi.hoisted(() => {
   class MockChannel {
@@ -32,7 +32,7 @@ function setImpl() {
 
 // The briefing cache is session-only (in-memory) — localStorage.clear() no
 // longer resets it, so drop it explicitly between cases.
-beforeEach(() => { cleanup(); localStorage.clear(); resetBriefingCache(); setImpl(); });
+beforeEach(() => { cleanup(); localStorage.clear(); resetBriefingCache(); resetBriefingAttempts(); setImpl(); });
 
 const props = {
   bookId: "bk", sectionId: "s1", sourceSha: "sha1", mode: "deep_study",
@@ -156,6 +156,59 @@ describe("SectionBriefingCard — provider gate", () => {
     expect(screen.queryByText(/Nothing has been sent/i)).toBeNull();
     expect(screen.queryByText(/Switch provider/i)).toBeNull();
     expect(screen.getByRole("button", { name: /Check again/i })).toBeInTheDocument();
+  });
+
+  // FT-13 (CORE-1046): a failed briefing must NOT silently re-fire on remount.
+  // The reader nav remounts the card constantly (key={section.id}); without a
+  // session marker, each remount auto-fired a fresh metered section-text send.
+  function setCompanyAskRejects() {
+    mocks.invoke.mockReset();
+    mocks.invoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings":
+          return Promise.resolve({ ai_provider: "company", margin_help: "deep_study" });
+        case "cmd_ai_ask":
+          // A client-error-shaped failure that does NOT read as unavailable, so
+          // the card stays in the [Try again] error box (not the paused sheet).
+          return Promise.reject(new Error("Throughline AI couldn't take that request (400). Try again."));
+        default:
+          return Promise.resolve(null);
+      }
+    });
+  }
+
+  function askCallCount(): number {
+    return mocks.invoke.mock.calls.filter((c) => c[0] === "cmd_ai_ask").length;
+  }
+
+  it("a failed briefing never auto-refires on remount", async () => {
+    localStorage.setItem("tl.tutorEnabled", "true");
+    setCompanyAskRejects();
+
+    const { unmount } = render(<SectionBriefingCard {...props} />);
+    await screen.findByRole("button", { name: /Try again/i });
+    expect(askCallCount()).toBe(1);
+
+    // The reader navigates (Next/Prev) or re-enters the reader → remount the
+    // SAME card. The failed attempt is remembered this session, so no auto-fire.
+    unmount();
+    render(<SectionBriefingCard {...props} />);
+    // Mounts straight into the error state — never "Preparing…" again.
+    expect(await screen.findByRole("button", { name: /Try again/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Preparing/i)).toBeNull();
+    expect(askCallCount()).toBe(1);
+  });
+
+  it("[Try again] clears the failed marker and re-invokes exactly once per click", async () => {
+    localStorage.setItem("tl.tutorEnabled", "true");
+    setCompanyAskRejects();
+
+    render(<SectionBriefingCard {...props} />);
+    const retry = await screen.findByRole("button", { name: /Try again/i });
+    expect(askCallCount()).toBe(1);
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(askCallCount()).toBe(2));
   });
 
   it("when a CLOUD provider is chosen, the briefing IS allowed (calls cmd_ai_ask) and never claims local", async () => {

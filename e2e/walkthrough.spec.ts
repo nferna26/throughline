@@ -80,12 +80,14 @@ test("finished-book", async ({ page }) => {
   await shoot(page, "17-finished-book");
 });
 
-test("teaser-on-plan-ready", async ({ page }) => {
+test("plan-ready-does-not-preprint-the-opening", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_PLAN_READY__ = true; });
   await page.goto("/");
-  // E2: the "Before you read" teaser shows even on a freshly-ready plan.
-  await expect(page.getByText(/BEFORE YOU READ/i)).toBeVisible();
-  await expect(page.getByText(/Begin the morning by saying to thyself/).first()).toBeVisible();
+  // CORE-1049: a fresh section's opening is NOT pre-printed on Today — the reader
+  // meets it the instant they tap Start, so re-printing it earns nothing.
+  await expect(page.getByText(/Plan ready/i).first()).toBeVisible();
+  await expect(page.getByText(/Begin the morning by saying to thyself/)).toHaveCount(0);
+  await expect(page.getByRole("note", { name: /Before you read/i })).toHaveCount(0);
 });
 
 test("today", async ({ page }) => {

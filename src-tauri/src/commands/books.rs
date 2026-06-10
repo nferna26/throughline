@@ -332,7 +332,7 @@ fn plan_less_card(conn: &Connection, book: Book) -> Result<TodayCard, AppError> 
 /// a reader meets different invitations across a book; the resume variant asks
 /// what a mid-section paragraph is carrying forward.
 const READING_PROMPTS: &[&str] = &[
-    "Read for the argument — what claim is being built?",
+    "Read for the one sentence worth keeping.",
     "Read for the image — what picture does this section leave behind?",
     "Read for the turning point — what changes by the end?",
     "Read for the pressure — what question can't the writer leave alone?",
@@ -460,7 +460,9 @@ fn extract_teaser_excerpt(
     let tail = &scan[start..];
     let capped = take_chars(tail, max_chars);
     let trimmed = trim_to_sentences(&capped, max_chars);
-    let out = trimmed.trim().to_string();
+    // Flow as one paragraph: collapse any interior newlines/runs of whitespace so
+    // the excerpt never carries a block break the `<p>` would render as a run-on.
+    let out = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
     if out.is_empty() {
         None
     } else {
@@ -500,8 +502,39 @@ fn is_prose_line(line: &str) -> bool {
     if is_all_caps(line) {
         return false;
     }
+    // A byline ("By Charlotte Perkins Gilman") opens a short work right after the
+    // title; the sectionizer keeps it inside section 1, so reject it explicitly.
+    if looks_like_byline(line) {
+        return false;
+    }
+    // A short standalone title-ish line ("The Yellow Wallpaper") carries no
+    // terminal punctuation and reads as a heading, not prose. Kept narrow (per
+    // the looks_like_heading comment) so a real short sentence or a line of verse
+    // isn't swallowed — a verse book that falls through lands on the calm fallback.
+    if looks_like_standalone_title(line) {
+        return false;
+    }
     // A line with no letters at all (rule of asterisks, page number) isn't prose.
     line.chars().any(|c| c.is_alphabetic())
+}
+
+/// A byline: a short line (≤6 words) opening case-insensitively with "by ".
+/// "By Charlotte Perkins Gilman" — the standard short-work front-matter line.
+fn looks_like_byline(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    lower.starts_with("by ") && line.split_whitespace().count() <= 6
+}
+
+/// A short standalone title-ish line: ≤8 words, ≤60 chars, and no terminal
+/// sentence punctuation (`.`/`?`/`!`). Real prose carries a terminator within a
+/// line that short; a bare title does not.
+fn looks_like_standalone_title(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.split_whitespace().count() <= 8
+        && trimmed.chars().count() <= 60
+        && !trimmed.ends_with('.')
+        && !trimmed.ends_with('?')
+        && !trimmed.ends_with('!')
 }
 
 /// Project Gutenberg header/footer lines that can survive sectionizing.
@@ -1456,5 +1489,42 @@ mod tests {
         // Resume always gets the thread variant, regardless of index.
         assert_eq!(super::reading_prompt(0, true), super::RESUME_PROMPT);
         assert_eq!(super::reading_prompt(3, true), super::RESUME_PROMPT);
+    }
+
+    /// FT-17 (CORE-1050): a short-work opening — a Title-Case standalone title
+    /// and a "By <author>" byline (the standard public-domain shape, since the
+    /// sectionizer slices section 1 from body offset 0) — must never leak into
+    /// the teaser. The excerpt opens on the first real sentence and flows as one
+    /// paragraph (no block breaks the `<p>` would collapse to a run-on).
+    #[test]
+    fn extract_teaser_skips_title_case_title_and_byline_and_flows_one_paragraph() {
+        let text = "The Yellow Wallpaper\n\nBy Charlotte Perkins Gilman\n\n\nIt is very seldom that mere ordinary people like John and myself secure\nancestral halls for the summer.\n";
+        let ex = super::extract_teaser_excerpt(text, None, super::TEASER_MAX_CHARS)
+            .expect("prose follows the title and byline");
+        assert!(
+            ex.starts_with("It is very seldom"),
+            "teaser must open on the first real sentence, got {ex:?}"
+        );
+        assert!(
+            !ex.contains("Yellow Wallpaper") && !ex.contains("By Charlotte"),
+            "no title/byline front-matter may bleed into the excerpt: {ex:?}"
+        );
+        assert!(
+            !ex.contains('\n'),
+            "excerpt must flow as one paragraph, never carry block breaks: {ex:?}"
+        );
+    }
+
+    /// FT-18 (CORE-1051): the hand-written reading prompts must read true for any
+    /// genre — fiction must never be told to "read for the argument/claim/thesis."
+    #[test]
+    fn reading_prompts_hold_for_any_genre() {
+        for p in super::READING_PROMPTS {
+            let low = p.to_lowercase();
+            assert!(
+                !low.contains("argument") && !low.contains("claim") && !low.contains("thesis"),
+                "reading prompt presumes nonfiction: {p:?}"
+            );
+        }
     }
 }

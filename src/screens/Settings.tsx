@@ -368,8 +368,8 @@ export default function Settings() {
     if (!credits || credits.status !== "active") return null;
     const frac = Math.max(0, Math.min(1, credits.remaining_fraction));
     // "Running low" once genuinely low; otherwise calm "Plenty left". The
-    // boundary mirrors the in-margin fuel gauge (CompanyPanel.fuel: >0.33 =
-    // plenty) so the two surfaces never disagree about how much is left.
+    // boundary (>0.33 = plenty) mirrors the in-margin fuel gauge so the two
+    // surfaces never disagree about how much is left.
     const low = frac <= 0.33;
     return { pct: Math.round(frac * 100), low, state: low ? "Running low" : "Plenty left" };
   }, [credits]);
@@ -835,16 +835,12 @@ export default function Settings() {
               </div>
               <div className="row-control">
                 {/* The short-quote note is a fixed protection in this build
-                    (counsel-reviewed copyright posture), so it shows as on and
-                    isn't switchable off — honest, not a dead no-op control. */}
-                <button
-                  className="toggle"
-                  role="switch"
-                  aria-checked={true}
-                  aria-disabled={true}
-                  disabled
-                  aria-label="Note on long quotes (always on)"
-                />
+                    (counsel-reviewed copyright posture) — always on, nothing to
+                    toggle — so it reads as a plain informational line, never a
+                    dead no-op switch. */}
+                <span className="quiet-line">
+                  <Icon d={ICON.check} size={15} /> Always on
+                </span>
               </div>
             </div>
             <div className="row">

@@ -9,6 +9,9 @@ import {
   getCachedBriefing,
   setCachedBriefing,
   clearCachedBriefing,
+  getBriefingAttempt,
+  setBriefingAttempt,
+  clearBriefingAttempt,
   parseBriefing,
 } from "../sectionBriefing";
 import "../tl-tutor.css";
@@ -62,12 +65,18 @@ export default function SectionBriefingCard(props: {
 }) {
   const { bookId, sectionId, sourceSha, mode } = props;
   const cached = getCachedBriefing(bookId, sectionId, sourceSha, mode);
+  // FT-13 (CORE-1046): a briefing that already failed this session must NOT
+  // re-fire just because the reader remounted the card (nav / re-entry). Mount
+  // straight into the error state and wait for a deliberate [Try again].
+  const priorFailed = !cached && getBriefingAttempt(bookId, sectionId, sourceSha, mode) === "failed";
 
   const [phase, setPhase] = useState<Phase>(
-    cached ? "done" : isTutorEnabled() ? "thinking" : "consent",
+    cached ? "done" : priorFailed ? "error" : isTutorEnabled() ? "thinking" : "consent",
   );
   const [text, setText] = useState(cached ?? "");
-  const [errorMsg, setErrorMsg] = useState("");
+  const [errorMsg, setErrorMsg] = useState(
+    priorFailed ? "The briefing couldn't be prepared this time. Try again." : "",
+  );
   // Provider posture, loaded from settings. Drives WHERE the section text goes
   // (badge + consent copy). The briefing is disabled only when no provider is
   // chosen; "local" keeps the on-device promise, a chosen cloud provider was
@@ -130,8 +139,10 @@ export default function SectionBriefingCard(props: {
         setPhase((p) => (p === "error" ? p : "done"));
         if (textRef.current.trim()) {
           setCachedBriefing(bookId, sectionId, sourceSha, mode, textRef.current);
+          setBriefingAttempt(bookId, sectionId, sourceSha, mode, "ok");
         }
       } else if (ev.kind === "error") {
+        setBriefingAttempt(bookId, sectionId, sourceSha, mode, "failed");
         setErrorMsg(humanizeError(liveProvider, ev.message ?? "The briefing couldn't be prepared this time."));
         setPhase("error");
       }
@@ -150,16 +161,27 @@ export default function SectionBriefingCard(props: {
       });
     } catch (e) {
       if (channelRef.current === channel) {
+        setBriefingAttempt(bookId, sectionId, sourceSha, mode, "failed");
         setErrorMsg(humanizeError(liveProvider, String((e as { message?: string })?.message ?? e)));
         setPhase("error");
       }
     }
   }, [ensureModel, bookId, sectionId, sourceSha, mode, props.sectionText, props.chapter, props.locator]);
 
-  // Auto-prepare once on mount when already consented and not cached. A cached
-  // briefing shows instantly with no call. Without consent we wait for the tap.
+  // A deliberate reader action (Prepare / Try again / regenerate / setup
+  // recovery) clears any failed marker so the one explicit send is allowed; the
+  // mount effect itself never clears it (FT-13). One marker, two guards.
+  const retry = useCallback(() => {
+    clearBriefingAttempt(bookId, sectionId, sourceSha, mode);
+    generate();
+  }, [bookId, sectionId, sourceSha, mode, generate]);
+
+  // Auto-prepare once on mount when already consented and not cached — but only
+  // when there is no attempt this session. A cached briefing shows instantly
+  // with no call; a remembered failure mounts into the error state above and
+  // waits for [Try again]. Without consent we wait for the tap.
   useEffect(() => {
-    if (!cached && isTutorEnabled()) generate();
+    if (!cached && !priorFailed && isTutorEnabled()) generate();
     return () => { channelRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -173,11 +195,13 @@ export default function SectionBriefingCard(props: {
 
   const enableAndPrepare = useCallback(async () => {
     setTutorEnabled(true);
+    clearBriefingAttempt(bookId, sectionId, sourceSha, mode);
     await generate();
-  }, [generate]);
+  }, [bookId, sectionId, sourceSha, mode, generate]);
 
   const regenerate = useCallback(() => {
     clearCachedBriefing(bookId, sectionId, sourceSha, mode);
+    clearBriefingAttempt(bookId, sectionId, sourceSha, mode);
     generate();
   }, [bookId, sectionId, sourceSha, mode, generate]);
 
@@ -186,8 +210,9 @@ export default function SectionBriefingCard(props: {
   const onSetupConnected = useCallback((connected: string) => {
     setTutorEnabled(true);
     if (connected) setProvider(connected);
+    clearBriefingAttempt(bookId, sectionId, sourceSha, mode);
     generate();
-  }, [generate]);
+  }, [bookId, sectionId, sourceSha, mode, generate]);
 
   const streaming = phase === "thinking" || phase === "streaming";
   const parts = parseBriefing(text);
@@ -264,7 +289,7 @@ export default function SectionBriefingCard(props: {
       ) : phase === "error" ? (
         <div className="tl-tutor-errbox" role="alert">
           <p>{errorMsg}</p>
-          <button className="tl-tutor-ghost" onClick={(e) => { e.stopPropagation(); generate(); }}>
+          <button className="tl-tutor-ghost" onClick={(e) => { e.stopPropagation(); retry(); }}>
             <TLIcon name="refresh" size={14} /> Try again
           </button>
         </div>

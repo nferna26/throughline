@@ -95,6 +95,22 @@ describe("NotesBrowser chapter notebook", () => {
     expect(screen.queryByText("why does he say this?")).toBeNull();
   });
 
+  it("reads a saved tutor answer's badge as 'Tutor card', never the raw enum (FT-38)", async () => {
+    mockInvoke.mockResolvedValueOnce([
+      note({ id: "t1", note_type: "TutorNote", body: "the tutor's explanation" }),
+      // Legacy rows persisted the older enum name.
+      note({ id: "t2", note_type: "SavedAICard", body: "an older saved answer" }),
+    ]);
+    render(<NotesBrowser book={book} />);
+    expect(await screen.findByText("the tutor's explanation")).toBeInTheDocument();
+
+    // Both badges read the plain reader word…
+    expect(screen.getAllByText("Tutor card").length).toBeGreaterThanOrEqual(2);
+    // …and the raw enum names never reach the page.
+    expect(screen.queryByText("TutorNote")).toBeNull();
+    expect(screen.queryByText("SavedAICard")).toBeNull();
+  });
+
   it("shows a highlight's anchored text when it has no body", async () => {
     mockInvoke.mockResolvedValueOnce([
       note({ id: "h", note_type: "Highlight", body: "", anchored_text: "the unjust man is happy" }),

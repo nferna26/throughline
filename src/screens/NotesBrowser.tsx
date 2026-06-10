@@ -41,7 +41,11 @@ function fmtDate(iso: string): string {
 }
 
 function displayType(noteType: string): string {
-  return noteType === "MarginNote" ? "Note" : noteType;
+  if (noteType === "MarginNote") return "Note";
+  // Saved tutor answers (and the legacy 'SavedAICard'/'AI' rows) read as the
+  // reader word, never the raw DB enum (FT-38) — matching the filter chips.
+  if (noteType === "TutorNote" || noteType === "SavedAICard" || noteType === "AI") return "Tutor card";
+  return noteType;
 }
 
 const UNFILED = "Unfiled";
