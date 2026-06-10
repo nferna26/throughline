@@ -12,6 +12,17 @@ use crate::paths;
 
 /// Approximate words-per-minute for "serious reading" pace
 pub const WPM: i64 = 200;
+/// Upper bound on a .txt source file (bytes). `import_txt` reads the whole
+/// file into memory, so an accidental multi-GB drop (a log, a dataset) would
+/// balloon memory and stall the app. 100 MB is ~30× War & Peace (~3.2 MB) —
+/// far past any real book. EPUBs have their own accumulated-extraction cap
+/// (`import_epub::MAX_EXTRACTED_BODY_BYTES`).
+pub const MAX_TXT_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Pure guard for the .txt size cap: is a file of `len` bytes importable?
+pub fn txt_size_ok(len: u64) -> bool {
+    len <= MAX_TXT_BYTES
+}
 /// Target section length in characters (~10–15 min reading)
 pub const TARGET_SECTION_CHARS: usize = 9_000;
 /// Minimum prose (chars) that must follow a heading for it to count as a real
@@ -629,6 +640,18 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
     if !src_path.exists() {
         return Err(anyhow!("source file does not exist: {:?}", src_path));
     }
+    // Size cap BEFORE the whole-file read: a mistaken multi-GB drop (a log, a
+    // dataset) must be refused up front, not ballooned into memory.
+    let len = fs::metadata(src_path)
+        .with_context(|| format!("read metadata for {:?}", src_path))?
+        .len();
+    if !txt_size_ok(len) {
+        return Err(anyhow!(
+            "This file is {} MB — too large to be a book. Throughline can import text files up to {} MB.",
+            len.div_ceil(1024 * 1024),
+            MAX_TXT_BYTES / (1024 * 1024)
+        ));
+    }
     let raw = fs::read_to_string(src_path).context("read source as utf-8")?;
     let (meta_title, meta_author, body_start) = extract_gutenberg_meta(&raw);
     let body_end = body_end_offset(&raw);
@@ -969,6 +992,43 @@ mod tests {
         assert_eq!(floor_char_boundary(s, 5), 3); // mid-'🜨' -> back to 3
         assert_eq!(floor_char_boundary(s, 7), 7); // boundary before 'b'
         assert_eq!(floor_char_boundary(s, 99), s.len()); // clamps to len
+    }
+
+    #[test]
+    fn txt_size_ok_boundary() {
+        assert!(
+            txt_size_ok(MAX_TXT_BYTES),
+            "exactly at the cap is importable"
+        );
+        assert!(!txt_size_ok(MAX_TXT_BYTES + 1), "one byte over is refused");
+    }
+
+    /// A multi-GB .txt (mistaken drop of a log/dataset) must be refused up
+    /// front with a friendly message — not read whole into memory. The fixture
+    /// is a sparse file (`set_len`, instant on APFS, no real bytes written).
+    #[test]
+    fn import_txt_rejects_files_over_the_size_cap() {
+        // import_txt calls paths::ensure_dirs(), which reads THROUGHLINE_DATA_DIR.
+        let _g = paths::lock_env_for_test();
+        let dir = std::env::temp_dir().join(format!("tl-txt-cap-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let big = dir.join("not-a-book.txt");
+        let f = fs::File::create(&big).unwrap();
+        f.set_len(MAX_TXT_BYTES + 1).unwrap();
+        drop(f);
+        let msg = match import_txt(&big) {
+            Ok(_) => panic!("an over-cap .txt must be refused"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(
+            msg.contains("too large to be a book"),
+            "error must say the file is too large to be a book, got: {msg}"
+        );
+        assert!(
+            msg.contains("100 MB"),
+            "error must name the limit in plain language, got: {msg}"
+        );
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
