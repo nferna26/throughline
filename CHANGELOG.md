@@ -5,12 +5,31 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
-## [Unreleased]
+## [0.4.0] - 2026-06-10
 
-The P3 "quality & polish" pass — no new features; the energy went into
-correctness, honesty, and deleting what earns nothing.
+The pre-launch hardening release: the P1 ship blockers, the P2 reader-felt
+fixes, and the P3 "quality & polish" pass from the 2026-06-09 review. The
+energy went into correctness, honesty, and deleting what earns nothing.
+
+### Added
+
+- **Drag a book in.** Dropping a DRM-free EPUB or `.txt` onto the window now
+  imports it — the public promise the site already made.
+- **A door for buyers.** The first-run AI sheet has an "Already bought
+  Throughline AI" path, and activating (typed code or link) gives clear,
+  visible success/failure feedback.
 
 ### Changed
+
+- **The first screen tells the truth.** The welcome copy now matches what the
+  tutor actually does, and Deep Study briefings are session-only — nothing is
+  cached to disk.
+- **Errors in your provider's terms.** Tutor failure copy is provider-aware
+  (no more LM Studio instructions for a paid reader); the credits gauge says
+  "Can't check right now" instead of "Almost out" when the service is merely
+  unreachable; recovery options read as advice, not commitments; raw provider
+  bytes never reach an error card; and a Codex sign-in refresh that can't be
+  saved says so instead of silently stranding the session.
 
 - **Your reading day is your day.** Day boundaries — the plan's day counter,
   streaks, pause/resume credit — now follow your Mac's local calendar day, never
@@ -26,6 +45,11 @@ correctness, honesty, and deleting what earns nothing.
 
 ### Fixed
 
+- **"Forget now" works forever.** The AI-history retention sweep no longer
+  breaks permanently after the first aged cloud call (a foreign-key ordering
+  bug aborted every later sweep).
+- **Plans behave.** Pausing a plan stops the Today pace clock, and a book whose
+  last plan is let go stays reachable instead of vanishing.
 - **Failures speak.** Note-save and import failures, interrupted AI answers, and
   a failed book switch now say what happened and what to do next instead of
   failing silently; the company "Test connection" really probes the service
@@ -36,6 +60,9 @@ correctness, honesty, and deleting what earns nothing.
   capped at 100 MB; the LM Studio probe tests a draft address without
   overwriting a custom one; "Let go" removes a purged note's exported Markdown
   mirror along with the note.
+- **Imports can't stall.** Splitting a book into sections now does bounded work
+  per boundary — dropping a whitespace-free file (a minified blob, a wrongly
+  renamed dataset) no longer freezes import for minutes.
 
 ### Removed
 
@@ -44,6 +71,7 @@ correctness, honesty, and deleting what earns nothing.
   helpers — deleted, with guard tests pinning them out. Pre-rename `rg.*`
   preference keys migrate to `tl.*` once, so an existing reader's tutor consent
   and reader preferences survive.
+- The `rm -rf` rollback hint is gone from reader-facing Storage settings.
 
 ## [0.3.0] - 2026-06-09
 
