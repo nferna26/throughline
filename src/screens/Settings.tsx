@@ -144,6 +144,23 @@ export default function Settings() {
   const provider = dto?.ai_provider ?? "";
   const mode: Mode = modeForProvider(provider);
   const needsKey = providerDraft === "openai" || providerDraft === "anthropic";
+  // A saved key already in the Keychain for the drafted key-provider.
+  const keyPresent =
+    providerDraft === "openai"
+      ? !!dto?.ai_key_present_openai
+      : providerDraft === "anthropic"
+        ? !!dto?.ai_key_present_anthropic
+        : false;
+  // "Use this" may only commit a fallback that will actually answer: local and
+  // Codex (own sign-in) are always committable; a key-provider needs a key
+  // typed or already saved. This is what keeps a curious click off the working
+  // included assistant — selecting a segment only reveals its controls; nothing
+  // switches until the reader commits here.
+  const canCommitFallback =
+    providerDraft === "local" ||
+    providerDraft === "codex" ||
+    keyDraft.trim().length > 0 ||
+    keyPresent;
 
   async function refresh() {
     const s = await invoke<SettingsDto>("cmd_get_settings");
@@ -189,6 +206,20 @@ export default function Settings() {
     return () => {
       alive = false;
     };
+  }, []);
+
+  // A company activation elsewhere (e.g. a throughline://activate deep link)
+  // should refresh the settings and the allowance meter even while Settings is
+  // already open — App dispatches `tl-company-activated` for exactly this.
+  useEffect(() => {
+    const onActivated = () => {
+      refresh();
+      invoke<CompanyCredits>("cmd_company_credits")
+        .then(setCredits)
+        .catch(() => setCredits(null));
+    };
+    window.addEventListener("tl-company-activated", onActivated);
+    return () => window.removeEventListener("tl-company-activated", onActivated);
   }, []);
 
   // Detect local models when the local mode + its base URL change (debounced).
@@ -455,12 +486,10 @@ export default function Settings() {
                     <button
                       type="button"
                       className="seg"
-                      aria-pressed={mode === "own_key"}
-                      onClick={() => {
-                        const next = providerDraft === "local" ? "anthropic" : providerDraft;
-                        onFallbackProvider(next);
-                        saveFallback(next);
-                      }}
+                      aria-pressed={providerDraft !== "local"}
+                      onClick={() =>
+                        onFallbackProvider(providerDraft === "local" ? "anthropic" : providerDraft)
+                      }
                     >
                       <Icon d={ICON.key} size={18} />
                       Your own key
@@ -468,11 +497,8 @@ export default function Settings() {
                     <button
                       type="button"
                       className="seg"
-                      aria-pressed={mode === "local"}
-                      onClick={() => {
-                        onFallbackProvider("local");
-                        saveFallback("local");
-                      }}
+                      aria-pressed={providerDraft === "local"}
+                      onClick={() => onFallbackProvider("local")}
                     >
                       <Icon d={ICON.monitor} size={18} />
                       On this Mac only
@@ -606,7 +632,7 @@ export default function Settings() {
                     <button
                       type="button"
                       className="btn btn-accent"
-                      disabled={savingAi}
+                      disabled={savingAi || !canCommitFallback}
                       onClick={() => saveFallback(providerDraft)}
                     >
                       {savingAi ? "Saving…" : "Use this"}

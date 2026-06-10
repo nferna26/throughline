@@ -120,6 +120,37 @@ describe("Settings — 4-section redesign", () => {
     expect(screen.getByRole("button", { name: /On this Mac only/i })).toBeInTheDocument();
   });
 
+  // Regression: selecting a fallback segment must REVEAL its controls without
+  // switching the active assistant — a curious click can't silently break the
+  // working paid assistant. Nothing persists until the explicit "Use this".
+  it("selecting a fallback reveals controls but does not switch providers until 'Use this'", async () => {
+    wire({ ai_provider: "company" });
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Use your own AI instead/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByText(/Use your own AI instead/i));
+    await screen.findByRole("group", { name: /Use your own AI/i });
+
+    mockInvoke.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: /Your own key/i }));
+    // The key field reveals…
+    expect(await screen.findByLabelText(/Anthropic key/i)).toBeInTheDocument();
+    // …but nothing was saved: no provider switch on a mere segment click.
+    expect(mockInvoke).not.toHaveBeenCalledWith("cmd_set_ai_settings", expect.anything());
+    // "Use this" is disabled while no key is entered or saved (can't commit a
+    // provider that wouldn't answer).
+    const useThis = screen.getByRole("button", { name: /Use this/i });
+    expect(useThis).toBeDisabled();
+
+    // Type a key → committable → clicking "Use this" persists the key + provider.
+    fireEvent.change(screen.getByLabelText(/Anthropic key/i), { target: { value: "sk-ant-xyz" } });
+    expect(screen.getByRole("button", { name: /Use this/i })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /Use this/i }));
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith("cmd_set_ai_key", { provider: "anthropic", key: "sk-ant-xyz" }),
+    );
+    expect(mockInvoke).toHaveBeenCalledWith("cmd_set_ai_settings", expect.objectContaining({ provider: "anthropic" }));
+  });
+
   it("starts the fallback expander open and shows the key field when already on a BYO provider", async () => {
     wire({ ai_provider: "anthropic", ai_key_present_anthropic: true });
     render(<Settings />);
