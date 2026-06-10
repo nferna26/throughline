@@ -269,14 +269,19 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
         </>
       )}
 
-      <div className="tl-streak">
-        <span className="tl-dots" aria-hidden="true">
-          {Array.from({ length: 7 }, (_, i) => (
-            <span key={i} className={i < streak.days_read_last_7 ? "d read" : "d"} />
-          ))}
-        </span>
-        <span>You read {streak.days_read_last_7} of the last 7 days.</span>
-      </div>
+      {/* CORE-1053: a fresh install must not meet a zero-count ledger (seven
+          hollow dots under "You read 0 of the last 7 days."). Stay silent until
+          there's a day to count — mirroring LastTime's fresh-book quiet. */}
+      {streak.days_read_last_7 > 0 && (
+        <div className="tl-streak">
+          <span className="tl-dots" aria-hidden="true">
+            {Array.from({ length: 7 }, (_, i) => (
+              <span key={i} className={i < streak.days_read_last_7 ? "d read" : "d"} />
+            ))}
+          </span>
+          <span>You read {streak.days_read_last_7} of the last 7 days.</span>
+        </div>
+      )}
 
       <LastTime memory={memory} />
 

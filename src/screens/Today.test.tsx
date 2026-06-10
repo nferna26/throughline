@@ -179,6 +179,27 @@ describe("Today", () => {
     expect(screen.queryByText(/Recovery/)).toBeNull();
   });
 
+  // FT-20 (CORE-1053): a brand-new install must not meet a zero-count ledger.
+  // Before the first session the streak row (the seven dots + "You read 0 of the
+  // last 7 days.") stays silent — mirroring LastTime's fresh-book quiet.
+  it("stays silent about the last 7 days before the first session", () => {
+    const c = card();
+    c.plan_status = "plan_ready";
+    c.plan.status = "plan_ready";
+    c.pace = { kind: "not_started" };
+    c.forecast = null;
+    c.recovery = null;
+    c.streak = { days_read_last_7: 0, minutes_last_7: 0 };
+    const { container } = render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.queryByText(/You read 0 of the last 7 days/)).toBeNull();
+    expect(container.querySelector(".tl-dots")).toBeNull();
+  });
+
+  it("still shows the 7-day count once the reader has read", () => {
+    render(<Today today={card()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.getByText(/You read 4 of the last 7 days/)).toBeInTheDocument();
+  });
+
   // CORE-1004: a book whose last plan was let go gets a plan-less Today card
   // (plan_status "no_plan") — the book header stays reachable and the one
   // obvious action is starting a plan, wired to the existing onNewPlan flow.
