@@ -56,6 +56,13 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     () => splitParagraphs(text, structure.filter((r) => r.kind === "pre")),
     [text, structure],
   );
+  // The offset of the FIRST real prose paragraph in the section — the one that
+  // gets the raised initial (drop cap). Skips headings, blockquotes, code, and
+  // any line with no word character (a stray marker/blank). null = none yet.
+  const dropCapOffset = useMemo(
+    () => firstProseDropCapOffset(paragraphs, structure),
+    [paragraphs, structure],
+  );
   const [session, setSession] = useState<ReadingSession | null>(null);
   const [visited, setVisited] = useState<Set<string>>(new Set());
   // Sections whose END the reader's viewport actually reached this sitting
@@ -813,7 +820,15 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         <button className="tl-btn tl-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setEndingPrompt(true)}>{rescue ? "Done" : "Finish"}</button>
       </div>
 
-      <div className="tl-reader-body">
+      <div
+        className={marginIsVisible ? "tl-reader-body tl-margin-open" : "tl-reader-body tl-margin-closed"}
+        // STABLE CENTER: when the margin is CLOSED the desk reserves the margin's
+        // width on its right (panel + the 6px resizer), mirroring the space the
+        // panel takes when OPEN — so the centered reading sheet sits in the same
+        // box either way and never shifts left/right on toggle. CSS reads this var
+        // only in the .tl-margin-closed state.
+        style={{ ["--tl-margin-reserve" as string]: `${panelWidth + 6}px` }}
+      >
         <div
           className="tl-reader-main"
           ref={containerRef}
@@ -844,7 +859,17 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
               // selection anchoring keeps working. Inline emphasis is composed
               // inside renderParagraph.
               const role = blockRoleFor(p.offset, p.text.length, structure);
-              const cls = p.pre ? "tl-block tl-pre" : role ? `tl-block tl-${role}` : undefined;
+              // The first prose paragraph of the section opens with a raised
+              // initial (drop cap). The class drives a CSS ::first-letter rule —
+              // NO extra DOM node, so char offsets / selection anchoring are exact.
+              const dropCap = !p.pre && !role && p.offset === dropCapOffset;
+              const cls = p.pre
+                ? "tl-block tl-pre"
+                : role
+                  ? `tl-block tl-${role}`
+                  : dropCap
+                    ? "tl-dropcap"
+                    : undefined;
               return (
                 <p
                   key={p.offset}
@@ -1083,6 +1108,27 @@ export function splitParagraphs(
   }
   if (cursor < text.length) out.push(...splitProse(text.slice(cursor), cursor));
   return out;
+}
+
+/** The offset of the section's FIRST real prose paragraph — the one that opens
+ *  with a raised initial (drop cap). Skips headings/blockquotes (block roles),
+ *  code (`pre`), and any paragraph with no word character (a stray marker or a
+ *  blank line), so the drop cap never lands on a chapter title or an
+ *  `[Illustration]` remnant. Returns null when the section has no prose yet.
+ *
+ *  Pure + exported: the drop cap must apply to exactly one paragraph and never
+ *  to a heading, so this selection is unit-tested directly. */
+export function firstProseDropCapOffset(
+  paragraphs: ReadonlyArray<Paragraph>,
+  ranges: ReadonlyArray<StyleRange>,
+): number | null {
+  for (const p of paragraphs) {
+    if (p.pre) continue;
+    if (blockRoleFor(p.offset, p.text.length, ranges)) continue; // heading / blockquote
+    if (!/[\p{L}\p{N}]/u.test(p.text)) continue; // no word char → not real prose
+    return p.offset;
+  }
+  return null;
 }
 
 /** Absolute char anchor of a note (for sorting / section scoping). */

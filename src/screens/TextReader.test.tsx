@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import TextReader, { clampToolbarPosition, clampPanelWidth, panelDragOutcome, DEFAULT_PANEL_WIDTH, splitParagraphs } from "./TextReader";
+import TextReader, { clampToolbarPosition, clampPanelWidth, panelDragOutcome, DEFAULT_PANEL_WIDTH, splitParagraphs, firstProseDropCapOffset } from "./TextReader";
 import type { TodayCard, BookSection, Note } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -776,5 +776,155 @@ describe("TextReader Deep Study — stale-section guard", () => {
     // And A's text was never reused for a second (B) briefing.
     expect(briefingCallsWith("AAAA").length).toBe(1);
     expect(container).toBeTruthy();
+  });
+});
+
+// ── Reading-page redesign: typographic hierarchy + stable centered layout ──
+// The .txt path now emits the SAME shape as EPUB (clean text + StyleRanges); the
+// reader must render those beautifully WITHOUT mutating offsets. These pin the
+// behaviours the redesign promised: a heading renders with its h-class (still a
+// p[data-offset], not a heading tag), em ranges become real <em>, the first prose
+// paragraph carries the drop-cap hook, selection anchoring is intact, and the
+// reading column's container is structurally identical with the margin open vs
+// closed (no text-shift on toggle).
+describe("TextReader reading-page redesign (structure rendering)", () => {
+  beforeEach(() => { vi.mocked(invoke).mockReset(); localStorage.clear(); });
+
+  // "PREFACE." heading, a blank line, then a prose paragraph with an italic phrase.
+  const STRUCT_TEXT = "PREFACE.\n\nNow this is the body, and a phrase in italics closes it.";
+  const EM_PHRASE = "in italics";
+  const emStart = STRUCT_TEXT.indexOf(EM_PHRASE);
+  const ranges = [
+    { kind: "h1", start: 0, end: "PREFACE.".length },               // covers the heading paragraph
+    { kind: "em", start: emStart, end: emStart + EM_PHRASE.length }, // italic phrase in the prose
+  ];
+
+  function mockStructured() {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(STRUCT_TEXT);
+        case "cmd_read_section_structure": return Promise.resolve(ranges);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+  }
+
+  it("renders an h1 range as a styled paragraph (h-class) that stays a p[data-offset]", async () => {
+    mockStructured();
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => {
+      const head = container.querySelector("p.tl-h1");
+      expect(head).not.toBeNull();
+      expect(head!.textContent).toBe("PREFACE.");
+    });
+    // CRITICAL: it is still a <p data-offset> (never an <h1> tag), so the reader's
+    // char-offset selection anchoring keeps working over the heading.
+    const head = container.querySelector("p.tl-h1") as HTMLElement;
+    expect(head.tagName).toBe("P");
+    expect(head.getAttribute("data-offset")).toBe("0");
+    // No literal heading tags are introduced anywhere in the column.
+    expect(container.querySelector(".tl-readcol h1, .tl-readcol h2")).toBeNull();
+  });
+
+  it("renders an em range as a true <em> inside the prose paragraph", async () => {
+    mockStructured();
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    const em = await waitFor(() => {
+      const node = container.querySelector(".tl-readcol em");
+      expect(node).not.toBeNull();
+      return node!;
+    });
+    expect(em.textContent).toBe(EM_PHRASE);
+  });
+
+  it("gives the first PROSE paragraph the drop-cap hook — never the heading", async () => {
+    mockStructured();
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector("p.tl-dropcap")).not.toBeNull());
+    const cap = container.querySelector("p.tl-dropcap") as HTMLElement;
+    // The drop cap lands on the body paragraph (offset 10), not "PREFACE." (offset 0).
+    expect(cap.getAttribute("data-offset")).toBe(String(STRUCT_TEXT.indexOf("Now")));
+    expect(cap.textContent?.startsWith("Now")).toBe(true);
+    // The heading is NOT drop-capped.
+    expect(container.querySelector("p.tl-h1.tl-dropcap")).toBeNull();
+    // Exactly one paragraph carries the drop cap.
+    expect(container.querySelectorAll("p.tl-dropcap").length).toBe(1);
+  });
+
+  it("keeps p[data-offset] selection anchoring intact (offsets unchanged by styling)", async () => {
+    mockStructured();
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector("p.tl-h1")).not.toBeNull());
+    // Every rendered paragraph still exposes its exact section-relative offset.
+    const offsets = [...container.querySelectorAll("p[data-offset]")].map((p) => p.getAttribute("data-offset"));
+    expect(offsets).toContain("0");                                   // the heading
+    expect(offsets).toContain(String(STRUCT_TEXT.indexOf("Now")));    // the prose
+    // The prose paragraph's full text is intact (em styling sliced, never rewrote it).
+    const prose = container.querySelector(`p[data-offset="${STRUCT_TEXT.indexOf("Now")}"]`) as HTMLElement;
+    expect(prose.textContent).toBe(STRUCT_TEXT.slice(STRUCT_TEXT.indexOf("Now")));
+  });
+
+  it("reading column container is structurally identical with the margin open vs closed (no text-shift)", async () => {
+    mockStructured();
+    const { container, rerender } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")).not.toBeNull());
+
+    // Closed (default): the body declares the closed layout AND reserves the
+    // margin's width, so the centered sheet sits in the same box it will when open.
+    const bodyClosed = container.querySelector(".tl-reader-body") as HTMLElement;
+    expect(bodyClosed.classList.contains("tl-margin-closed")).toBe(true);
+    expect(bodyClosed.style.getPropertyValue("--tl-margin-reserve")).not.toBe("");
+    // The reading column lives inside .tl-reader-main in both states — same DOM seat.
+    expect(container.querySelector(".tl-reader-main .tl-readcol")).not.toBeNull();
+
+    // Open the margin via the toolbar toggle.
+    fireEvent.click(container.querySelector(".tl-paneltoggle")!);
+    await waitFor(() => expect((container.querySelector(".tl-sidepanel") as HTMLElement).style.display).not.toBe("none"));
+    const bodyOpen = container.querySelector(".tl-reader-body") as HTMLElement;
+    expect(bodyOpen.classList.contains("tl-margin-open")).toBe(true);
+    // Same reserve token value drives both states (panelWidth + resizer), so the
+    // sheet's centering box width is identical open vs closed → no horizontal jump.
+    expect(bodyOpen.style.getPropertyValue("--tl-margin-reserve")).toBe(bodyClosed.style.getPropertyValue("--tl-margin-reserve"));
+    // The column still sits in the same .tl-reader-main seat (not reparented).
+    expect(container.querySelector(".tl-reader-main .tl-readcol")).not.toBeNull();
+    rerender(<TextReader today={card()} onExit={() => {}} />);
+  });
+});
+
+describe("firstProseDropCapOffset (drop cap lands on the first prose paragraph)", () => {
+  it("returns the first non-heading, non-blank, non-code paragraph's offset", () => {
+    const paras = [
+      { offset: 0, text: "PREFACE." },
+      { offset: 10, text: "Now the body opens here." },
+      { offset: 40, text: "A second paragraph." },
+    ];
+    const ranges = [{ kind: "h1", start: 0, end: 8 }];
+    expect(firstProseDropCapOffset(paras, ranges)).toBe(10);
+  });
+
+  it("skips a leading blockquote and code (pre) blocks", () => {
+    const paras = [
+      { offset: 0, text: "An epigraph quote.", },
+      { offset: 30, text: "code\nlisting", pre: true },
+      { offset: 60, text: "The real first prose." },
+    ];
+    const ranges = [{ kind: "blockquote", start: 0, end: 18 }];
+    expect(firstProseDropCapOffset(paras, ranges)).toBe(60);
+  });
+
+  it("skips a marker/blank line with no word character", () => {
+    const paras = [
+      { offset: 0, text: "* * *" },
+      { offset: 10, text: "First true prose." },
+    ];
+    expect(firstProseDropCapOffset(paras, [])).toBe(10);
+  });
+
+  it("returns null when there is no prose yet", () => {
+    expect(firstProseDropCapOffset([], [])).toBeNull();
+    expect(firstProseDropCapOffset([{ offset: 0, text: "TITLE" }], [{ kind: "h1", start: 0, end: 5 }])).toBeNull();
   });
 });
