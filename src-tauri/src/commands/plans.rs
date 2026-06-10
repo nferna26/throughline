@@ -219,6 +219,23 @@ pub fn sweep_deleted_plans(conn: &rusqlite::Connection, days: i64) -> rusqlite::
         return Ok(0);
     }
     let cutoff = format!("-{days} days");
+    // CORE-1033: the purged notes' exported Markdown mirrors go with them —
+    // same contract as cmd_delete_note, so the notebook and the export stay in
+    // sync with no orphan files. Best-effort: a missing or unremovable file
+    // must never abort the sweep.
+    let mut stmt = conn.prepare(
+        "SELECT exported_markdown_path FROM notes
+         WHERE exported_markdown_path IS NOT NULL AND session_id IN (
+            SELECT s.id FROM reading_sessions s JOIN reading_plans p ON p.id = s.plan_id
+            WHERE p.deleted_at IS NOT NULL AND p.deleted_at < datetime('now', ?1))",
+    )?;
+    let mirrors: Vec<String> = stmt
+        .query_map([&cutoff], |r| r.get::<_, String>(0))?
+        .filter_map(|x| x.ok())
+        .collect();
+    for path in mirrors {
+        let _ = std::fs::remove_file(&path);
+    }
     conn.execute(
         "DELETE FROM notes WHERE session_id IN (
             SELECT s.id FROM reading_sessions s JOIN reading_plans p ON p.id = s.plan_id
@@ -407,6 +424,25 @@ mod tests {
 
     #[test]
     fn sweep_purges_only_plans_past_the_window() {
+        // CORE-1033: purged notes take their exported Markdown mirrors with
+        // them (same contract as cmd_delete_note — no orphan files once the
+        // row is gone). The mirrors live in an isolated export dir so the test
+        // never touches the user's real GBrain; env vars are process-global,
+        // so serialize against other env-touching tests.
+        let _g = crate::paths::lock_env_for_test();
+        let export_dir =
+            std::env::temp_dir().join(format!("tl-sweep-mirror-test-{}", std::process::id()));
+        std::fs::remove_dir_all(&export_dir).ok();
+        std::fs::create_dir_all(export_dir.join("Notes")).unwrap();
+        // SAFETY: env vars are process-global; the lock above serializes access.
+        unsafe {
+            std::env::set_var("THROUGHLINE_EXPORT_DIR", &export_dir);
+        }
+        let old_mirror = export_dir.join("Notes").join("n_old.md");
+        let rec_mirror = export_dir.join("Notes").join("n_rec.md");
+        std::fs::write(&old_mirror, "# old").unwrap();
+        std::fs::write(&rec_mirror, "# recent").unwrap();
+
         let conn = db();
         conn.execute_batch(
             "INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle,deleted_at)
@@ -415,9 +451,23 @@ mod tests {
                VALUES ('p_rec','b1','2026-01-01','2026-02-01','archived','archived',datetime('now','-5 days'));
              INSERT INTO reading_sessions (id,book_id,started_at,plan_id) VALUES ('s_old','b1','2026-01-02','p_old');
              INSERT INTO notes (id,book_id,session_id,note_type,locator,body,created_at,updated_at)
-               VALUES ('n_old','b1','s_old','reflection','char:0','x','2026-01-02','2026-01-02');",
+               VALUES ('n_old','b1','s_old','reflection','char:0','x','2026-01-02','2026-01-02');
+             INSERT INTO reading_sessions (id,book_id,started_at,plan_id) VALUES ('s_rec','b1','2026-01-02','p_rec');
+             INSERT INTO notes (id,book_id,session_id,note_type,locator,body,created_at,updated_at)
+               VALUES ('n_rec','b1','s_rec','reflection','char:0','y','2026-01-02','2026-01-02');",
         )
         .unwrap();
+        conn.execute(
+            "UPDATE notes SET exported_markdown_path = ?1 WHERE id = 'n_old'",
+            [old_mirror.to_string_lossy().to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE notes SET exported_markdown_path = ?1 WHERE id = 'n_rec'",
+            [rec_mirror.to_string_lossy().to_string()],
+        )
+        .unwrap();
+
         let purged = super::sweep_deleted_plans(&conn, 30).unwrap();
         assert_eq!(purged, 1, "only the plan past the 30-day window is purged");
         assert_eq!(count(&conn, "reading_plans WHERE id='p_old'"), 0);
@@ -431,10 +481,23 @@ mod tests {
             0,
             "its notes purged"
         );
+        assert!(
+            !old_mirror.exists(),
+            "the purged note's Markdown mirror is removed with the row"
+        );
         assert_eq!(
             count(&conn, "reading_plans WHERE id='p_rec'"),
             1,
             "in-window kept"
         );
+        assert_eq!(count(&conn, "notes WHERE id='n_rec'"), 1, "its notes kept");
+        assert!(
+            rec_mirror.exists(),
+            "a kept note's Markdown mirror is untouched"
+        );
+
+        unsafe {
+            std::env::remove_var("THROUGHLINE_EXPORT_DIR");
+        }
     }
 }
