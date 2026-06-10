@@ -97,14 +97,93 @@ pub fn body_end_offset(text: &str) -> usize {
 }
 
 /// Split body text into sections.
-/// First try chapter detection (`^Chapter N`, `^CHAPTER N`, `Book N`, etc.).
-/// Fall back to ~equal length chunks of TARGET_SECTION_CHARS.
+///
+/// In order of preference:
+///   1. Heading detection (`^Chapter N`, `^CHAPTER N`, `Book N`, Roman numerals) —
+///      the tuned `detect_chapters` path. Kept FIRST so books with explicit
+///      chapter markers (Moby Dick, Dracula, …) section exactly as before.
+///   2. INFERRED BOOK STRUCTURE (`book_structure::analyze`) — used only when
+///      heading detection found < 3 chapters (the fallback territory). A
+///      recognised title page + table of contents is carved into a leading
+///      FRONT-MATTER section, and the body is split on chapters matched from the
+///      contents list (the Walden fix: chapter names like `Economy`/`Reading`
+///      that the `CHAPTER N` detector can't see).
+///   3. ~equal length chunks of TARGET_SECTION_CHARS (no detectable structure).
+///
+/// Every path keeps the sectionizer invariants: boundaries on UTF-8 char
+/// boundaries (via `snap_to_boundary` / line starts), no word splitting, and a
+/// contiguous run that ends at `body.len()`.
 pub fn sectionize(body: &str) -> Vec<(String, usize, usize)> {
+    sectionize_with_roles(body).0
+}
+
+/// Like [`sectionize`], but also returns the book-typography role marks
+/// (`title` / `byline` / `contents-*` / `chapter-*` / `body-first`) when — and
+/// ONLY when — the inferred-structure path was used to section the body. Returning
+/// roles and sections together guarantees they can never diverge: a book sectioned
+/// by `detect_chapters` keeps the generic-heading roles it always had (no
+/// book-structure roles), and a book sectioned by inferred structure gets the
+/// richer roles for exactly the sections it produced. `import_txt` uses this;
+/// `sectionize` is the public invariant-tested entry that discards the roles.
+pub fn sectionize_with_roles(
+    body: &str,
+) -> (
+    Vec<(String, usize, usize)>,
+    Vec<crate::gutenberg_markup::Mark>,
+) {
     let chapters = detect_chapters(body);
     if chapters.len() >= 3 {
-        return chapters;
+        return (chapters, Vec::new());
     }
-    chunk_evenly(body)
+    // Heading detection came up short — try inferring the book's structure (the
+    // Walden case: a real title page + contents list whose chapter names are plain
+    // Title-Case lines the heading detector can't recognise).
+    let structure = crate::book_structure::analyze(body);
+    if let Some(secs) = sectionize_from_structure(body, &structure) {
+        return (secs, structure.role_marks);
+    }
+    (chunk_evenly(body), Vec::new())
+}
+
+/// Build sections from an inferred [`BookStructure`](crate::book_structure):
+/// a leading FRONT-MATTER section (`[0, front_matter_end)` — the title page +
+/// contents, classified non-assignable because it carries no flowing prose) plus
+/// one section per detected chapter. Returns `None` when the analyzer found no
+/// trustworthy chapter structure, so the caller falls back to heading detection /
+/// even chunking unchanged. Huge chapters are split the same way `detect_chapters`
+/// splits them, so daily reading stays reasonable.
+fn sectionize_from_structure(
+    body: &str,
+    structure: &crate::book_structure::BookStructure,
+) -> Option<Vec<(String, usize, usize)>> {
+    if structure.chapters.is_empty() {
+        return None;
+    }
+    let first_chapter = structure.chapters[0].0;
+    let mut sections: Vec<(String, usize, usize)> = Vec::new();
+
+    // Leading front-matter section (title page + contents). Only when there is
+    // real front matter before the first chapter; it abuts the first chapter at
+    // `first_chapter` (a line start → a char boundary, never mid-word).
+    if first_chapter > 0 {
+        let label = first_nonempty_line(&body[..first_chapter])
+            .unwrap_or_else(|| "Front Matter".to_string());
+        sections.push((label, 0, first_chapter));
+    }
+
+    // One section per chapter, abutting at the next chapter's start (last → len).
+    for (i, (start, label)) in structure.chapters.iter().enumerate() {
+        let end = structure
+            .chapters
+            .get(i + 1)
+            .map(|(s, _)| *s)
+            .unwrap_or_else(|| body.len());
+        if end > *start {
+            sections.push((label.clone(), *start, end));
+        }
+    }
+
+    Some(refine_oversized_sections(body, sections))
 }
 
 /// Per-section "assignable" flags (true = part of the reading plan). Front matter —
@@ -299,19 +378,26 @@ fn detect_chapters(body: &str) -> Vec<(String, usize, usize)> {
             None => folded.push((label, start, body.len())),
         }
     }
-    let sections = folded;
+    refine_oversized_sections(body, folded)
+}
 
-    // If chapters are huge (>30k chars), split them further to keep daily reading reasonable
+/// Split any section longer than `TARGET_SECTION_CHARS * 3` into ~target-sized
+/// parts so daily reading stays reasonable. Each interior split is snapped to a
+/// clean reading boundary (paragraph / sentence / word — never mid-word, always a
+/// UTF-8 char boundary), and the same snapped value is reused as one part's end
+/// and the next part's start, so the parts stay abutting (no overlap/gap). Shared
+/// by `detect_chapters` and the inferred-structure path so both keep the
+/// sectionizer invariants identically.
+fn refine_oversized_sections(
+    body: &str,
+    sections: Vec<(String, usize, usize)>,
+) -> Vec<(String, usize, usize)> {
     let mut refined: Vec<(String, usize, usize)> = Vec::new();
     for (label, s, e) in sections {
         let len = e - s;
         if len > TARGET_SECTION_CHARS * 3 {
             let parts = len.div_ceil(TARGET_SECTION_CHARS);
             let part_len = len / parts;
-            // Snap each interior split to a clean reading boundary (paragraph /
-            // sentence / word — never mid-word, always a char boundary). The same
-            // snapped value is reused as this part's end and the next part's
-            // start, so the parts stay abutting (no overlap/gap).
             let split = |p: usize| snap_to_boundary(body, s + p * part_len);
             for p in 0..parts {
                 let ps = if p == 0 { s } else { split(p) };
@@ -726,10 +812,31 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
     let cleaned = gutenberg_markup::clean_body(body);
     let body = cleaned.text.as_str();
     let mut marks = cleaned.marks;
-    marks.extend(gutenberg_markup::detect_headings(body));
 
-    // Sectionize the CLEANED body (unchanged sectionizer; offsets index `body`).
-    let raw_sections = sectionize(body);
+    // Sectionize the CLEANED body (offsets index `body`). When heading detection
+    // comes up short, the analyzer carves a leading front-matter section + chapter
+    // sections and returns the book-typography role marks for exactly those
+    // sections; otherwise it keeps the heading-detect / even-chunk paths and
+    // returns no roles. Roles and sections always come from the SAME decision, so
+    // they can't diverge.
+    let (raw_sections, role_marks) = sectionize_with_roles(body);
+
+    // The book-structure roles (title/byline/contents-*/chapter-*/body-first) are
+    // richer than the generic heading detector, so where a book-structure BLOCK
+    // role already covers a line we suppress the generic `h1`/`h2` heading mark for
+    // it (one role per paragraph; the reader's `blockRoleFor` takes the first block
+    // range that covers a paragraph).
+    let covered_by_role = |m: &gutenberg_markup::Mark| {
+        role_marks
+            .iter()
+            .any(|r| is_block_role(&r.kind) && r.start <= m.start && r.end >= m.end)
+    };
+    marks.extend(
+        gutenberg_markup::detect_headings(body)
+            .into_iter()
+            .filter(|h| !covered_by_role(h)),
+    );
+    marks.extend(role_marks);
     let assignable_flags = classify_assignable(&raw_sections, body);
     // Translate body-offset em/heading marks into per-section StyleRanges
     // (section-relative UTF-16 offsets), persisted through the SAME structure.json
@@ -820,6 +927,34 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
         last_opened_at: None,
     };
     Ok(ImportResult { book, sections })
+}
+
+/// True when a `StyleRange.kind` is a BLOCK role (applied to a whole paragraph),
+/// as opposed to an inline span (`em`/`strong`). Mirrors the frontend
+/// `isBlockRole` / `BLOCK_ROLES` map and the book-typography vocabulary so the
+/// `.txt` path suppresses a generic heading only where a richer block role
+/// already covers the paragraph.
+fn is_block_role(kind: &str) -> bool {
+    matches!(
+        kind,
+        "h1" | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "blockquote"
+            | "pre"
+            | "title"
+            | "subtitle"
+            | "byline"
+            | "contents-label"
+            | "contents-part"
+            | "contents-item"
+            | "epigraph"
+            | "chapter-label"
+            | "chapter-title"
+            | "body-first"
+    )
 }
 
 pub fn estimate_minutes_for_chars(n: usize) -> i64 {
@@ -1235,5 +1370,134 @@ and its long history before the world finally met it in print.\n\n\
         assert!(!is_chapter_heading("MIX")); // English word made of roman letters
         assert!(!is_chapter_heading("DID"));
         assert!(!is_chapter_heading("CIVIC"));
+    }
+
+    /// Build a Walden-shaped body: the consecutive-line title block + a `Contents`
+    /// list whose chapter names are plain Title-Case lines (the shape the
+    /// `CHAPTER N` detector can't see), then those chapters with prose.
+    fn walden_body() -> String {
+        let economy = "When I wrote the following pages, or rather the bulk of them, I lived alone, in the woods, a mile from any neighbor, in a house which I had built myself, on the shore of Walden Pond, in Concord, Massachusetts, and earned my living by the labor of my hands only. ".repeat(4);
+        let reading = "With a little more deliberation in the choice of their pursuits, all men would perhaps become essentially students and observers, for certainly their nature and destiny are interesting to all alike. ".repeat(4);
+        let conclusion = "To the sick the doctors wisely recommend a change of air and scenery. Thank Heaven, here is not all the world. ".repeat(4);
+        format!(
+            "WALDEN\nand\nON THE DUTY OF CIVIL DISOBEDIENCE\nby Henry David Thoreau\n\n\
+             Contents\n\n\
+             WALDEN\n\n\
+             Economy\n\
+             Reading\n\
+             Conclusion\n\n\
+             Economy\n\n\
+             {economy}\n\n\
+             Reading\n\n\
+             {reading}\n\n\
+             Conclusion\n\n\
+             {conclusion}\n"
+        )
+    }
+
+    /// The Walden fix, end to end: a non-assignable FRONT-MATTER section carrying
+    /// the title-page + contents roles, and a FIRST ASSIGNABLE section that is the
+    /// first real chapter (Economy) with a `chapter-title` over "Economy" and a
+    /// `body-first` over its opening paragraph — offsets slicing exactly, and the
+    /// title/contents text living ONLY in the (non-assignable) front matter.
+    #[test]
+    fn walden_front_matter_is_separated_and_first_chapter_is_today() {
+        let body = walden_body();
+        let raw_sections = sectionize(&body);
+        let flags = classify_assignable(&raw_sections, &body);
+
+        // A leading NON-ASSIGNABLE front-matter section exists (title + contents).
+        assert!(!flags[0], "front matter must be non-assignable: {raw_sections:?}");
+        let (_, fm_s, fm_e) = &raw_sections[0];
+        let fm = &body[*fm_s..*fm_e];
+        assert!(fm.contains("WALDEN") && fm.contains("Contents"));
+        // The front matter holds NO chapter prose — the Walden bug.
+        assert!(
+            !fm.contains("When I wrote the following pages"),
+            "front matter leaked Economy prose: {raw_sections:?}"
+        );
+
+        // The first ASSIGNABLE section is the first real chapter (Economy).
+        let day1 = flags.iter().position(|&a| a).expect("an assignable section");
+        let (label, s1, e1) = &raw_sections[day1];
+        assert_eq!(label, "Economy", "first assignable section should be Economy");
+        let chapter = &body[*s1..*e1];
+        assert!(chapter.starts_with("Economy"));
+        assert!(chapter.contains("When I wrote the following pages"));
+        // The title/contents text is NOT in the first assignable section.
+        assert!(!chapter.contains("Contents"));
+        assert!(!chapter.contains("ON THE DUTY OF CIVIL DISOBEDIENCE"));
+
+        // The book-typography roles for the front matter + first chapter slice the
+        // body to exactly the styled phrases (byte-offset marks → bytes here).
+        let (_, role_marks) = sectionize_with_roles(&body);
+        let role_slices = |kind: &str| -> Vec<String> {
+            role_marks
+                .iter()
+                .filter(|m| m.kind == kind)
+                .map(|m| body[m.start..m.end].to_string())
+                .collect()
+        };
+        assert_eq!(role_slices("title"), vec!["WALDEN".to_string()]);
+        assert_eq!(
+            role_slices("byline"),
+            vec!["by Henry David Thoreau".to_string()]
+        );
+        assert_eq!(role_slices("contents-label"), vec!["Contents".to_string()]);
+        assert!(
+            role_slices("contents-item").contains(&"Economy".to_string()),
+            "contents-item must list Economy"
+        );
+        // chapter-title covers exactly "Economy"; body-first opens the chapter.
+        assert!(role_slices("chapter-title").contains(&"Economy".to_string()));
+        let body_first = role_slices("body-first");
+        assert!(
+            body_first
+                .iter()
+                .any(|s| s.starts_with("When I wrote the following pages")),
+            "body-first must cover the Economy opening paragraph: {body_first:?}"
+        );
+
+        // Every role mark lands fully inside one section and on a char boundary.
+        for m in &role_marks {
+            assert!(body.is_char_boundary(m.start) && body.is_char_boundary(m.end));
+        }
+    }
+
+    /// A book with explicit CHAPTER headings still sections per chapter through the
+    /// tuned `detect_chapters` path (the inferred-structure path must not steal it).
+    #[test]
+    fn book_with_clear_chapter_headings_still_sections_per_chapter() {
+        let p = "A sentence of reasonable length to fill the chapter body. ".repeat(10);
+        let body = format!(
+            "CHAPTER I\n\n{p}\n\nCHAPTER II\n\n{p}\n\nCHAPTER III\n\n{p}\n\nCHAPTER IV\n\n{p}\n"
+        );
+        let secs = sectionize(&body);
+        assert_eq!(secs.len(), 4, "expected 4 chapter sections: {secs:?}");
+        assert_eq!(secs[0].0, "CHAPTER I");
+        assert_eq!(secs[3].0, "CHAPTER IV");
+        // No book-structure roles when the heading path handled it.
+        let (_, roles) = sectionize_with_roles(&body);
+        assert!(roles.is_empty(), "heading-detected book must carry no inferred roles");
+    }
+
+    /// An unstructured prose blob (no headings, no contents) still falls back to
+    /// even Part-N chunks — the inferred-structure path stays out of its way.
+    #[test]
+    fn unstructured_prose_blob_falls_back_to_part_chunks() {
+        let para =
+            "The river of paragraphs flows on without any chapter heading at all. ".repeat(8);
+        let body = std::iter::repeat_n(para.as_str(), 80)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let secs = sectionize(&body);
+        assert!(secs.len() >= 2, "expected multiple chunks: {}", secs.len());
+        assert!(
+            secs.iter().all(|(l, _, _)| l.starts_with("Part ")),
+            "expected Part-N chunk labels: {:?}",
+            secs.iter().map(|(l, _, _)| l).collect::<Vec<_>>()
+        );
+        let (_, roles) = sectionize_with_roles(&body);
+        assert!(roles.is_empty(), "an unstructured blob carries no inferred roles");
     }
 }
