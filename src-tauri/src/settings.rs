@@ -217,13 +217,35 @@ pub fn validate_export_path(raw: &str) -> Result<PathBuf> {
             expanded
         ));
     }
-    // Refuse to overwrite obvious system directories.
-    let s = expanded.to_string_lossy().to_string();
+    // Refuse to overwrite obvious system directories. `starts_with` compares
+    // whole path components (trailing slashes and `.` segments are normalized),
+    // so a banned root is refused whether it's named exactly ("/etc"), with a
+    // trailing slash ("/etc/"), or via a subpath ("/etc/cron.d").
     let banned = [
-        "/", "/etc", "/System", "/Library", "/usr", "/bin", "/sbin", "/var",
+        "/etc",
+        "/System",
+        "/Library",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/var",
+        "/private",
+        "/Applications",
+        "/Volumes",
     ];
-    if banned.iter().any(|b| s == *b) {
-        return Err(anyhow!("refusing to use {} as the export root", s));
+    let under_banned_root = banned.iter().any(|b| expanded.starts_with(b));
+    // Home subfolders are the normal case, but only proper ones: refuse "/",
+    // bare "/Users", and a home root itself ("/Users/<name>") — a real export
+    // root lives at least one level inside a home folder (depth >= 3).
+    let depth = expanded
+        .components()
+        .filter(|c| matches!(c, std::path::Component::Normal(_)))
+        .count();
+    if under_banned_root || depth == 0 || (expanded.starts_with("/Users") && depth < 3) {
+        return Err(anyhow!(
+            "refusing to use {} as the export root",
+            expanded.to_string_lossy()
+        ));
     }
     Ok(expanded)
 }
@@ -495,6 +517,22 @@ mod tests {
         assert!(validate_export_path("/").is_err());
         assert!(validate_export_path("/etc").is_err());
         assert!(validate_export_path("/System").is_err());
+        // CORE-1016: trailing slashes, subpaths of banned roots, and the bare
+        // /Users root used to slip past the exact-string check.
+        for p in [
+            "/etc/",
+            "/etc/cron.d",
+            "/System/Library",
+            "/usr/local",
+            "/Users",
+            "/private/etc",
+            "/Applications",
+            "/Volumes/SomeDisk",
+        ] {
+            assert!(validate_export_path(p).is_err(), "{p} must be refused");
+        }
+        // A legitimate deep home path still passes.
+        assert!(validate_export_path("/Users/someone/Documents/Reading").is_ok());
     }
 
     #[test]
