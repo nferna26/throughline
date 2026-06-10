@@ -179,6 +179,29 @@ describe("Today", () => {
     expect(screen.queryByText(/Recovery/)).toBeNull();
   });
 
+  // FT-34 (CORE-1067): a not-yet-started book has monthly_pct 0 — a true but
+  // useless "0% complete" stat at the exact moment the app should feel like an
+  // invitation. Hide it until there is progress; the meta row must not then show
+  // two separators in a row.
+  it("hides the progress stat until there is progress", () => {
+    const c = card();
+    c.plan_status = "plan_ready";
+    c.plan.status = "plan_ready";
+    c.pace = { kind: "not_started" };
+    c.forecast = null;
+    c.recovery = null;
+    c.monthly_pct = 0;
+    const { container } = render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.queryByText(/0% complete/)).toBeNull();
+    // No double separator left behind where the stat was.
+    expect(container.querySelectorAll(".tl-meta .sep").length).toBe(1);
+  });
+
+  it("still shows the progress stat for an in-progress book", () => {
+    render(<Today today={card()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.getByText(/12% complete/)).toBeInTheDocument();
+  });
+
   // FT-20 (CORE-1053): a brand-new install must not meet a zero-count ledger.
   // Before the first session the streak row (the seven dots + "You read 0 of the
   // last 7 days.") stays silent — mirroring LastTime's fresh-book quiet.

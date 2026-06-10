@@ -195,8 +195,15 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
           <div className="tl-meta">
             <span className="item"><TLIcon name="clock" size={15} /> ≈ {estimated_minutes} min</span>
             <span className="sep" />
-            <span className="item">{monthly_pct}% complete</span>
-            <span className="sep" />
+            {/* CORE-1067: "0% complete" on a not-yet-started book is a true but
+                useless stat at the moment the app should feel like an invitation.
+                Show progress (and its separator) only once there is some. */}
+            {monthly_pct > 0 && (
+              <>
+                <span className="item">{monthly_pct}% complete</span>
+                <span className="sep" />
+              </>
+            )}
             {/* FT-19 (CORE-1052): the plan-ready fact lives in the single note
                 below — the chip must not echo it. A not-yet-started plan reads
                 its calm pace ("Not started"); a paused plan reads "Paused". */}
