@@ -266,6 +266,49 @@ describe("TextReader session recap", () => {
   });
 });
 
+// FT-29: leaving the reader by the toolbar "‹ Today" back button must flush the
+// sitting (cmd_end_session with the completed sections + minutes), not silently
+// discard it — and finishing normally must still end the session exactly once.
+describe("TextReader toolbar back-exit flush (FT-29)", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("flushes the session on the toolbar 'Today' back button before exiting", async () => {
+    mockTwoSections();
+    const onExit = vi.fn();
+    const { container } = render(<TextReader today={card()} mode="full" onExit={onExit} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    // Read s1, then advance — s1 is now visited-and-passed.
+    fireEvent.click(screen.getByRole("button", { name: /Next section/i }));
+    await waitFor(() => expect(screen.getByText(/Chapter 2/)).toBeInTheDocument());
+
+    // Leave via the toolbar back button (named "Today"), NOT Finish.
+    fireEvent.click(screen.getByRole("button", { name: /Today/ }));
+
+    await waitFor(() => {
+      const call = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_end_session");
+      expect(call).toBeTruthy();
+      expect((call![1] as { completedSectionIds: string[] }).completedSectionIds).toContain("s1");
+      expect((call![1] as { minutes: number }).minutes).toBeGreaterThanOrEqual(1);
+    });
+    expect(onExit).toHaveBeenCalled();
+  });
+
+  it("ends the session exactly once when finishing normally (no double-end)", async () => {
+    mockTwoSections();
+    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    const finishButtons = screen.getAllByRole("button", { name: /^Finish$/ });
+    fireEvent.click(finishButtons[finishButtons.length - 1]);
+
+    await waitFor(() =>
+      expect(vi.mocked(invoke).mock.calls.filter((c) => c[0] === "cmd_end_session").length).toBe(1),
+    );
+  });
+});
+
 // FT-09: finishing a section by READING it must be reachable. These tests pin
 // the contents of completedSectionIds sent to cmd_end_session: scrolled to the
 // bottom → the current section counts; barely started → it doesn't; a section

@@ -72,6 +72,10 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const [showNote, setShowNote] = useState(false);
   const [topOffset, setTopOffset] = useState<number>(0);
   const startedAt = useRef<number>(Date.now());
+  // Double-end guard: cmd_end_session must fire at most once per sitting, whether
+  // the reader leaves via Finish, the toolbar back button, or anything that calls
+  // onExit. Set before the awaited end so a second path can't slip past.
+  const endedRef = useRef<boolean>(false);
   const [endingPrompt, setEndingPrompt] = useState(false);
   const [summary, setSummary] = useState("");
   // ── Companion Margin: anchored notes/highlights/tutor cards beside the text ──
@@ -420,6 +424,27 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     return completed;
   }
 
+  // Flush the sitting to the backend: end the session (completed sections +
+  // minutes) so completion state isn't lost. Idempotent via endedRef — the recap
+  // path AND the toolbar back button both call this, and only the first wins.
+  // When the session never started, there's nothing to end (but a takeaway may
+  // still be saved by finalizeSession before this runs).
+  async function flushSession() {
+    if (endedRef.current) return;
+    if (!session) return;
+    endedRef.current = true;
+    const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
+    try {
+      await invoke<ReadingSession>("cmd_end_session", {
+        sessionId: session.id,
+        endLocator: locator,
+        minutes,
+        completedSectionIds: completedSectionIds(),
+        summarySentence: summary.trim() ? summary.trim() : null,
+      });
+    } catch { /* ending is best-effort; never trap the reader in the reader */ }
+  }
+
   // `takeaway` is passed explicitly (not read from state) so Skip can end with
   // null without racing a setState. Rescue mode never forces a takeaway and
   // never forces section completion — a short sitting still counts.
@@ -448,14 +473,26 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       } catch { /* recap takeaway is best-effort; never block ending a session */ }
     }
     if (!session) return onExit();
-    const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
-    await invoke<ReadingSession>("cmd_end_session", {
-      sessionId: session.id,
-      endLocator: locator,
-      minutes,
-      completedSectionIds: completedSectionIds(),
-      summarySentence: tk,
-    });
+    if (!endedRef.current) {
+      endedRef.current = true;
+      const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
+      try {
+        await invoke<ReadingSession>("cmd_end_session", {
+          sessionId: session.id,
+          endLocator: locator,
+          minutes,
+          completedSectionIds: completedSectionIds(),
+          summarySentence: tk,
+        });
+      } catch { /* ending is best-effort; never trap the reader in the reader */ }
+    }
+    onExit();
+  }
+
+  // Toolbar "‹ Today" is not plain navigation — it flushes the sitting first so
+  // the sections read this sitting are recorded (FT-29), then exits.
+  async function handleBackExit() {
+    await flushSession();
     onExit();
   }
 
@@ -730,7 +767,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   return (
     <section className="tl-reader" ref={readerRef}>
       <div className="tl-readtoolbar">
-        <button className="tl-back" onClick={onExit}><TLIcon name="chevronLeft" size={18} /> Today</button>
+        <button className="tl-back" onClick={handleBackExit}><TLIcon name="chevronLeft" size={18} /> Today</button>
         <span className="tl-tb-title">
           {currentSection.label}
           {targetSection && targetSection.id !== currentSection.id && ` · today: ${targetSection.label}`}
