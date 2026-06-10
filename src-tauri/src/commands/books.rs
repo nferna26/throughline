@@ -22,7 +22,9 @@ use crate::{epub_classify, export, import, log, models, paths, plan, recovery, s
 
 #[tauri::command]
 pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<ImportOutcome, AppError> {
-    eprintln!("[tl] cmd_import_book called with path={}", path);
+    // Never log the source path: stderr/app.log are diagnostic surfaces and the
+    // file name is content-adjacent metadata (CORE-1017 — usage, never content).
+    tracing::debug!(category = "import", "cmd_import_book invoked");
     import_or_dedup(&PathBuf::from(&path), state.inner())
 }
 
@@ -42,10 +44,11 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
     if let Ok(sha) = import::hash_file(src) {
         let conn = state.0.lock()?;
         if let Some(existing) = fetch_book_by_sha(&conn, &sha)? {
-            eprintln!(
-                "[tl] import_or_dedup: dedup hit (sha {}…) -> existing book_id={}",
-                &sha[..8.min(sha.len())],
-                existing.id
+            tracing::info!(
+                category = "import",
+                book_id = %existing.id,
+                sha256_prefix = &sha[..8.min(sha.len())],
+                "import_or_dedup: dedup hit — switching to existing book"
             );
             bump_last_opened_at(&conn, &existing.id)?;
             return Ok(ImportOutcome {
@@ -58,15 +61,22 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
     let result = match import::import_any(src) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[tl] import_or_dedup: import_any failed: {:#}", e);
+            tracing::warn!(
+                category = "import",
+                "import_or_dedup: import_any failed: {:#}",
+                e
+            );
             return Err(AppError::io(format!("import failed: {:#}", e)));
         }
     };
-    eprintln!(
-        "[tl] import_or_dedup: imported '{}' [{}] with {} sections",
-        result.book.title,
-        result.book.source_type,
-        result.sections.len()
+    // book_id + section count are enough here — the title stays out of the
+    // diagnostic stream (log_import below records it in the on-disk app.log).
+    tracing::info!(
+        category = "import",
+        book_id = %result.book.id,
+        source_type = %result.book.source_type,
+        sections = result.sections.len(),
+        "import_or_dedup: imported"
     );
     let conn = state.0.lock()?;
     insert_book(&conn, &result.book)?;
@@ -87,7 +97,7 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
         result.sections.len(),
         &result.book.source_sha256,
     );
-    eprintln!("[tl] import_or_dedup: OK book_id={}", result.book.id);
+    tracing::info!(category = "import", book_id = %result.book.id, "import_or_dedup: OK");
     Ok(ImportOutcome {
         book: result.book,
         created: true,
@@ -121,7 +131,7 @@ pub fn cmd_configure_plan(
                 "invalid finish date: {target_finish_date:?} (expected YYYY-MM-DD)"
             ))
         })?;
-    let today = chrono::Utc::now().naive_utc().date();
+    let today = plan::app_today();
     if finish < today {
         return Err(AppError::validation(
             "finish date cannot be in the past".to_string(),
@@ -235,7 +245,7 @@ pub(crate) fn today_card(conn: &Connection) -> Result<Option<TodayCard>, AppErro
         .is_some_and(|f| matches!(f.state.as_str(), "needs_rebalance" | "plan_unrealistic"));
     let days_behind = computed.forecast.as_ref().map_or(0, |f| f.days_late).max(0);
     let recovery = if needs_recovery {
-        let today = chrono::Utc::now().naive_utc().date();
+        let today = plan::app_today();
         let finish = chrono::NaiveDate::parse_from_str(&plan.target_finish_date, "%Y-%m-%d")
             .unwrap_or(today);
         Some(recovery::build_bundle(days_behind.max(1), today, finish))
@@ -282,7 +292,7 @@ fn plan_less_card(conn: &Connection, book: Book) -> Result<TodayCard, AppError> 
     let streak = compute_streak(conn, &book.id)?;
     let session_minutes = crate::settings::get_reading_rhythm_minutes(conn);
     let memory = today_memory(conn, &book.id)?;
-    let today = chrono::Utc::now().naive_utc().date().to_string();
+    let today = plan::app_today().to_string();
     let placeholder = ReadingPlan {
         id: String::new(),
         book_id: book.id.clone(),
@@ -662,15 +672,19 @@ fn today_memory(
 }
 
 fn compute_streak(conn: &Connection, book_id: &str) -> rusqlite::Result<models::StreakSummary> {
+    // Streak window = the last 7 *local* days (CORE-1014). `started_at` stays a
+    // UTC timestamp in the DB; the boundary date is computed in Rust via
+    // `plan::app_today()` and passed as a param — SQL's own "now" is the UTC day.
+    let week_start = (plan::app_today() - chrono::Duration::days(6)).to_string();
     let mut stmt = conn.prepare(
         "SELECT DATE(started_at) AS d, COALESCE(SUM(minutes), 0)
          FROM reading_sessions
-         WHERE book_id = ?1 AND DATE(started_at) >= DATE('now', '-6 days')
+         WHERE book_id = ?1 AND DATE(started_at) >= ?2
          GROUP BY d",
     )?;
     let mut days = 0i64;
     let mut minutes = 0i64;
-    let mut rows = stmt.query(params![book_id])?;
+    let mut rows = stmt.query(params![book_id, week_start])?;
     while let Some(row) = rows.next()? {
         days += 1;
         minutes += row.get::<_, i64>(1)?;
@@ -701,7 +715,7 @@ pub fn cmd_read_section_text(
         .optional()?;
     if source_type.as_deref() == Some("epub") {
         if let Err(e) = crate::import_epub::ensure_epub_text(&conn, &book_id) {
-            eprintln!("[tl] epub text backfill skipped for {book_id}: {e}");
+            tracing::warn!("epub text backfill skipped for {book_id}: {e}");
         }
     }
     let mut stmt = conn.prepare(
@@ -853,9 +867,10 @@ fn canonical_assignable_sections(
                 list_sections(conn, book_id)?
             }
             Err(e) => {
-                eprintln!(
+                tracing::warn!(
                     "reclassify failed for {}: {} — falling back to original list",
-                    book_id, e
+                    book_id,
+                    e
                 );
                 all
             }

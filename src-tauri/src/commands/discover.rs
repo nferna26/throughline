@@ -349,7 +349,7 @@ pub async fn cmd_discover_search(
     match live_search(query.clone(), page, languages).await {
         Ok(page_data) => Ok(page_data),
         Err(e) => {
-            eprintln!("[tl] discover: live search unavailable ({e}); serving offline seed");
+            tracing::warn!("discover: live search unavailable ({e}); serving offline seed");
             Ok(seed_search(query.as_deref(), page.unwrap_or(1)))
         }
     }
@@ -445,7 +445,7 @@ pub async fn cmd_import_from_gutendex(
         match download_and_import(&client, url, ext, state.inner()).await {
             Ok(outcome) => return Ok(outcome),
             Err(e) => {
-                eprintln!("[tl] gutendex import via .{ext} failed: {e}");
+                tracing::warn!("gutendex import via .{ext} failed: {e}");
                 last_err = Some(e);
             }
         }
