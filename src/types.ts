@@ -207,9 +207,10 @@ export interface TodayCard {
   forecast: FinishForecast | null;
   /** "Last time" memory for calm re-entry; fields empty when nothing captured. */
   memory: TodayMemory;
-  /** "Before you read" teaser (book's own first/resume sentences + a prompt);
-   *  null when there's no readable section text. Optional in the type so existing
-   *  TodayCard fixtures stay valid; the backend always sends it (possibly null). */
+  /** "Where you left off" resume teaser (the resume-adjacent sentence + a prompt);
+   *  null when there's no readable section text or the reader hasn't started the
+   *  section. Optional in the type so existing TodayCard fixtures stay valid; the
+   *  frontend shows it only when `is_resume_excerpt` is true. */
   teaser?: TodayTeaser | null;
 }
 
@@ -227,10 +228,11 @@ export interface TodayMemory {
   note_count: number;
 }
 
-/** "Before you read" teaser on Today: the book's OWN first (or resume-adjacent)
+/** "Where you left off" resume teaser on Today: the book's OWN resume-adjacent
  *  sentence(s) plus a hand-written reading prompt. Sourced from the already-
- *  imported local text — never AI, never network. `is_resume_excerpt` is true
- *  when the excerpt is taken near the reader's mid-section resume position. */
+ *  imported local text — never AI, never network. The frontend renders it only
+ *  when `is_resume_excerpt` is true; a fresh section's opening is never
+ *  pre-printed (the reader meets it the instant they tap Start). */
 export interface TodayTeaser {
   excerpt: string;
   prompt: string;

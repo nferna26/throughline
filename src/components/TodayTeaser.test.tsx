@@ -5,55 +5,38 @@ import type { TodayTeaser as Teaser } from "../types";
 
 function teaser(over: Partial<Teaser> = {}): Teaser {
   return {
-    excerpt: "Great art Thou, O Lord, and greatly to be praised.",
-    prompt: "Read for the argument — what claim is being built?",
-    locator: "char:0",
-    is_resume_excerpt: false,
+    excerpt: "Now the middle paragraph the reader is returning to begins here.",
+    prompt: "Read for the thread — what is this paragraph carrying forward?",
+    locator: "char:240",
+    is_resume_excerpt: true,
     ...over,
   };
 }
 
 describe("TodayTeaser", () => {
-  it("renders the book's own excerpt as a quiet pull-quote with the reading prompt beneath", () => {
-    render(<TodayTeaser teaser={teaser()} completed={false} />);
-    expect(screen.getByText(/Great art Thou, O Lord/)).toBeInTheDocument();
-    expect(screen.getByText(/Read for the argument/)).toBeInTheDocument();
+  // CORE-1049: this surface is resume-only — a fresh section's opening is never
+  // pre-printed, so the one remaining variant frames re-entry as a thread.
+  it("frames the resume excerpt as picking up a thread, with the prompt beneath", () => {
+    render(<TodayTeaser teaser={teaser()} />);
+    expect(screen.getByText(/Where you left off/i)).toBeInTheDocument();
+    expect(screen.getByText(/Now the middle paragraph/)).toBeInTheDocument();
+    expect(screen.getByText(/Read for the thread/)).toBeInTheDocument();
     // The whole block is a calm, labelled note (not a heading-level surface).
-    expect(screen.getByRole("note", { name: /Before you read/i })).toBeInTheDocument();
-    // No gamification or AI language anywhere in the block. Word-boundaried so
-    // ordinary book text ("praised", "again") doesn't false-match.
+    expect(screen.getByRole("note", { name: /Where you left off/i })).toBeInTheDocument();
+  });
+
+  it("carries no gamification or AI language anywhere in the block", () => {
+    render(<TodayTeaser teaser={teaser()} />);
+    // Word-boundaried so ordinary book text ("praised", "again") doesn't false-match.
     expect(
       screen.queryByText(/\b(streak|badge|XP|points|leaderboard|confetti)\b|AI-generated/i),
     ).toBeNull();
   });
 
-  it("frames the resume variant as picking up a thread, not opening a section", () => {
-    render(
-      <TodayTeaser
-        teaser={teaser({
-          excerpt: "Now the middle paragraph the reader is returning to begins here.",
-          prompt: "Read for the thread — what is this paragraph carrying forward?",
-          is_resume_excerpt: true,
-        })}
-        completed={false}
-      />,
-    );
-    expect(screen.getByText(/Where you left off/i)).toBeInTheDocument();
-    expect(screen.getByText(/Now the middle paragraph/)).toBeInTheDocument();
-    expect(screen.getByText(/Read for the thread/)).toBeInTheDocument();
-  });
-
-  it("shows the calm 'section is ready' fallback when no teaser text is available", () => {
-    render(<TodayTeaser teaser={null} completed={false} />);
-    expect(screen.getByText(/Today's section is ready\. Read for one sentence worth keeping\./i)).toBeInTheDocument();
-    // No excerpt/prompt pull-quote when unavailable.
-    expect(screen.queryByText(/Read for the argument/)).toBeNull();
-  });
-
-  it("acknowledges a completed section without pressure to do more", () => {
-    render(<TodayTeaser teaser={teaser()} completed={true} />);
-    expect(screen.getByText(/You've finished today's section\. Let the note be enough\./i)).toBeInTheDocument();
-    // The completed state retires the excerpt — the reading is done.
-    expect(screen.queryByText(/Great art Thou, O Lord/)).toBeNull();
+  // CORE-1049: "Before you read" now has a single owner (the AI SectionBriefingCard).
+  // The resume teaser must not re-claim that label.
+  it("does not use the 'Before you read' label", () => {
+    render(<TodayTeaser teaser={teaser()} />);
+    expect(screen.queryByText(/Before you read/i)).toBeNull();
   });
 });

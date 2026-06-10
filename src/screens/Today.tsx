@@ -244,11 +244,13 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
         </div>
       )}
 
-      {/* "Before you read" — the prepared encounter. Sits between the section
-          metadata above and the primary CTA below; progress/pace stay but become
-          supporting. The book's own first sentences + one hand-written prompt;
-          no AI, no gamification. Only shown when a section is assigned. */}
-      {section && <TodayTeaser teaser={teaser ?? null} completed={section_completed} />}
+      {/* "Where you left off" — the resume thread. A fresh section's opening is
+          NOT pre-printed (the reader meets it the instant they tap Start), so this
+          shows ONLY when the teaser is the resume excerpt: the sentence being
+          returned to, plus one hand-written prompt. No AI, no gamification. */}
+      {section && !section_completed && teaser?.is_resume_excerpt && (
+        <TodayTeaser teaser={teaser} />
+      )}
 
       {isResuming && (
         <p className="tl-resume-note" role="note">

@@ -304,6 +304,38 @@ describe("Today — recovery options are honest", () => {
   });
 });
 
+// FT-16 (CORE-1049): the new-section teaser only re-prints the section's own
+// opening the reader meets the instant they tap Start — redundant by design. We
+// keep ONLY the resume "Where you left off" variant; a fresh section pre-prints
+// nothing above the Start button.
+describe("Today — teaser shows only the resume variant", () => {
+  it("does not re-print the section's opening for a fresh section", () => {
+    const c = card();
+    c.teaser = {
+      excerpt: "It is very seldom that mere ordinary people…",
+      prompt: "Read for the image — what picture does this section leave behind?",
+      locator: "char:0",
+      is_resume_excerpt: false,
+    };
+    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.queryByText(/It is very seldom/)).toBeNull();
+    expect(screen.queryByRole("note", { name: /Before you read/i })).toBeNull();
+  });
+
+  it("still shows the resume teaser as 'Where you left off'", () => {
+    const c = card();
+    c.teaser = {
+      excerpt: "Now the middle paragraph the reader is returning to begins here.",
+      prompt: "Read for the thread — what is this paragraph carrying forward?",
+      locator: "char:240",
+      is_resume_excerpt: true,
+    };
+    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.getByText(/Where you left off/i)).toBeInTheDocument();
+    expect(screen.getByText(/Now the middle paragraph/)).toBeInTheDocument();
+  });
+});
+
 describe("Today — continue where you left off", () => {
   it("surfaces resume position when the reader stopped mid-section", () => {
     const c = card();
