@@ -260,6 +260,32 @@ describe("MarginTutorCard — cap-hit three doors (CM6)", () => {
   });
 });
 
+describe("MarginTutorCard — company outage voice (CORE-1037)", () => {
+  it("a company outage opens the paused sheet in Throughline AI's voice — truthful, no key-pasting CTA", async () => {
+    localStorage.setItem("tl.tutorEnabled", "true");
+    mocks.invoke.mockReset();
+    mocks.invoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings":
+          return Promise.resolve({ export_path: "/x", ai_provider: "company", ai_requests_retention_days: 90 });
+        case "cmd_ai_ask":
+          return Promise.resolve({ ai_request_id: "ai_1", prompt_sent: "(hidden)", provider_host: "ai.readthroughline.com" });
+        default:
+          return Promise.resolve(null);
+      }
+    });
+    render(card());
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.anything()));
+    const ch = lastChannel();
+    // The relay went quiet AFTER the send — the audit row for this minute says Sent →.
+    await act(async () => { ch.onmessage?.({ kind: "error", message: "Throughline AI request failed: connection refused" }); });
+    expect(await screen.findByText(/Throughline AI hit a snag/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing has been sent/i)).toBeNull();
+    expect(screen.queryByText(/Switch provider/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /Check again/i })).toBeInTheDocument();
+  });
+});
+
 describe("MarginTutorCard — first-cloud-send consent copy", () => {
   // The backend pauses the first cloud send with NeedsCloudConsent; the dialog
   // must describe the reader's actual arrangement (key / login / purchase) —

@@ -244,6 +244,7 @@ export default function SectionBriefingCard(props: {
             sectionText: props.sectionText,
           }}
           initialState="unavailable"
+          provider={provider ?? undefined}
           onConnected={onSetupConnected}
         />
       ) : phase === "consent" ? (
