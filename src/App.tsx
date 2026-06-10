@@ -68,6 +68,11 @@ export default function App() {
     refreshToday();
   }, []);
 
+  // Activation feedback (CORE-1009): the deep link is the buyer's
+  // highest-anxiety moment — "did my $20 purchase take?" — so both outcomes
+  // get a visible, dismissable banner instead of silence.
+  const [activation, setActivation] = useState<{ ok: boolean; message: string } | null>(null);
+
   // Company-mode activation deep link (CM5). throughline://activate?token=… →
   // the Rust handler emits "tl-activate"; we exchange it for a license here. The
   // dynamic import + try/catch makes this a no-op outside Tauri (the harness).
@@ -81,8 +86,9 @@ export default function App() {
             await invoke("cmd_activate_company", { activationToken: e.payload });
             setTab("today");
             await refreshToday();
-          } catch {
-            /* surfaced when the reader next opens Settings → Assistance */
+            setActivation({ ok: true, message: "Throughline AI is active — ask the tutor anything." });
+          } catch (err) {
+            setActivation({ ok: false, message: errorMessage(err) });
           }
         });
       } catch {
@@ -245,6 +251,28 @@ export default function App() {
           <TLIcon name={theme === "dark" ? "sun" : "moon"} size={18} />
         </button>
       </header>
+
+      {activation && (
+        <div
+          className={activation.ok ? "tl-activation-banner ok" : "tl-activation-banner"}
+          role={activation.ok ? "status" : "alert"}
+        >
+          <TLIcon name={activation.ok ? "check" : "behind"} size={16} />
+          <span>
+            {activation.message}
+            {!activation.ok && " You can enter your activation code in Settings → Assistance."}
+          </span>
+          {!activation.ok && (
+            <button
+              className="tl-btn-quiet"
+              onClick={() => { setActivation(null); setView({ kind: "settings" }); }}
+            >
+              Open Settings
+            </button>
+          )}
+          <button className="tl-btn-quiet" onClick={() => setActivation(null)}>Dismiss</button>
+        </div>
+      )}
 
       {exportWarning && (
         <div className="tl-export-warning" role="alert">
