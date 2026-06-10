@@ -131,7 +131,7 @@ describe("SectionBriefingCard — provider gate", () => {
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_get_settings"));
     expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_ai_ask", expect.anything());
     expect(screen.queryByText(/Nothing leaves your device/i)).toBeNull();
-    expect(screen.queryByText(/^Local-only$/)).toBeNull();
+    expect(screen.queryByText(/^On this Mac$/)).toBeNull();
   });
 
   it("a company outage opens the paused sheet in Throughline AI's voice — truthful, no key-pasting CTA (CORE-1037)", async () => {
@@ -226,6 +226,6 @@ describe("SectionBriefingCard — provider gate", () => {
     });
     render(<SectionBriefingCard {...props} />);
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.anything()));
-    expect(screen.queryByText(/^Local-only$/)).toBeNull();
+    expect(screen.queryByText(/^On this Mac$/)).toBeNull();
   });
 });

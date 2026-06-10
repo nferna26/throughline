@@ -24,6 +24,8 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  flex: 0 0 auto;
+  white-space: nowrap;
   font-family: var(--tl-sans);
   font-size: 10.5px;
   font-weight: 650;
@@ -32,6 +34,10 @@
   color: var(--tl-accent);
 }
 .tl-tutor-lens {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: var(--tl-sans);
   font-size: 12.5px;
   font-weight: 600;
@@ -72,6 +78,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  white-space: nowrap;
   font-family: var(--tl-sans);
   font-size: 11px;
   color: var(--tl-muted);
@@ -82,6 +89,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  white-space: nowrap;
   font-family: var(--tl-sans);
   font-size: 11px;
   color: color-mix(in oklab, var(--tl-accent) 70%, var(--tl-muted));
@@ -138,7 +146,16 @@
   align-items: center;
   gap: var(--tl-2);
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
+/* In the narrow margin rail, each action keeps its label on ONE line and the row
+   wraps as whole buttons — never a "Save / as / note" stack. */
+.tl-tutor-dorow .tl-btn,
+.tl-tutor-dorow .tl-tutor-ghost { white-space: nowrap; flex: 0 0 auto; }
+/* Regenerate is a quiet, rarely-used secondary action: an icon, sized to sit
+   level with the ghost buttons beside it. */
+.tl-tutor-regen { flex: 0 0 auto; width: 32px; height: 32px; color: var(--tl-muted); border-radius: var(--tl-r-md, 8px); }
+.tl-tutor-regen:hover { color: var(--tl-ink); background: var(--tl-ink-04, transparent); }
 
 /* ── streaming answer ── */
 .tl-tutor-answer {
