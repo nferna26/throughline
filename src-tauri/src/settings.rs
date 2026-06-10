@@ -215,6 +215,19 @@ pub fn validate_export_path(raw: &str) -> Result<PathBuf> {
             expanded
         ));
     }
+    // `..` segments survive components() normalization and re-root the path
+    // AFTER the checks below run ("/tmp/../etc" is really /private/etc;
+    // "~/../../etc" passes the /Users depth rule but is really /etc). Nothing
+    // downstream canonicalizes — the validated string is stored and used as-is
+    // — so refuse `..` outright (CORE-1016).
+    if expanded
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(anyhow!(
+            "the export folder path can't contain \"..\" — choose the folder directly"
+        ));
+    }
     // Refuse to overwrite obvious system directories. `starts_with` compares
     // whole path components (trailing slashes and `.` segments are normalized),
     // so a banned root is refused whether it's named exactly ("/etc"), with a
@@ -528,6 +541,18 @@ mod tests {
             "/private/etc",
             "/Applications",
             "/Volumes/SomeDisk",
+        ] {
+            assert!(validate_export_path(p).is_err(), "{p} must be refused");
+        }
+        // CORE-1016 (the `..` bypass): components() normalizes trailing slashes
+        // and `.` but keeps `..`, so a path can re-root itself after validation
+        // ("/tmp/../etc" resolves to /private/etc; "~/../../etc" expands under
+        // the home dir, passes the /Users depth rule, and resolves to /etc).
+        // Any `..` anywhere in the path must be refused outright.
+        for p in [
+            "/tmp/../etc",
+            "~/../../etc",
+            "/Users/someone/Documents/../Reading",
         ] {
             assert!(validate_export_path(p).is_err(), "{p} must be refused");
         }
