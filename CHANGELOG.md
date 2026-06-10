@@ -5,6 +5,27 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.4.3] - 2026-06-10
+
+### Added
+
+- **A real app icon.** Throughline now has its own mark — the Throughline "T"
+  — in the Dock, Finder, and beside the name in the window (replacing the
+  placeholder framework logo).
+
+### Changed
+
+- **A calmer Settings.** Settings is reorganized into four plain sections —
+  Reading assistant, Privacy, Files, About — grouped by what you actually touch.
+  The reading-help meter now shows your true remaining allowance (not a fixed
+  decoration); the record of what's been sent to the assistant is collapsed,
+  plainly worded, and reassuring rather than a wall of alarm-colored rows; and
+  the bring-your-own-AI options (your own key, or a model on this Mac) sit
+  quietly behind "Use your own AI instead" with room to enter a key, pick a
+  model, and test the connection. Opening that section no longer switches your
+  working assistant — nothing changes until you choose "Use this." Plumbing
+  words, raw addresses, and legalese are gone from the screen.
+
 ## [0.4.2] - 2026-06-10
 
 ### Changed
