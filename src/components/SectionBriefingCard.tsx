@@ -226,9 +226,9 @@ export default function SectionBriefingCard(props: {
             <span className="tl-tutor-live"><span className="tl-tutor-livedot" /><span className="tl-tutor-liveword">Preparing</span><span className="tl-tutor-liveell">…</span></span>
           ) : phase === "done" ? (
             provider === "local" ? (
-              <span className="tl-tutor-local"><TLIcon name="shield" size={12} /> Local-only</span>
+              <span className="tl-tutor-local"><TLIcon name="shield" size={12} /> On this Mac</span>
             ) : (
-              <span className="tl-tutor-remote">via {aiProviderLabel(provider ?? "")}</span>
+              <span className="tl-tutor-remote" title={`Answered by ${aiProviderLabel(provider ?? "")}`}>{aiProviderLabel(provider ?? "")}</span>
             )
           ) : null}
         </span>

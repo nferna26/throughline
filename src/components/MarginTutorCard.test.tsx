@@ -144,10 +144,12 @@ describe("MarginTutorCard — brief default + go deeper", () => {
     expect(screen.getByText(/The deeper reasoning move beneath it\./)).toBeInTheDocument();
     // The "Deeper" divider marks the appended tier.
     expect(screen.getByText("Deeper")).toBeInTheDocument();
-    // After deep, the deepest tier bottoms out: 'Go deeper' is replaced by
-    // 'Question me' (Socratic), the panel's terminal active move.
+    // After deep, the deepest tier bottoms out: 'Go deeper' is gone. The Socratic
+    // turn is no longer a duplicate "Question me" button — it's the same action as
+    // the 'Ask questions' lens chip, which is always available below.
     expect(screen.queryByText(/Go deeper/i)).toBeNull();
-    expect(screen.getByText(/Question me/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Question me/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Ask questions" })).toBeInTheDocument();
   });
 
   it("saves brief + deep + optional takeaway as one TutorNote", async () => {
@@ -160,7 +162,7 @@ describe("MarginTutorCard — brief default + go deeper", () => {
     await pushDelta(lastChannel(), "Deeper elaboration.");
     await pushDone(lastChannel());
 
-    fireEvent.click(await screen.findByText("Save as note"));
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
     fireEvent.change(screen.getByPlaceholderText(/your takeaway/i), { target: { value: "my words" } });
     fireEvent.click(screen.getByText("Save"));
 
@@ -364,7 +366,7 @@ describe("MarginTutorCard — provider gate", () => {
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_get_settings"));
     expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_ai_ask", expect.anything());
     expect(screen.queryByText(/nothing leaves your device/i)).toBeNull();
-    expect(screen.queryByText(/^Local-only$/)).toBeNull();
+    expect(screen.queryByText(/^On this Mac$/)).toBeNull();
   });
 
   it("at the consent gate with no provider, shows the setup sheet (no false on-device promise)", async () => {
@@ -392,6 +394,6 @@ describe("MarginTutorCard — provider gate", () => {
     // Cloud provider chosen → the call goes through (the privacy choice was explicit).
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.anything()));
     // And the UI must never falsely claim on-device for a cloud call.
-    expect(screen.queryByText(/^Local-only$/)).toBeNull();
+    expect(screen.queryByText(/^On this Mac$/)).toBeNull();
   });
 });

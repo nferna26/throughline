@@ -5,6 +5,16 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.5.1] - 2026-06-10
+
+### Changed
+
+- **A calmer tutor card.** In the new slim margin, the tutor's buttons were
+  wrapping awkwardly. The card is tidied: the actions now read **Go deeper ·
+  Save · ↻** on a single line, "Question me" is gone (it did exactly what the
+  "Ask questions" lens already does), and the small print is plainer — "On this
+  Mac" instead of "Local-only," and the assistant's name without the "via."
+
 ## [0.5.0] - 2026-06-10
 
 The reading page, rebuilt around the book.

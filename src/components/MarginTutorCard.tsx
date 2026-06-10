@@ -403,9 +403,9 @@ export default function MarginTutorCard(props: {
             <Verbing verbs={lensMeta.verbs} fixed={phase === "streaming" ? "Writing" : undefined} />
           ) : phase === "done" ? (
             provider === "local" ? (
-              <span className="tl-tutor-local"><TLIcon name="shield" size={12} /> Local-only</span>
+              <span className="tl-tutor-local"><TLIcon name="shield" size={12} /> On this Mac</span>
             ) : (
-              <span className="tl-tutor-remote">via {aiProviderLabel(provider ?? "")}</span>
+              <span className="tl-tutor-remote" title={`Answered by ${aiProviderLabel(provider ?? "")}`}>{aiProviderLabel(provider ?? "")}</span>
             )
           ) : null}
         </span>
@@ -607,20 +607,16 @@ export default function MarginTutorCard(props: {
               ) : (
                 <>
                   <div className="tl-tutor-dorow">
-                    {!deepRequested ? (
+                    {!deepRequested && (
                       <button className="tl-btn tl-btn-primary" onClick={(e) => { e.stopPropagation(); goDeeper(); }}>
-                        Go deeper <TLIcon name="chevronDown" size={14} />
+                        Go deeper
                       </button>
-                    ) : lens !== "socratic" ? (
-                      <button className="tl-btn tl-btn-primary" title="Let the tutor ask you a question instead" onClick={(e) => { e.stopPropagation(); pickLens("socratic"); }}>
-                        <TLIcon name="help" size={14} /> Question me
-                      </button>
-                    ) : null}
+                    )}
                     <button className="tl-tutor-ghost" onClick={(e) => { e.stopPropagation(); setShowSave(true); }}>
-                      <TLIcon name="pencil" size={14} /> Save as note
+                      <TLIcon name="pencil" size={14} /> Save
                     </button>
-                    <button className="tl-tutor-ghost" title="Regenerate this answer" onClick={(e) => { e.stopPropagation(); regenerate(); }}>
-                      <TLIcon name="refresh" size={14} /> Regenerate
+                    <button className="tl-iconbtn tl-tutor-regen" aria-label="Regenerate answer" title="Regenerate" onClick={(e) => { e.stopPropagation(); regenerate(); }}>
+                      <TLIcon name="refresh" size={15} />
                     </button>
                   </div>
                   <div className="tl-tutor-asks">
