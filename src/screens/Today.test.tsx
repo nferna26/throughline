@@ -349,6 +349,27 @@ describe("Today — recovery options are honest", () => {
     expect(onRefresh).toHaveBeenCalled();
     vi.mocked(invoke).mockReset();
   });
+
+  it("a failed re-pace announces an alert in the app's voice, not calm green (FT-39)", async () => {
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "cmd_extend_finish_date") return Promise.reject({ message: "Could not re-pace the plan." });
+      return [];
+    });
+    render(<Today today={behindCard()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Re-pace to finish by 2026-06-04/i }));
+
+    // The failure is announced (screen readers must hear it)…
+    const alert = await screen.findByRole("alert");
+    // …routed through errorMessage — no raw "Failed:" prefix, no "[object Object]"…
+    expect(alert.textContent).not.toMatch(/^Failed:/);
+    expect(alert.textContent).not.toMatch(/\[object Object\]/);
+    expect(alert.textContent).toMatch(/couldn.t update the plan/i);
+    // …and it must not wear the success-green ok tone.
+    expect(alert.getAttribute("style") ?? "").not.toMatch(/--tl-ok/);
+    vi.mocked(invoke).mockReset();
+  });
 });
 
 // FT-16 (CORE-1049): the new-section teaser only re-prints the section's own

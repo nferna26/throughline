@@ -457,13 +457,6 @@
 }
 .tl-price-chip .unit { opacity: 0.7; }
 
-/* AI usage card (Epic B4) */
-.tl-usage-figures { display: flex; gap: var(--tl-5); text-align: right; }
-.tl-usage-figures > div { display: flex; flex-direction: column; }
-.tl-usage-figures strong { font-size: 18px; font-variant-numeric: tabular-nums; }
-.tl-usage-figures span { font-size: 11px; color: var(--tl-muted); }
-.tl-usage-breakdown { display: flex; flex-wrap: wrap; gap: var(--tl-2); margin-top: var(--tl-2); }
-
 /* (Old Epic A3 plan-sheet styles removed — superseded by the frontispiece view below.) */
 
 /* ═══ Plans for a book — frontispiece + back-matter (design handoff) ═══ */
@@ -561,18 +554,9 @@
 .tl-finished-card p { font-size: 14px; color: var(--tl-muted); max-width: 360px; line-height: 1.55; margin: 0; }
 .tl-finished-actions { display: flex; gap: var(--tl-2); margin-top: var(--tl-2); flex-wrap: wrap; justify-content: center; }
 
-/* Company mode: activation + the credits fuel gauge (CM4 / CM7). */
-.tl-fuel { display: flex; align-items: center; gap: var(--tl-3); }
+/* The credits fuel-gauge bar — the margin tutor strip (TutorFuel) draws it. */
 .tl-fuel-bar { width: 120px; height: 8px; border-radius: 999px; background: var(--tl-line); overflow: hidden; }
 .tl-fuel-bar .fill { display: block; height: 100%; border-radius: 999px; }
-.tl-fuel.ok .fill { width: 80%; background: var(--tl-accent); }
-.tl-fuel.low .fill { width: 35%; background: #b8860b; }
-.tl-fuel.empty .fill { width: 8%; background: var(--tl-muted); }
-.tl-fuel-label { font-size: 13px; color: var(--tl-ink); }
-.tl-fuel.low .tl-fuel-label, .tl-fuel.empty .tl-fuel-label { color: var(--tl-muted); }
-/* Couldn't reach the credits check — neutral, no bar, never alarming. */
-.tl-fuel.unavailable .tl-fuel-label { color: var(--tl-muted); font-style: italic; }
-.tl-activate-lbl { display: block; font-size: 13px; color: var(--tl-muted); margin-bottom: var(--tl-2); }
 
 /* ── Book Setup Sheet ─────────────────────────────────────────────────── */
 .tl-setup { flex: 1; display: flex; justify-content: center; padding: var(--tl-7) var(--tl-7) var(--tl-8); overflow-y: auto; }
@@ -624,12 +608,6 @@
 /* ════════ Settings ════════ */
 .tl-settings { padding-top: calc(var(--tl-7) * var(--tl-density)); padding-bottom: var(--tl-9); }
 .tl-settings h2 { font-family: var(--tl-serif); font-weight: 500; font-size: 24px; margin: 0 0 var(--tl-6); color: var(--tl-ink); }
-.tl-set-group { margin-bottom: var(--tl-7); }
-.tl-set-group > .glabel {
-  font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--tl-muted); margin-bottom: var(--tl-3); display: block;
-}
-.tl-set-card { background: var(--tl-panel); border: 1px solid var(--tl-line); border-radius: var(--tl-r-lg); overflow: hidden; }
 /* "Your data" trust summary — calm, plain, never alarmist. */
 .tl-trust-card { padding: var(--tl-4) var(--tl-5); }
 .tl-trust-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--tl-3); }
@@ -637,25 +615,11 @@
 .tl-trust-list li svg { color: var(--tl-accent); flex-shrink: 0; margin-top: 2px; }
 .tl-trust-warn { display: flex; align-items: flex-start; gap: 8px; margin: var(--tl-4) 0 0; padding-top: var(--tl-3); border-top: 1px solid var(--tl-line); font-size: 13px; line-height: 1.5; color: var(--tl-warn); }
 .tl-trust-warn svg { color: var(--tl-warn); flex-shrink: 0; margin-top: 2px; }
-.tl-set-row {
-  display: flex; align-items: center; justify-content: space-between; gap: var(--tl-4);
-  padding: var(--tl-4) var(--tl-5); border-top: 1px solid var(--tl-line);
-}
-.tl-set-row:first-child { border-top: none; }
-.tl-set-row.col { flex-direction: column; align-items: stretch; gap: var(--tl-3); }
-.tl-set-row .lhs { min-width: 0; }
-.tl-set-row .name { font-size: 14px; font-weight: 600; color: var(--tl-ink); }
-.tl-set-row .desc { font-size: 12.5px; color: var(--tl-muted); margin-top: 3px; line-height: 1.45; }
-.tl-set-row .val { font-size: 13px; color: var(--tl-muted); font-family: var(--tl-sans); }
 .tl-path {
   font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
   color: var(--tl-muted); background: var(--tl-bg); border: 1px solid var(--tl-line);
   padding: 4px 8px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px;
 }
-.tl-set-msg { font-size: 12.5px; margin: 0; }
-.tl-set-msg.ok { color: var(--tl-ok); }
-.tl-set-msg.err { color: var(--tl-alert); }
-
 /* toggle switch */
 .tl-switch {
   width: 42px; height: 25px; border-radius: 99px; border: none; cursor: pointer; flex-shrink: 0;
@@ -675,20 +639,6 @@
   background: var(--tl-warn-soft); border: 1px solid color-mix(in oklab, var(--tl-warn) 30%, transparent);
   border-radius: var(--tl-r-md); color: var(--tl-ink); font-size: 13px; line-height: 1.5;
 }
-
-/* audit list (AI request history) */
-.tl-audit-row {
-  display: flex; align-items: center; gap: var(--tl-3);
-  padding: 12px var(--tl-5); border-top: 1px solid var(--tl-line); font-size: 13px;
-}
-.tl-audit-row:first-child { border-top: none; }
-.tl-audit-row .when { color: var(--tl-muted); font-size: 12px; width: 92px; flex-shrink: 0; }
-.tl-audit-row .what { flex: 1; color: var(--tl-ink); min-width: 0; }
-.tl-audit-row .what .sub { color: var(--tl-muted); }
-.tl-audit-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; flex-shrink: 0; }
-.tl-audit-tag.local { color: var(--tl-ok); }
-.tl-audit-tag.sent  { color: var(--tl-warn); }
-.tl-audit-empty { padding: 12px var(--tl-5); font-size: 13px; color: var(--tl-muted); }
 
 /* ════════ Reader ════════ */
 .tl-reader { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }

@@ -257,13 +257,21 @@ describe("Settings — 4-section redesign", () => {
     expect(screen.getByText(/Your books live on this Mac and stay here\./i)).toBeInTheDocument();
   });
 
-  // FT-36: the fair-use legalese card → one plain line + the quote toggle.
+  // FT-36: the fair-use legalese card → one plain line + a short-quote note.
+  // The note is always on and not toggleable, so it reads as a plain
+  // informational line, never a dead on+disabled switch.
   it("reduces quoting to one plain line with a short-quote note", async () => {
     wire({ ai_provider: "company", quote_warn_chars: 300 });
     render(<Settings />);
     await waitFor(() => expect(screen.getByText("Quoting")).toBeInTheDocument());
     expect(screen.getByText(/keeps quotes short, for private study/i)).toBeInTheDocument();
     expect(screen.getByText(/about 300 characters — never a block/i)).toBeInTheDocument();
+
+    // The control is an "Always on" informational line — not a switch.
+    const quotingRow = screen.getByText("Quoting").closest(".row") as HTMLElement;
+    expect(quotingRow).not.toBeNull();
+    expect(within(quotingRow).getByText(/Always on/i)).toBeInTheDocument();
+    expect(within(quotingRow).queryByRole("switch")).toBeNull();
   });
 
   // FT: no reader-visible plumbing words / hostnames on the screen.

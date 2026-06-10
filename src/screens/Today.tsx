@@ -376,7 +376,9 @@ function RecoveryPanel(props: {
   onRefresh: () => Promise<void> | void;
 }) {
   const [working, setWorking] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  // The message slot carries its own tone: the happy path stays calm green; a
+  // failure speaks up as an alert, never in success-green (FT-39).
+  const [message, setMessage] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
 
   async function actOn(option: RecoveryOption) {
     setMessage(null);
@@ -384,25 +386,27 @@ function RecoveryPanel(props: {
     try {
       switch (option.kind) {
         case "ResumeToday":
-          setMessage("Just start reading — the next assigned section is ready.");
+          setMessage({ tone: "ok", text: "Just start reading — the next assigned section is ready." });
           break;
         // Advice options (CORE-1007): no backend call, no persistence — so the
         // message must read as advice, never as a saved plan change.
         case "GentleCatchup":
-          setMessage(`Try adding ${option.extra_minutes} minutes to your next few sittings — no setting to change, just sit a little longer.`);
+          setMessage({ tone: "ok", text: `Try adding ${option.extra_minutes} minutes to your next few sittings — no setting to change, just sit a little longer.` });
           break;
         case "WeekendCatchup":
-          setMessage("Use the weekend window when it comes — no weekday pressure, nothing to change.");
+          setMessage({ tone: "ok", text: "Use the weekend window when it comes — no weekday pressure, nothing to change." });
           break;
         case "ExtendFinish": {
           const r = await invoke<RecomputedPlan>("cmd_extend_finish_date", { bookId: props.bookId, addDays: option.add_days });
-          setMessage(`Finish date is now ${r.new_target_finish_date}. ${r.remaining_sections} section${r.remaining_sections === 1 ? "" : "s"} across ${r.remaining_days} day${r.remaining_days === 1 ? "" : "s"}.`);
+          setMessage({ tone: "ok", text: `Finish date is now ${r.new_target_finish_date}. ${r.remaining_sections} section${r.remaining_sections === 1 ? "" : "s"} across ${r.remaining_days} day${r.remaining_days === 1 ? "" : "s"}.` });
           await props.onRefresh();
           break;
         }
       }
-    } catch (e: any) {
-      setMessage(`Failed: ${e?.message ?? e}`);
+    } catch {
+      // Nothing was changed — say so plainly, in the app's voice, and announce
+      // it. The raw error never reaches the reader (FT-39).
+      setMessage({ tone: "error", text: "Couldn’t update the plan — nothing changed. Try again in a moment." });
     } finally {
       setWorking(null);
     }
@@ -428,7 +432,19 @@ function RecoveryPanel(props: {
           );
         })}
       </div>
-      {message && <p className="lead" style={{ marginTop: "var(--tl-3)", marginBottom: 0, color: "var(--tl-ok)" }}>{message}</p>}
+      {message && (
+        <p
+          className="lead"
+          role={message.tone === "error" ? "alert" : undefined}
+          style={{
+            marginTop: "var(--tl-3)",
+            marginBottom: 0,
+            color: message.tone === "error" ? "var(--tl-alert)" : "var(--tl-ok)",
+          }}
+        >
+          {message.text}
+        </p>
+      )}
     </div>
   );
 }
