@@ -7,6 +7,13 @@
 //   - The body is locked to claude-sonnet-4-6.
 //   - Anthropic-shape SSE relayed by the proxy parses into Delta tokens.
 //   - An HTTP 402 surfaces as the CAP_EXHAUSTED_SENTINEL error (→ CapExhausted).
+//
+// Lint posture: `company_breaker_test_guard()`'s MutexGuard is deliberately held
+// across each test's await points — that is the mechanism that serializes the
+// whole async body against the process-global Company breaker. Every
+// `#[tokio::test]` here runs on its own single-threaded runtime, so a blocked
+// lock parks only that test's thread, never a shared executor.
+#![allow(clippy::await_holding_lock)]
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
