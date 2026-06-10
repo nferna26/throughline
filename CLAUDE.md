@@ -1,57 +1,146 @@
 # CLAUDE.md — Throughline
 
-You are helping build **Throughline**, a local-first macOS reading app. The full spec is in `docs/PRD.md`. Read it, but treat *this* file as the binding contract when there is any tension between "what would be cool to build" and "what we agreed to build."
+**Last updated 2026-06-09 · Phase: pre-launch hardening.** This is a review-and-refine
+phase, not a feature phase. The energy goes into making what exists secure, correct, and
+beautifully simple — when in doubt between adding and removing, remove.
 
-## The one job
-Prove a single loop end-to-end: **import one book → see today's section → read it → capture one note → export safe Markdown.** Nothing in a given work session is "done" until that loop runs.
+## What this is
 
-## Hard non-goals (do NOT build these, even if asked nicely, even if it seems trivial)
-- No cloud sync, accounts, telemetry, or background agents.
-- No OpenClaw integration. None. Not even a stub that imports it.
-- No mobile app, no PDF/OCR, no DRM handling or circumvention.
-- No quizzes, spaced repetition, XP, badges, streaks-as-punishment, mascots, confetti, leaderboards.
-- No **background or unsolicited** AI. AI never runs on a timer, on launch, or in the background; it never acts without the reader's action. (A remote/cloud provider is an allowed opt-in — see the AI contract below — but it still only fires on a deliberate reader action.)
-- No local embeddings, no Bible mode, no nutrition/running features.
-- No dashboard-first or library-first UX. The app opens to **Today**.
+Throughline is a local-first macOS reading app for serious readers: import a book, open to
+Today's section, read, ask the tutor about a hard passage, keep durable notes, export
+clean Markdown. Tauri v2 shell; React + TypeScript + Vite frontend; Rust commands for FS,
+hashing, SQLite, and export. Operational state lives in SQLite at
+`~/Library/Application Support/Throughline/reading.db`; imported books under
+`.../Throughline/books/{book_id}/`; Markdown exports to `~/GBrain/Reading/…`
+(user-overridable).
 
-## AI contract (what AI MAY do)
-AI is reader-initiated. Local-only (a loopback model like LM Studio) is the **default**, but the reader may opt into a cloud provider (OpenAI / Anthropic / Codex) in Settings; this is an intended feature, not a contract violation. Two surfaces are allowed:
-1. **Tutor lenses** (Explain / Context / Define / Socratic) — fire only when the reader selects a passage and clicks a lens. Streamed from an OpenAI-compatible endpoint: the loopback model by default, or the reader's chosen cloud provider once they explicitly turn local-only OFF. While local-only is ON, non-loopback endpoints are refused at the call site.
-2. **Deep Study section briefing** — a **session-triggered** study prep generated *only* when the reader chose **Deep Study** margin-help, **started a session**, and gave **tutor consent**. It runs through the reader's chosen provider (local by default, or their opted-in cloud provider). It must be **cached, dismissable, regenerable**, and **never exported unless the reader saves it**. It is study prep for the section about to be read — not an automatic summary, never generated in the background or on a schedule.
+It ships two ways, from one codebase:
 
-Both surfaces: selection/section context only (never the whole book) — when a cloud provider is active, only that selection/section is sent and the whole-book source is never bulk-uploaded; prompts + injection hardening stay server-side and are never rendered; and AI output becomes a durable Note + Markdown **only when the reader explicitly saves it**.
+1. **The $20 signed build** — tutor preconfigured through our relay (Claude Sonnet behind
+   `ai.readthroughline.com`), metered by a token allowance that readers see as
+   explanations, never tokens. Zero setup.
+2. **The open-source build** — reader brings their own key (Anthropic/OpenAI) or runs local
+   via LM Studio. No relay.
 
-If you think something outside this list is needed, STOP and ask in plain text before writing it.
+Every change must be correct in both configurations. The mechanism that selects between
+them is in the code — read it before reasoning about it.
 
-## Copyright & privacy posture (non-negotiable)
-- Raw EPUB/text source **files** stay local. Never exported, never bulk-uploaded to any API. (Cloud tutoring may send only the reader's selected passage or current section — never the whole-book source file.)
-- Exports contain locators, paraphrases, reflections, and short quotes only.
-- Every imported source gets a SHA-256 hash stored in the DB.
-- Exported notes carry `source_private: true` in frontmatter.
-- Warn (don't block) when a quote field exceeds ~300 characters.
+## Precedence and deeper context
 
-### AI copyright-safety (counsel-reviewed 2026-06-08 — binding)
-Outside counsel's risk framework. The tutor must stay on the low-risk side; the planned company-paid AI proxy must enforce these server-side.
-- **Stay safe (do all):** the *reader initiates* the call; only the *selected passage or a narrow surrounding excerpt* is sent; the lenses *explain / contextualize / define / ask Socratic questions*; the app **never uploads, stores, indexes, summarizes, or processes the full book** in the cloud; outputs **don't reproduce long passages**.
-- **Never (hard non-goals):** send whole chapters/books to a provider; auto-summarize every section; build a searchable cloud copy of a book; market it as "upload any copyrighted book → complete AI study guide"; preserve or share copyrighted passages **server-side**; produce outputs that **substitute for the book**.
-- **The company-paid proxy is a stateless forwarder:** forward → stream back → drop. No logging/persisting/indexing/disk-caching/summarizing of book text. Usage metering counts **tokens, not content**. Deep Study / "prepare next" / section briefing stay reader-initiated, section-scoped, non-persistent.
+This file wins over everything else in the repo. The shipped code is the present;
+`docs/PRD.md` is the origin spec and is historical wherever it disagrees with the code.
+After your independent sweep, read `docs/AUDIT.md` and reconcile — confirm each prior
+finding is fixed or still open, and note anything it caught that you didn't.
 
-## Tech constraints
-- Shell: **Tauri v2**. Frontend: **React + TypeScript + Vite**. Rust commands for FS, hashing, SQLite, export.
-- Operational state: SQLite at `~/Library/Application Support/Throughline/reading.db` using the exact tables in the PRD (`books`, `book_sections`, `reading_plans`, `reading_sessions`, `notes`, `ai_requests`).
-- Imported books: `~/Library/Application Support/Throughline/books/{book_id}/`.
-- Markdown export: `~/GBrain/Reading/{Books,Sessions,Notes,Reviews,_indexes}/`, path user-overridable.
-- **Shot 1 is plain-text only. Do not add epub.js or any EPUB parsing in shot 1** — the PRD explicitly calls EPUB rendering a trap. Text first, EPUB later.
+## Non-negotiables
 
-## Working style
-- Smallest change that advances the loop. Prefer boring, inspectable code.
-- After each phase, state the acceptance test and actually run it — don't just claim completion.
-- Keep imported files immutable. Never modify a source file after import.
-- Use stable IDs and predictable filenames on export so re-exporting updates rather than duplicates.
-- **Acceptance/diagnostic programs MUST NOT write to the user's real database.** They live in `src-tauri/examples/` (Cargo example targets, so they are never bundled into the shipped app). Every program under `src-tauri/examples/` must either:
-  (a) call `bin_guardrail::init_isolated_data_dir(...)` as the first line of `main()` (test programs), OR
-  (b) appear in the `REAL_DB_ALLOWLIST` of the `bin_guardrail_acceptance_binaries_use_isolated_data_dir` test in `lib.rs` (operator-facing inspection tools).
-  A test in the suite enforces this. Do not silence the test by adding to the allowlist without confirming the binary is intentionally operator-facing.
+These are principles with reasons, so you can apply them to cases not listed. The canonical
+examples are case law, not the full statute.
 
-## Definition of done for Shot 1
-Import the public-domain plain-text Augustine *Confessions* from Project Gutenberg, generate a 30-day plan, mark today's section complete, write one note, and confirm a valid Markdown file with correct frontmatter lands in `~/GBrain/Reading/Notes/`. If that round-trip works, Shot 1 is done. If it doesn't, nothing else matters yet.
+**1. Local-first, telemetry-never.** The reader's library, notes, plans, and history live on
+their Mac. No accounts, no cloud sync, no analytics, no background agents. We count usage,
+never content — and no book text or note content may ever reach logs, error messages, crash
+output, or any diagnostic surface, ours or a dependency's.
+
+**2. AI is reader-initiated and narrowly scoped.** AI fires only on a deliberate reader
+action — never on a timer, on launch, or in the background. It receives only the selected
+passage or the current section, never the book. Its output becomes durable (a note, an
+export) only when the reader explicitly saves it. While local-only mode is ON, non-loopback
+endpoints are refused at the call site — that enforcement point is load-bearing; treat any
+change to it as a security change.
+
+**3. Copyright posture (counsel-reviewed 2026-06-08 — binding, do not weaken).**
+
+- Raw EPUB/text source files stay local: never exported, never bulk-uploaded to any API.
+  Cloud tutoring may send only the reader's selection or a narrow surrounding excerpt.
+- The lenses explain, contextualize, define, or ask Socratic questions. The app never
+  uploads, stores, indexes, summarizes, or processes the full book in the cloud, and
+  outputs must not reproduce long passages or substitute for the book.
+- Never: send whole chapters/books to a provider; auto-summarize every section; build a
+  searchable cloud copy of a book; preserve or share copyrighted passages server-side; or
+  market "upload any copyrighted book → complete AI study guide."
+- The relay is a stateless forwarder: forward → stream → drop. No logging, persisting,
+  indexing, disk-caching, or summarizing of book text. Metering counts tokens, not content.
+- Deep Study / section briefings (if present in the build) stay reader-initiated,
+  section-scoped, consent-gated, non-persistent unless saved.
+- Exports contain locators, paraphrases, reflections, and short quotes only; warn (don't
+  block) when a quote exceeds ~300 characters; every imported source gets a SHA-256 hash in
+  the DB; exported notes carry `source_private: true` frontmatter; imported source files
+  are immutable after import.
+
+**4. DRM.** DRM-free EPUBs only. Never parse around, strip, or otherwise circumvent
+protection.
+
+**5. Scope discipline.** Still out, even if a fix seems to invite them: cloud sync,
+accounts, gamification (XP, badges, streaks-as-punishment, confetti, mascots), background or
+scheduled AI, mobile, PDF/OCR, local embeddings, OpenClaw integration (none, not even a
+stub), dashboard-first UX — the app opens to Today. If a genuine fix appears to require
+crossing any line in this section, stop and ask in plain text first.
+
+## The golden loop (regression spine)
+
+Discover or drag in a book → Today shows the right section → read → select a passage and ask
+the tutor (it quotes the selection before explaining) → save the answer as a note → export
+valid Markdown with correct frontmatter to `~/GBrain/Reading/Notes/`. Canonical fixture:
+Project Gutenberg's Augustine, *Confessions*. Any change that breaks any link in this
+chain is a P0, no matter how much it improves something else.
+
+## This phase: review priorities, in order
+
+**P1 — Security and privacy correctness.** The last adversarial audit graded security B−;
+close that gap before anything cosmetic. Highest-value targets: the local-only call-site
+enforcement, the relay client (invariant 1's no-content-in-diagnostics rule), path handling
+on import and export, and anything that touches the reader's files. Severity beats style.
+
+**P2 — Experience.** Two named problems own this workstream: **first-moment magic without
+AI** (the first run must land somewhere beautiful and obvious before any AI is invoked) and
+**the AI cold-start cliff** (in the paid build, the first tutor use must truly be zero-setup;
+in the source build, key/local setup must be guided and dead-end-free).
+
+**P3 — Code quality.** Boring, inspectable, smallest diff that fixes the issue. Delete code
+that earns nothing.
+
+**Promise audit.** The marketing site makes public claims; the build must keep every one:
+no API key needed (paid build) · allowance, then BYO key or local — the reader is never cut
+off · drag in DRM-free EPUBs · offline catalogue of public-domain titles · notes export to
+clean Markdown · no accounts, no telemetry, usage-never-content · opens to today's section ·
+the tutor quotes your selection before explaining. Treat each as an acceptance criterion.
+
+## The experience bar (what "simple" means here, testably)
+
+- **Cold-open test:** a Mac user with zero instructions reaches *read today's section* and
+  *save a note* within two minutes of first launch.
+- One obvious next action per screen; empty states teach the next step.
+- Reader-facing language is plain: "explanations," never "tokens"; no "API," "endpoint,"
+  "sync," or other plumbing words anywhere a reader can see.
+- Every error says what happened and what to do next, in the app's voice — no dead ends,
+  no blame, no jargon.
+- Quiet by default: no sounds, badges, or interruptions. The book is the interface.
+- If a feature needs documentation to be usable, the feature isn't done.
+
+## Working agreements
+
+- **Free to do:** read anything, run the full suite, fix bugs, refactor with tests green,
+  tighten copy within the voice above.
+- Branch per workstream; never commit directly to `main`; never commit secrets or keys.
+- **Ask first:** schema changes (the first paying reader's `reading.db` is forever — from
+  now on every schema change ships with a migration), new dependencies, relay protocol
+  changes, or anything that would weaken a non-negotiable or a guardrail test.
+- **Database guardrail (enforced by the suite — keep it that way):** acceptance and
+  diagnostic programs must never touch the user's real database. They live in
+  `src-tauri/examples/` as Cargo example targets and must either (a) call
+  `bin_guardrail::init_isolated_data_dir(...)` as the first line of `main()`, or (b) appear
+  in the `REAL_DB_ALLOWLIST` of the `bin_guardrail_acceptance_binaries_use_isolated_data_dir`
+  test in `lib.rs` — and only for intentionally operator-facing inspection tools. Never
+  silence that test by allowlisting.
+
+## Verification
+
+- `cargo test` from `src-tauri/` passes clean; frontend builds and type-checks via the
+  scripts in `package.json` (`package.json` is authoritative — if the script names here
+  drift from it, trust it and update this file).
+- After touching import, export, notes, or the tutor path: run the golden loop end-to-end
+  using the isolated-data-dir acceptance examples, and state the result — don't claim it.
+- Deliver review findings as a ranked list — severity, evidence (file:line), and the
+  smallest fix — not as a rewrite. One finding the reader would feel beats ten the linter
+  would.

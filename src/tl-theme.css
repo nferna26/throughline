@@ -437,6 +437,18 @@
 .tl-export-warning svg { color: var(--tl-warn); flex-shrink: 0; }
 .tl-export-warning span { flex: 1; }
 
+/* Company-activation feedback (CORE-1009) — same calm strip family as the
+   export warning: a quiet acknowledgment, never a modal. `.ok` = success. */
+.tl-activation-banner {
+  flex-shrink: 0; display: flex; align-items: center; gap: var(--tl-3);
+  padding: var(--tl-2) var(--tl-7); background: var(--tl-warn-soft);
+  border-bottom: 1px solid var(--tl-line); color: var(--tl-ink); font-size: 13px;
+}
+.tl-activation-banner svg { color: var(--tl-warn); flex-shrink: 0; }
+.tl-activation-banner span { flex: 1; }
+.tl-activation-banner.ok { background: var(--tl-accent-soft); }
+.tl-activation-banner.ok svg { color: var(--tl-ok); }
+
 /* Cloud model picker + price chip (Epic B2) — choose a model with cost in view. */
 .tl-modelselect { display: flex; align-items: center; gap: var(--tl-3); flex-wrap: wrap; }
 .tl-price-chip {
@@ -558,6 +570,8 @@
 .tl-fuel.empty .fill { width: 8%; background: var(--tl-muted); }
 .tl-fuel-label { font-size: 13px; color: var(--tl-ink); }
 .tl-fuel.low .tl-fuel-label, .tl-fuel.empty .tl-fuel-label { color: var(--tl-muted); }
+/* Couldn't reach the credits check — neutral, no bar, never alarming. */
+.tl-fuel.unavailable .tl-fuel-label { color: var(--tl-muted); font-style: italic; }
 .tl-activate-lbl { display: block; font-size: 13px; color: var(--tl-muted); margin-bottom: var(--tl-2); }
 
 /* ── Book Setup Sheet ─────────────────────────────────────────────────── */

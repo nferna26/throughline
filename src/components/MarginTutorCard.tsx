@@ -4,6 +4,7 @@ import TLIcon from "./TLIcon";
 import AiSetupSheet from "./AiSetupSheet";
 import TutorFuel from "./TutorFuel";
 import { aiProviderLabel, type Note, type AskHandle, type SettingsDto, type StreamEvent } from "../types";
+import { humanizeError, looksUnavailable } from "../aiErrors";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
 import "../tl-tutor.css";
 
@@ -60,23 +61,6 @@ const SETUP_MODE: Record<TutorMode, string> = {
   socratic: "socratic",
 };
 
-/** True when an error message reads like the configured provider is unreachable
- *  (vs. a hard config error), so the card offers the "Tutor paused" recovery. */
-function looksUnavailable(msg: string): boolean {
-  const s = msg.toLowerCase();
-  return (
-    s.includes("can't reach") ||
-    s.includes("cannot reach") ||
-    s.includes("could not reach") ||
-    s.includes("connection") ||
-    s.includes("unavailable") ||
-    s.includes("refused") ||
-    s.includes("no model is loaded") ||
-    s.includes("timed out") ||
-    s.includes("timeout")
-  );
-}
-
 // ── defensive sanitizer: the brief budget is tiny, but if the local model
 //    still emits a leading markdown header, strip it so a 320px panel never
 //    renders a "###" wall. Numbered lists (deep Socratic) are left intact.
@@ -120,17 +104,6 @@ function Verbing({ verbs, fixed }: { verbs: string[]; fixed?: string }) {
       <span className="tl-tutor-liveell">…</span>
     </span>
   );
-}
-
-function humanizeError(raw: string): string {
-  const s = raw.toLowerCase();
-  if (s.includes("no ai model") || s.includes("model name set"))
-    return "No model is loaded. Open your local model server (LM Studio or Ollama) and load a model, then try again.";
-  if (s.includes("request failed") || s.includes("could not reach") || s.includes("connection") || s.includes("unavailable") || s.includes("refused"))
-    return "Can't reach the local model server. Is LM Studio (or Ollama) running on this Mac?";
-  if (s.includes("local-only"))
-    return "Local-only mode blocked a non-local endpoint. Check Settings → AI.";
-  return raw.replace(/^error:\s*/i, "");
 }
 
 export default function MarginTutorCard(props: {
@@ -242,10 +215,13 @@ export default function MarginTutorCard(props: {
     // PROVIDER GATE (authoritative, just before sending). A provider must be
     // explicitly chosen; Local stays on-device, a chosen cloud provider was opted
     // into with disclosure. The backend re-checks per call. Re-read live so a
-    // change in another view takes effect immediately.
+    // change in another view takes effect immediately. The live provider also
+    // feeds error copy below, so failures name the provider actually asked.
+    let liveProvider = "none";
     try {
       const s = await invoke<SettingsDto>("cmd_get_settings");
       if (!s.ai_provider || s.ai_provider === "none") { setPhase("blocked"); return; }
+      liveProvider = s.ai_provider;
     } catch {
       setPhase("blocked"); return; // can't read settings → fail closed
     }
@@ -269,7 +245,7 @@ export default function MarginTutorCard(props: {
       } else if (ev.kind === "done") {
         setPhase((p) => (p === "error" ? p : "done"));
       } else if (ev.kind === "error") {
-        setErrorMsg(humanizeError(ev.message ?? "The local tutor call failed."));
+        setErrorMsg(humanizeError(liveProvider, ev.message ?? "The tutor couldn't answer this time."));
         setPhase("error");
       }
     };
@@ -299,7 +275,7 @@ export default function MarginTutorCard(props: {
           setCapExhausted(true);
           return;
         }
-        setErrorMsg(humanizeError(String(err?.message ?? e)));
+        setErrorMsg(humanizeError(liveProvider, String(err?.message ?? e)));
         setPhase("error");
       }
     }
@@ -400,11 +376,11 @@ export default function MarginTutorCard(props: {
       // Let the reader see "Saved ✓" briefly before the draft becomes a note.
       setTimeout(() => props.onSaved(note), 1100);
     } catch (e) {
-      setErrorMsg(humanizeError(String((e as { message?: string })?.message ?? e)));
+      setErrorMsg(humanizeError(provider, String((e as { message?: string })?.message ?? e)));
     } finally {
       setSaving(false);
     }
-  }, [takeaway, draft, props]);
+  }, [takeaway, draft, props, provider]);
 
   const briefStreaming = streaming && streamTierRef.current === "brief";
   const deepStreaming = streaming && streamTierRef.current === "deep";

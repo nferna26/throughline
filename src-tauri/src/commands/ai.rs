@@ -728,6 +728,12 @@ fn company_http() -> Result<reqwest::Client, AppError> {
         .map_err(|e| AppError::ai(format!("http client: {e}")))
 }
 
+/// Reader-facing transport-failure copy for every company relay call. A fixed
+/// sentence: reqwest's Display text (DNS, TLS, socket detail) is plumbing and
+/// must never reach the activation banner or setup sheet.
+const COMPANY_UNREACHABLE_MSG: &str =
+    "Couldn't reach Throughline AI — check that this Mac is online, then try again.";
+
 /// Exchange a single-use activation token (deep link or typed code) for a durable
 /// license, store it in the Keychain, and switch the active provider to Company.
 /// Activating IS the reader's cloud-send consent, so we stamp that too.
@@ -749,7 +755,7 @@ pub async fn cmd_activate_company(
         .json(&serde_json::json!({ "activation_token": token }))
         .send()
         .await
-        .map_err(|e| AppError::ai(format!("Couldn't reach Throughline AI: {e}")))?;
+        .map_err(|_| AppError::ai(COMPANY_UNREACHABLE_MSG))?;
     if !resp.status().is_success() {
         return Err(AppError::validation(
             "That activation code is invalid, expired, or already used.",
@@ -826,7 +832,7 @@ pub async fn cmd_company_checkout(state: State<'_, DbState>) -> Result<String, A
         .post(format!("{base_url}/v1/checkout"))
         .send()
         .await
-        .map_err(|e| AppError::ai(format!("Couldn't reach Throughline AI: {e}")))?;
+        .map_err(|_| AppError::ai(COMPANY_UNREACHABLE_MSG))?;
     if !resp.status().is_success() {
         return Err(AppError::ai(
             "Couldn't start checkout. Try again in a moment.",
@@ -859,7 +865,7 @@ pub async fn cmd_company_credits(state: State<'_, DbState>) -> Result<CompanyCre
         .header("authorization", format!("Bearer {license}"))
         .send()
         .await
-        .map_err(|e| AppError::ai(format!("Couldn't reach Throughline AI: {e}")))?;
+        .map_err(|_| AppError::ai(COMPANY_UNREACHABLE_MSG))?;
     let body: serde_json::Value = resp.json().await.unwrap_or_default();
     Ok(parse_company_credits(&body))
 }

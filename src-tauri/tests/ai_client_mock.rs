@@ -137,6 +137,105 @@ async fn mock_server_streams_deltas_to_client() {
     );
 }
 
+/// Invariant 1 (no book text in diagnostics): a malformed SSE line mid-stream
+/// carries tutor output quoting the reader's selection. The error event shown
+/// to the reader must NEVER echo that payload — it must be a fixed, actionable
+/// message instead.
+#[tokio::test]
+async fn malformed_sse_error_never_echoes_payload() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener.set_nonblocking(false).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base_url = format!("http://127.0.0.1:{}/v1", port);
+
+    let server_thread = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut buf = [0u8; 8192];
+        let mut total = String::new();
+        loop {
+            let n = stream.read(&mut buf).expect("read");
+            if n == 0 {
+                break;
+            }
+            total.push_str(&String::from_utf8_lossy(&buf[..n]));
+            if total.contains("\r\n\r\n") {
+                let cl = total
+                    .lines()
+                    .find_map(|l| {
+                        l.strip_prefix("Content-Length:")
+                            .or_else(|| l.strip_prefix("content-length:"))
+                    })
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let body_so_far = total.split("\r\n\r\n").nth(1).unwrap_or("").len();
+                if body_so_far >= cl {
+                    break;
+                }
+            }
+        }
+
+        // One valid delta, then a malformed (truncated-JSON) data line carrying
+        // a sentinel standing in for book-derived text, then close.
+        let sse = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Type: text/event-stream\r\n",
+            "Cache-Control: no-cache\r\n",
+            "Connection: close\r\n",
+            "\r\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"index\":0}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"SENTINEL_BOOK_TEXT\"\n\n",
+        );
+        stream.write_all(sse.as_bytes()).expect("write");
+        stream.flush().ok();
+    });
+
+    let opts = ChatCallOpts {
+        base_url,
+        model: "mock-model".to_string(),
+        local_only: true,
+        prompt: "anything".to_string(),
+        stream: true,
+        timeout: Duration::from_secs(5),
+        max_tokens: Some(64),
+        ..Default::default()
+    };
+    let mut rx = run_chat_call(opts).await.expect("run_chat_call");
+
+    let mut got_error: Option<String> = None;
+    while let Some(ev) = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap_or(None)
+    {
+        match ev {
+            StreamEvent::Delta { .. } | StreamEvent::Usage { .. } => {}
+            StreamEvent::Done => break,
+            StreamEvent::Error { message } => {
+                got_error = Some(message);
+                break;
+            }
+        }
+    }
+    server_thread.join().expect("server thread");
+
+    let message = got_error.expect("a malformed data: line must surface an Error event");
+    assert!(
+        !message.contains("SENTINEL_BOOK_TEXT"),
+        "error message must never echo the raw SSE payload (book-derived text): {}",
+        message
+    );
+    assert!(
+        !message.contains("parsing SSE chunk"),
+        "error message must not carry the parse-context that embeds the payload: {}",
+        message
+    );
+    let lower = message.to_lowercase();
+    assert!(
+        lower.contains("interrupted") && lower.contains("try again"),
+        "error must stay actionable (mention the stream was interrupted / try again): {}",
+        message
+    );
+}
+
 #[tokio::test]
 async fn remote_url_refused_when_local_only_on() {
     let opts = ChatCallOpts {

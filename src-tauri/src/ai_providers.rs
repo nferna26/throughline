@@ -708,6 +708,20 @@ async fn codex_refresh_resolved(client: &reqwest::Client, r: &mut ResolvedCodex)
     if let Some(rt) = parsed.refresh_token {
         r.refresh_token = rt;
     }
+    persist_rotated_codex(r)?;
+    Ok(r.access_token.clone())
+}
+
+/// Reader-facing message when rotated Codex tokens can't be saved. By this
+/// point the old refresh token is already consumed server-side, so a swallowed
+/// failure would strand the app AND the reader's Codex CLI with revoked
+/// credentials and no signal why — it must surface as the call's error.
+const CODEX_PERSIST_FAILED_MSG: &str =
+    "Your ChatGPT sign-in was refreshed but couldn't be saved — sign in again in Settings → Assistance.";
+
+/// Persist rotated Codex tokens back to whichever store they came from.
+/// Separated from the OAuth round-trip so the write-back is testable hermetically.
+fn persist_rotated_codex(r: &ResolvedCodex) -> Result<()> {
     match r.source {
         CodexSource::App => {
             let creds = CodexAppCreds {
@@ -719,17 +733,18 @@ async fn codex_refresh_resolved(client: &reqwest::Client, r: &mut ResolvedCodex)
                 .map_err(|e| anyhow!("persist codex creds: {e}"))?;
         }
         CodexSource::File => {
-            if let Some(mut auth) = read_codex_auth() {
-                if let Some(t) = auth.tokens.as_mut() {
-                    t.access_token = r.access_token.clone();
-                    t.refresh_token = r.refresh_token.clone();
-                }
-                auth.last_refresh = Some(chrono::Utc::now().to_rfc3339());
-                let _ = write_codex_auth(&auth);
+            // A missing/unreadable auth.json is the same stranding: the rotated
+            // refresh token would be lost. Never log token values here.
+            let mut auth = read_codex_auth().ok_or_else(|| anyhow!(CODEX_PERSIST_FAILED_MSG))?;
+            if let Some(t) = auth.tokens.as_mut() {
+                t.access_token = r.access_token.clone();
+                t.refresh_token = r.refresh_token.clone();
             }
+            auth.last_refresh = Some(chrono::Utc::now().to_rfc3339());
+            write_codex_auth(&auth).context(CODEX_PERSIST_FAILED_MSG)?;
         }
     }
-    Ok(r.access_token.clone())
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1399,6 +1414,118 @@ mod tests {
         let reser = serde_json::to_string(&auth).unwrap();
         assert!(reser.contains("some_future_field"));
         assert!(!reser.contains("\"OPENAI_API_KEY\"") || !reser.contains("null"));
+    }
+
+    /// Helpers for the persist_rotated_codex tests: a fresh CODEX_HOME temp dir
+    /// seeded with a valid auth.json (with unknown fields at both levels, so
+    /// round-trip preservation is exercised). Caller holds `lock_env_for_test`.
+    fn seed_codex_home(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("tl-codex-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("auth.json"),
+            r#"{
+              "auth_mode":"chatgpt",
+              "tokens":{"id_token":"jwt","access_token":"at-old","refresh_token":"rt-old","account_id":"acct","token_future_field":"keep-me"},
+              "last_refresh":"2026-04-17T00:00:00Z",
+              "some_future_field":123
+            }"#,
+        )
+        .unwrap();
+        // SAFETY: process-global env var; serialized by the caller's env lock.
+        unsafe {
+            std::env::set_var("CODEX_HOME", &dir);
+        }
+        dir
+    }
+
+    fn rotated_file_creds() -> ResolvedCodex {
+        ResolvedCodex {
+            access_token: "at-new".to_string(),
+            refresh_token: "rt-new".to_string(),
+            account_id: "acct".to_string(),
+            source: CodexSource::File,
+        }
+    }
+
+    /// CORE-1012: a failed write-back of rotated Codex tokens must surface as an
+    /// error telling the reader to sign in again — the old refresh token is
+    /// already consumed server-side, so swallowing it strands the app AND the
+    /// reader's Codex CLI with revoked credentials and no signal why.
+    #[cfg(unix)]
+    #[test]
+    fn persist_rotated_codex_file_surfaces_write_failure_as_sign_in_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let _g = crate::paths::lock_env_for_test();
+        let dir = seed_codex_home("persist-ro");
+
+        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+        perms.set_mode(0o555);
+        std::fs::set_permissions(&dir, perms).unwrap();
+
+        // Running as root, file permissions don't bind (set_mode is a no-op in
+        // effect) — probe, and skip the read-only assertion gracefully.
+        let perms_enforced = std::fs::write(dir.join(".probe"), b"x").is_err();
+
+        let result = if perms_enforced {
+            Some(persist_rotated_codex(&rotated_file_creds()))
+        } else {
+            None
+        };
+
+        // Restore permissions BEFORE cleanup so the temp dir can be removed.
+        let mut restore = std::fs::metadata(&dir).unwrap().permissions();
+        restore.set_mode(0o755);
+        std::fs::set_permissions(&dir, restore).unwrap();
+        unsafe {
+            std::env::remove_var("CODEX_HOME");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let Some(result) = result else {
+            eprintln!("skipping read-only assertion: permissions not enforced (running as root?)");
+            return;
+        };
+        let err = result
+            .expect_err("write-back into a read-only CODEX_HOME must error, not be swallowed");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("sign in again"),
+            "error must tell the reader what to do, got: {msg}"
+        );
+    }
+
+    /// Happy path: a writable CODEX_HOME gets the rotated tokens written back,
+    /// with unknown fields preserved at both the auth and tokens level.
+    #[test]
+    fn persist_rotated_codex_file_writes_rotated_tokens_and_preserves_unknown_fields() {
+        let _g = crate::paths::lock_env_for_test();
+        let dir = seed_codex_home("persist-ok");
+
+        let result = persist_rotated_codex(&rotated_file_creds());
+        let raw = std::fs::read_to_string(dir.join("auth.json")).unwrap();
+        unsafe {
+            std::env::remove_var("CODEX_HOME");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        result.expect("writable CODEX_HOME → Ok(())");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["tokens"]["access_token"], "at-new");
+        assert_eq!(v["tokens"]["refresh_token"], "rt-new");
+        // Unknown fields survive the round trip (the CLI may depend on them).
+        assert_eq!(v["some_future_field"], 123);
+        assert_eq!(v["tokens"]["token_future_field"], "keep-me");
+        // last_refresh is updated past the seeded 2026-04-17 stamp.
+        let stamp = v["last_refresh"].as_str().unwrap();
+        assert!(
+            stamp > "2026-04-17T00:00:00Z",
+            "last_refresh updated: {stamp}"
+        );
     }
 
     #[test]

@@ -216,8 +216,11 @@ pub fn parse_sse_data_line(line: &str) -> Result<Option<String>> {
     if payload == "[DONE]" {
         return Ok(Some("[DONE]".to_string()));
     }
-    let chunk: OpenAiStreamChunk =
-        serde_json::from_str(payload).with_context(|| format!("parsing SSE chunk: {}", payload))?;
+    // Invariant 1: never put the payload itself in the error — mid-stream it is
+    // book-derived text (tutor output quoting the reader's selection). A byte
+    // count is the only diagnostic we keep: counts, never content.
+    let chunk: OpenAiStreamChunk = serde_json::from_str(payload)
+        .with_context(|| format!("parsing SSE chunk ({} bytes)", payload.len()))?;
     let mut text = String::new();
     for ch in &chunk.choices {
         if let Some(delta) = &ch.delta {
@@ -363,14 +366,17 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
                             let _ = tx.send(StreamEvent::Delta { text }).await;
                         }
                         Ok(None) => {}
-                        Err(e) => {
+                        Err(_) => {
                             // Some servers prepend non-SSE preamble; only surface a hard error
-                            // when the line starts with "data:" and is malformed.
+                            // when the line starts with "data:" and is malformed. The message
+                            // is FIXED — never interpolate the parse error or the line, which
+                            // mid-stream contain book-derived text (invariant 1).
                             if line.trim_start().starts_with("data:") {
                                 breaker().on_failure();
                                 let _ = tx
                                     .send(StreamEvent::Error {
-                                        message: format!("bad SSE chunk: {}", e),
+                                        message: "The answer stream was interrupted — try again."
+                                            .to_string(),
                                     })
                                     .await;
                                 return;
@@ -604,5 +610,19 @@ mod tests {
         let r = parse_sse_data_line(r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#)
             .unwrap();
         assert!(r.is_none());
+    }
+
+    /// Invariant 1: the parse error for a malformed SSE line must not include
+    /// the line's payload — mid-stream that payload is book-derived text.
+    #[test]
+    fn sse_parse_error_never_includes_payload() {
+        let err = parse_sse_data_line("data: {bad").expect_err("malformed JSON must error");
+        // Full chain ({:#}) — context plus serde source — must not echo the input.
+        let full = format!("{:#}", err);
+        assert!(
+            !full.contains("{bad"),
+            "parse error must not include the raw payload: {}",
+            full
+        );
     }
 }

@@ -3,24 +3,8 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import TLIcon from "./TLIcon";
 import AiSetupSheet from "./AiSetupSheet";
 import { aiProviderLabel, type AskHandle, type SettingsDto, type StreamEvent } from "../types";
+import { humanizeError, looksUnavailable } from "../aiErrors";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
-
-/** True when an error reads like the configured provider is unreachable (vs. a
- *  hard config error), so the briefing offers the "Tutor paused" recovery. */
-function looksUnavailable(msg: string): boolean {
-  const s = msg.toLowerCase();
-  return (
-    s.includes("can't reach") ||
-    s.includes("cannot reach") ||
-    s.includes("could not reach") ||
-    s.includes("connection") ||
-    s.includes("unavailable") ||
-    s.includes("refused") ||
-    s.includes("no model is loaded") ||
-    s.includes("timed out") ||
-    s.includes("timeout")
-  );
-}
 import {
   getCachedBriefing,
   setCachedBriefing,
@@ -33,15 +17,17 @@ import "../tl-tutor.css";
  * Deep Study "Section briefing" — prepared marginalia for today's section.
  *
  * On session start (the parent only mounts this once `session != null`), this
- * either loads a cached briefing instantly or, with the reader's consent,
- * streams a fresh one from the local model and caches it. It is spoiler-safe,
- * local-only, regenerable, and dismissable — and it never auto-fires without
- * tutor consent (the same opt-in gate the lenses use), so nothing leaves the
- * machine and nothing runs autonomously.
+ * either replays the session's in-memory briefing instantly or, with the
+ * reader's tutor consent, streams a fresh one from the reader's chosen
+ * provider — local by default, cloud only through the same explicit consent
+ * gate the lenses use. It is spoiler-safe, regenerable, and dismissable, and
+ * it never auto-fires without that consent.
  *
- * Privacy (AGENTS.md): the prompt + injection hardening live server-side; this
- * UI renders only the streamed briefing. The section text is sent only to the
- * local model. The briefing is cached in localStorage and is NEVER exported.
+ * Privacy (CLAUDE.md): prompts + injection hardening live server-side; this
+ * UI renders only the streamed briefing. Only the current section's text is
+ * sent — never the whole book. The briefing is cached in memory for this
+ * session only (counsel posture: non-persistent unless saved) and becomes
+ * durable only when the reader saves it as a note.
  */
 type Phase = "consent" | "thinking" | "streaming" | "done" | "error" | "blocked";
 
@@ -52,16 +38,6 @@ function InlineMd({ text }: { text: string }): ReactNode {
     if (p.startsWith("*") && p.endsWith("*") && p.length > 2) return <em key={i}>{p.slice(1, -1)}</em>;
     return <span key={i}>{p}</span>;
   });
-}
-
-function humanizeError(raw: string): string {
-  const s = raw.toLowerCase();
-  if (s.includes("no ai model") || s.includes("model name set"))
-    return "No model is loaded. Open your local model server (LM Studio or Ollama) and load a model, then try again.";
-  if (s.includes("request failed") || s.includes("could not reach") || s.includes("connection") || s.includes("unavailable") || s.includes("refused"))
-    return "Can't reach the local model server. Is LM Studio (or Ollama) running on this Mac?";
-  if (s.includes("local-only")) return "Local-only mode blocked a non-local endpoint. Check Settings → AI.";
-  return raw.replace(/^error:\s*/i, "");
 }
 
 export default function SectionBriefingCard(props: {
@@ -128,9 +104,13 @@ export default function SectionBriefingCard(props: {
     // section's text, so a provider must be explicitly chosen. Local stays
     // on-device; a chosen cloud provider was opted into with disclosure. The
     // backend re-checks per call. Re-read live so a Settings change takes effect.
+    // The live provider also feeds error copy below, so failures name the
+    // provider actually asked.
+    let liveProvider = "none";
     try {
       const s = await invoke<SettingsDto>("cmd_get_settings");
       if (!s.ai_provider || s.ai_provider === "none") { setPhase("blocked"); return; }
+      liveProvider = s.ai_provider;
     } catch {
       setPhase("blocked"); return; // can't read settings → fail closed
     }
@@ -152,7 +132,7 @@ export default function SectionBriefingCard(props: {
           setCachedBriefing(bookId, sectionId, sourceSha, mode, textRef.current);
         }
       } else if (ev.kind === "error") {
-        setErrorMsg(humanizeError(ev.message ?? "The briefing call failed."));
+        setErrorMsg(humanizeError(liveProvider, ev.message ?? "The briefing couldn't be prepared this time."));
         setPhase("error");
       }
     };
@@ -170,7 +150,7 @@ export default function SectionBriefingCard(props: {
       });
     } catch (e) {
       if (channelRef.current === channel) {
-        setErrorMsg(humanizeError(String((e as { message?: string })?.message ?? e)));
+        setErrorMsg(humanizeError(liveProvider, String((e as { message?: string })?.message ?? e)));
         setPhase("error");
       }
     }

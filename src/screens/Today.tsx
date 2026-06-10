@@ -59,14 +59,17 @@ function optionIcon(o: RecoveryOption): IconName {
   }
 }
 
+// CORE-1007: GentleCatchup and WeekendCatchup are ADVICE — they change no
+// state and persist nothing, so their copy must never read as a commitment
+// ("Plan: …"). ExtendFinish is the one option that really mutates the plan.
 function describeOption(o: RecoveryOption): { primary: string; detail?: string } {
   switch (o.kind) {
     case "ResumeToday":
       return { primary: "Just read the next section", detail: "Skip recovery — open today's assigned section." };
     case "GentleCatchup":
       return {
-        primary: `Add ${o.extra_minutes} min for the next ${o.for_sessions} session${o.for_sessions === 1 ? "" : "s"}`,
-        detail: "Small, sustainable bumps until you're caught up.",
+        primary: `Try adding ${o.extra_minutes} min to your next few sittings`,
+        detail: "Just advice — nothing in your plan changes.",
       };
     case "WeekendCatchup":
       return {
@@ -122,10 +125,37 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
   }
 
   const { book, section, section_completed, estimated_minutes, session_minutes, monthly_pct, pace, day_index, total_days, streak, recovery, plan_status, forecast, memory, teaser } = today;
+
+  // CORE-1004: a book whose every plan was let go still owns Today — the book
+  // header stays, the pace clock is silent, and the one obvious action is
+  // starting a plan (the existing onNewPlan flow → setup sheet). Without this
+  // branch the reader would meet a dead "No section assigned" card.
+  if (plan_status === "no_plan") {
+    return (
+      <div className="tl-col tl-today">
+        <div className="tl-kicker"><span className="dot" /> Today</div>
+        <h1 className="tl-today-title">{book.title}</h1>
+        {book.author && <div className="tl-today-author">{book.author}</div>}
+        <div className="tl-plans-empty">
+          <span className="mark"><TLIcon name="book" size={22} /></span>
+          <span className="big">No plan right now</span>
+          <p>Set a gentle pace whenever you're ready — a few pages a day is plenty. There's no rush.</p>
+          <button className="tl-btn tl-btn-primary" style={{ margin: "4px auto 0" }} onClick={() => onNewPlan?.(book)}>
+            <TLIcon name="flag" size={16} /> Start a plan
+          </button>
+        </div>
+        <LastTime memory={memory} />
+      </div>
+    );
+  }
+
   const pm = paceMeta(pace);
   // A freshly imported book's plan hasn't started its pace clock yet. It is, by
   // design, NEVER behind — the copy here must say so plainly and calmly.
   const planReady = plan_status === "plan_ready";
+  // A paused plan's clock is stopped (CORE-1003): the kicker must read calmly,
+  // never keep counting "day N of M" through the pause.
+  const paused = plan_status === "paused";
   const fcNote = forecastNote(forecast, planReady);
   // "Continue where you left off": a saved mid-section position from a prior
   // sitting (not a fresh plan, not a completed section). The reader resumes at
@@ -148,7 +178,7 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
     <div className="tl-col tl-today">
       <div className="tl-kicker">
         <span className="dot" />
-        {planReady ? "Today — plan ready" : `Today — day ${day_index} of ${total_days}`}
+        {planReady ? "Today — plan ready" : paused ? "Paused — resume whenever you're ready" : `Today — day ${day_index} of ${total_days}`}
         {plansCount > 1 && (
           <button className="tl-plans-link" onClick={() => setShowPlans(true)} aria-label="See plans for this book">
             <TLIcon name="swap" size={14} /> Plans <span className="cnt">· {plansCount - 1} earlier</span>
@@ -170,6 +200,10 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
             {planReady ? (
               <span className="tl-pace on" aria-label="Plan ready — you are not behind">
                 <TLIcon name="flag" size={15} /> Plan ready
+              </span>
+            ) : paused ? (
+              <span className="tl-pace on" aria-label="Pace: Paused">
+                <TLIcon name="clock" size={15} /> Paused
               </span>
             ) : (
               <span className={`tl-pace ${pm.cls}`} aria-label={`Pace: ${pm.word}`}>
@@ -339,11 +373,13 @@ function RecoveryPanel(props: {
         case "ResumeToday":
           setMessage("Just start reading — the next assigned section is ready.");
           break;
+        // Advice options (CORE-1007): no backend call, no persistence — so the
+        // message must read as advice, never as a saved plan change.
         case "GentleCatchup":
-          setMessage(`Plan: add ${option.extra_minutes} min for the next ${option.for_sessions} sessions.`);
+          setMessage(`Try adding ${option.extra_minutes} minutes to your next few sittings — no setting to change, just sit a little longer.`);
           break;
         case "WeekendCatchup":
-          setMessage("Plan: use the weekend window.");
+          setMessage("Use the weekend window when it comes — no weekday pressure, nothing to change.");
           break;
         case "ExtendFinish": {
           const r = await invoke<RecomputedPlan>("cmd_extend_finish_date", { bookId: props.bookId, addDays: option.add_days });

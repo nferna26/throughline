@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
 import Today from "./Today";
 import type { TodayCard } from "../types";
 
@@ -175,6 +176,52 @@ describe("Today", () => {
     expect(screen.queryByText(/Recovery/)).toBeNull();
   });
 
+  // CORE-1004: a book whose last plan was let go gets a plan-less Today card
+  // (plan_status "no_plan") — the book header stays reachable and the one
+  // obvious action is starting a plan, wired to the existing onNewPlan flow.
+  it("offers 'Start a plan' for a plan-less (no_plan) book", () => {
+    const onNewPlan = vi.fn();
+    const c = card();
+    c.plan_status = "no_plan";
+    c.plan.status = "no_plan";
+    c.section = null;
+    c.pace = { kind: "not_started" };
+    c.forecast = null;
+    c.recovery = null;
+    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} onNewPlan={onNewPlan} />);
+    // The book is still the headline — not the first-run welcome card.
+    expect(screen.getByRole("heading", { name: /The Cold Start Problem/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Welcome to Throughline/i)).toBeNull();
+    // Calm empty-state copy teaches the next step…
+    expect(screen.getByText(/Set a gentle pace whenever you're ready/i)).toBeInTheDocument();
+    // …and the one obvious action starts a plan via the existing flow.
+    fireEvent.click(screen.getByRole("button", { name: /Start a plan/i }));
+    expect(onNewPlan).toHaveBeenCalledTimes(1);
+    expect(onNewPlan.mock.calls[0][0]).toMatchObject({ id: "b1" });
+    // No day counter, no pace pressure for a plan-less book.
+    expect(screen.queryByText(/day 3 of 30/i)).toBeNull();
+    expect(screen.queryByText(/Behind ·/)).toBeNull();
+  });
+
+  // CORE-1003: a PAUSED plan must read calmly — never the day-counter kicker
+  // (whose clock keeps running) and never a "Behind" chip.
+  it("reads calmly when the plan is paused — no day counter, no behind chip", () => {
+    const c = card();
+    c.plan_status = "paused";
+    c.plan.status = "paused";
+    c.pace = { kind: "not_started" };
+    c.forecast = null;
+    c.recovery = null;
+    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.getByText(/Paused — resume whenever you're ready/i)).toBeInTheDocument();
+    expect(screen.queryByText(/day 3 of 30/i)).toBeNull();
+    expect(screen.queryByText(/Behind ·/)).toBeNull();
+    expect(screen.queryByText(/A little behind/)).toBeNull();
+    // The pace chip must agree with the kicker: "Paused", not "Not started".
+    expect(screen.getByLabelText("Pace: Paused")).toBeInTheDocument();
+    expect(screen.queryByText(/Not started/)).toBeNull();
+  });
+
   // REGRESSION: "Restart current chapter" was removed as a recovery option —
   // throwing away read progress is a punishment, not a recovery. It must never
   // render, even when the recovery panel IS shown for a genuinely-behind book.
@@ -197,6 +244,63 @@ describe("Today", () => {
     expect(screen.queryByText(/restart/i)).toBeNull();
     expect(screen.queryByText(/start over/i)).toBeNull();
     expect(screen.queryByText(/current chapter/i)).toBeNull();
+  });
+});
+
+// CORE-1007: GentleCatchup / WeekendCatchup were placebo buttons — they read
+// as commitments ("Plan: add 10 min…") but changed no state and persisted
+// nothing. They are now honest advice; ExtendFinish stays the one option that
+// actually mutates the plan.
+describe("Today — recovery options are honest", () => {
+  function behindCard(): TodayCard {
+    const c = card();
+    c.recovery = {
+      headline: "Next smallest step: 10 minutes.",
+      days_behind: 3,
+      options: [
+        { kind: "GentleCatchup", extra_minutes: 10, for_sessions: 3 },
+        { kind: "WeekendCatchup", weekend_starts_in_days: 0 },
+        { kind: "ExtendFinish", add_days: 3, new_finish: "2026-06-04" },
+      ],
+    };
+    return c;
+  }
+
+  it("GentleCatchup and WeekendCatchup read as advice — no 'Plan:' claim, no backend call", () => {
+    render(<Today today={behindCard()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    // Ignore the mount-time cmd_list_plans_for_book lookup; from here on,
+    // clicking an advice option must never reach the backend.
+    vi.mocked(invoke).mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: /add(ing)? 10 min/i }));
+    // No fabricated commitment — nothing was persisted, so nothing may claim "Plan:".
+    expect(screen.queryByText(/^Plan:/)).toBeNull();
+    expect(
+      screen.getByText(/Try adding 10 minutes to your next few sittings — no setting to change, just sit a little longer\./),
+    ).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Catch up this weekend/i }));
+    expect(screen.queryByText(/^Plan:/)).toBeNull();
+    expect(screen.getByText(/no weekday pressure, nothing to change/i)).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("ExtendFinish stays the one real option: it calls cmd_extend_finish_date", async () => {
+    const onRefresh = vi.fn();
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+      cmd === "cmd_extend_finish_date"
+        ? { new_target_finish_date: "2026-06-04", new_daily_target_units: 1, remaining_sections: 4, remaining_days: 4 }
+        : [],
+    );
+    render(<Today today={behindCard()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={onRefresh} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Re-pace to finish by 2026-06-04/i }));
+    expect(await screen.findByText(/Finish date is now 2026-06-04/)).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("cmd_extend_finish_date", { bookId: "b1", addDays: 3 });
+    expect(onRefresh).toHaveBeenCalled();
+    vi.mocked(invoke).mockReset();
   });
 });
 
