@@ -219,6 +219,81 @@ describe("TextReader session recap", () => {
   });
 });
 
+// FT-09: finishing a section by READING it must be reachable. These tests pin
+// the contents of completedSectionIds sent to cmd_end_session: scrolled to the
+// bottom → the current section counts; barely started → it doesn't; a section
+// short enough to fit one screen counts from the single post-paint measurement.
+describe("TextReader section completion (endReached)", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  // jsdom has no layout, so geometry is supplied directly on the scroll
+  // container. scrollTop stays writable: the reader assigns it on navigation.
+  function setGeometry(el: HTMLElement, g: { scrollTop: number; clientHeight: number; scrollHeight: number }) {
+    Object.defineProperty(el, "scrollTop", { value: g.scrollTop, writable: true, configurable: true });
+    Object.defineProperty(el, "clientHeight", { value: g.clientHeight, configurable: true });
+    Object.defineProperty(el, "scrollHeight", { value: g.scrollHeight, configurable: true });
+  }
+
+  function finishSession() {
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    const finishButtons = screen.getAllByRole("button", { name: /^Finish$/ });
+    fireEvent.click(finishButtons[finishButtons.length - 1]);
+  }
+
+  async function endSessionArgs() {
+    let args: { completedSectionIds: string[] } | undefined;
+    await waitFor(() => {
+      const call = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_end_session");
+      expect(call).toBeTruthy();
+      args = call![1] as { completedSectionIds: string[] };
+    });
+    return args!;
+  }
+
+  it("counts the current section once the reader scrolls to its end", async () => {
+    mockBackend([]);
+    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    const main = container.querySelector(".tl-reader-main") as HTMLElement;
+    setGeometry(main, { scrollTop: 3200, clientHeight: 800, scrollHeight: 4000 });
+    fireEvent.scroll(main);
+
+    finishSession();
+    expect((await endSessionArgs()).completedSectionIds).toContain("s1");
+  });
+
+  it("does NOT count a long section the reader only started", async () => {
+    mockBackend([]);
+    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    const main = container.querySelector(".tl-reader-main") as HTMLElement;
+    setGeometry(main, { scrollTop: 0, clientHeight: 800, scrollHeight: 4000 });
+    fireEvent.scroll(main);
+
+    finishSession();
+    expect((await endSessionArgs()).completedSectionIds).toEqual([]);
+  });
+
+  it("counts a section that fits one screen, measured once after its text paints", async () => {
+    mockTwoSections();
+    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    // Chapter 2 fits the viewport outright — it will never fire a scroll event.
+    const main = container.querySelector(".tl-reader-main") as HTMLElement;
+    setGeometry(main, { scrollTop: 0, clientHeight: 800, scrollHeight: 700 });
+    fireEvent.click(screen.getByRole("button", { name: /Next section/i }));
+    await waitFor(() => expect(screen.getByText(/Chapter 2/)).toBeInTheDocument());
+
+    finishSession();
+    const ids = (await endSessionArgs()).completedSectionIds;
+    expect(ids).toContain("s2"); // short section: end reached without scrolling
+    expect(ids).toContain("s1"); // visited-and-passed rule unchanged
+  });
+});
+
 describe("clampToolbarPosition (selection toolbar placement)", () => {
   const W = 640; // reader width; toolbar default width 300 (half = 150)
 
