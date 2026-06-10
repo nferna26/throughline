@@ -71,6 +71,13 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const [summary, setSummary] = useState("");
   // ── Companion Margin: anchored notes/highlights/tutor cards beside the text ──
   const [notes, setNotes] = useState<Note[]>([]);
+  // Soft-delete (FT-32): the margin card's X hides the note optimistically and
+  // shows a 6s Undo toast (the house idiom from PlansView); cmd_delete_note only
+  // fires when that timer lapses. `pendingDelete` is the hidden note's id;
+  // deleteTimer commits it. Undo cancels the timer and re-shows the card.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const deleteTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (deleteTimer.current) clearTimeout(deleteTimer.current); }, []);
   // Draft tutor cards live only in component state until the reader saves one
   // (which turns it into a durable TutorNote via the existing approval path).
   const [tutorDrafts, setTutorDrafts] = useState<TutorDraft[]>([]);
@@ -461,6 +468,9 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const sectionNotes = useMemo(() => {
     return notes
       .filter((n) => {
+        // A note pending soft-delete hides at once (its card AND inline highlight)
+        // while the Undo toast is up — see deleteNote/undoDelete (FT-32).
+        if (n.id === pendingDelete) return false;
         const p = parseLocator(n.anchor_start || n.locator);
         if (p.kind === "char") {
           const v = parseInt(p.value, 10);
@@ -469,7 +479,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         return n.chapter_label != null && n.chapter_label === currentSection?.label;
       })
       .sort((a, b) => anchorChar(a) - anchorChar(b));
-  }, [notes, secBase, secEnd, currentSection?.label]);
+  }, [notes, secBase, secEnd, currentSection?.label, pendingDelete]);
 
   // Highlights to paint inline, grouped by within-section char span.
   const highlights = useMemo(() => {
@@ -657,10 +667,31 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     setTutorDrafts((d) => d.filter((x) => x.draftId !== draftId));
     if (activeNoteId === draftId) setActiveNoteId(null);
   }
-  async function deleteNote(id: string) {
+  // The X on a margin card is a DISMISS-then-commit, never a one-click destroy
+  // (FT-32). The card hides at once, a 6s Undo toast appears, and the real
+  // cmd_delete_note runs only after the timer lapses — matching every other X in
+  // the app (and the PlansView "Let go" idiom).
+  const commitDelete = useCallback(async (id: string) => {
+    deleteTimer.current = null;
+    setPendingDelete((cur) => (cur === id ? null : cur));
     try { await invoke("cmd_delete_note", { noteId: id }); } catch { /* ignore */ }
-    if (activeNoteId === id) setActiveNoteId(null);
     await refreshNotes();
+  }, [refreshNotes]);
+  function deleteNote(id: string) {
+    // A second delete supersedes the first: commit the still-pending one now so
+    // its 6s window doesn't outlive its toast.
+    if (deleteTimer.current) {
+      clearTimeout(deleteTimer.current);
+      deleteTimer.current = null;
+      if (pendingDelete && pendingDelete !== id) void commitDelete(pendingDelete);
+    }
+    if (activeNoteId === id) setActiveNoteId(null);
+    setPendingDelete(id);
+    deleteTimer.current = window.setTimeout(() => { void commitDelete(id); }, 6000);
+  }
+  function undoDelete() {
+    if (deleteTimer.current) { clearTimeout(deleteTimer.current); deleteTimer.current = null; }
+    setPendingDelete(null);
   }
 
   if (!currentSection) {
@@ -874,6 +905,14 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
           positionHint={locatorHint(locator, { start: secBase, length: Math.max(0, secEnd - secBase) })}
           onClose={() => setShowNote(false)}
         />
+      )}
+
+      {/* Soft-delete Undo toast (FT-32) — the same idiom as PlansView "Let go". */}
+      {pendingDelete && (
+        <div className="tl-plans-toast" role="status" aria-live="polite">
+          <span>Note removed.</span>
+          <button onClick={undoDelete}>Undo</button>
+        </div>
       )}
 
       {endingPrompt && (() => {

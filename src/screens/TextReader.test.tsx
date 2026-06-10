@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import TextReader, { clampToolbarPosition, clampPanelWidth, panelDragOutcome, DEFAULT_PANEL_WIDTH, splitParagraphs } from "./TextReader";
 import type { TodayCard, BookSection, Note } from "../types";
@@ -109,6 +109,53 @@ describe("TextReader Companion Margin", () => {
     await waitFor(() => expect(container.querySelector(".tl-readcol")).not.toBeNull());
     // anchored at char 5000, outside this section's [0,1000) range → no highlight/card.
     expect(container.querySelector("mark.tl-hl")).toBeNull();
+  });
+});
+
+// FT-32: the margin card's X is a soft delete — it shows an Undo toast and only
+// calls cmd_delete_note after the 6-second timer lapses. Undo cancels it entirely.
+describe("TextReader margin note delete — Undo (FT-32)", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    localStorage.setItem("tl.panelOpen", "true");
+    vi.useFakeTimers();
+  });
+  afterEach(() => { vi.runOnlyPendingTimers(); vi.useRealTimers(); });
+
+  it("deletes via an Undo toast and never calls cmd_delete_note when undone", async () => {
+    mockBackend([note({ note_type: "Highlight", body: "" })]);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
+
+    // Click the card's X (aria-label "Delete note") — kept the same label.
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+
+    // No backend delete yet, and a removal notice with an Undo button is shown.
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(false);
+    const status = screen.getByRole("status");
+    expect(status).toBeInTheDocument();
+    const undo = screen.getByRole("button", { name: /Undo/i });
+
+    // Undo cancels the pending delete; let the would-be timer elapse anyway.
+    fireEvent.click(undo);
+    act(() => { vi.advanceTimersByTime(7000); });
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(false);
+    // The card returns.
+    expect(container.querySelector("mark.tl-hl")).not.toBeNull();
+  });
+
+  it("commits exactly one cmd_delete_note after the 6s timer lapses", async () => {
+    mockBackend([note({ note_type: "Highlight", body: "" })]);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(false);
+
+    await act(async () => { vi.advanceTimersByTime(6000); });
+    const deletes = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "cmd_delete_note");
+    expect(deletes.length).toBe(1);
+    expect((deletes[0][1] as { noteId: string }).noteId).toBe("n1");
   });
 });
 
