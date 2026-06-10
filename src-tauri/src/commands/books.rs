@@ -332,7 +332,7 @@ fn plan_less_card(conn: &Connection, book: Book) -> Result<TodayCard, AppError> 
 /// a reader meets different invitations across a book; the resume variant asks
 /// what a mid-section paragraph is carrying forward.
 const READING_PROMPTS: &[&str] = &[
-    "Read for the argument — what claim is being built?",
+    "Read for the one sentence worth keeping.",
     "Read for the image — what picture does this section leave behind?",
     "Read for the turning point — what changes by the end?",
     "Read for the pressure — what question can't the writer leave alone?",
@@ -1513,5 +1513,18 @@ mod tests {
             !ex.contains('\n'),
             "excerpt must flow as one paragraph, never carry block breaks: {ex:?}"
         );
+    }
+
+    /// FT-18 (CORE-1051): the hand-written reading prompts must read true for any
+    /// genre — fiction must never be told to "read for the argument/claim/thesis."
+    #[test]
+    fn reading_prompts_hold_for_any_genre() {
+        for p in super::READING_PROMPTS {
+            let low = p.to_lowercase();
+            assert!(
+                !low.contains("argument") && !low.contains("claim") && !low.contains("thesis"),
+                "reading prompt presumes nonfiction: {p:?}"
+            );
+        }
     }
 }
