@@ -5,6 +5,34 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.4.1] - 2026-06-10
+
+The field-test patch: the first hour with v0.4.0 on a real Mac found nine
+walls; this release removes them.
+
+### Fixed
+
+- **The window moves.** Dragging by the titlebar works (the build never asked
+  macOS for permission to start a drag).
+- **The paid tutor recovers honestly.** Section briefings no longer fail with a
+  cryptic rejection; one bad request can no longer pause all AI for 30 seconds;
+  and when Throughline AI genuinely can't answer, the message tells the truth —
+  no "nothing has been sent" after a send, no key-pasting detour for a
+  one-time-purchase reader.
+- **Finishing a section by reading it counts.** Reaching the end of the text
+  marks the section done — previously only paging past it did, so Today could
+  repeat chapters and call a daily reader "behind".
+- **Errors show up.** Import, book-switch, and new-plan failures appear in the
+  app (they were sent to a dialog macOS never shows).
+- **Honest search when offline.** If the full library can't be reached, search
+  says it only covered a built-in starter shelf — it no longer claims a book
+  "isn't in the public-domain library".
+- **The tutor toggle tells the truth.** It's named "AI tutor" and says where
+  answers actually come from, instead of claiming everything is local.
+- **Updates work from here on.** Releases publish the moment a version tag
+  builds — no manual publish step to forget (the step that left every previous
+  release invisible to the updater).
+
 ## [0.4.0] - 2026-06-10
 
 The pre-launch hardening release: the P1 ship blockers, the P2 reader-felt
