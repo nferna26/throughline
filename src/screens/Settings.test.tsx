@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import Settings from "./Settings";
 import type { SettingsDto } from "../types";
 
@@ -36,6 +36,7 @@ function wire(dto: Partial<SettingsDto>) {
       case "cmd_get_settings": return Promise.resolve(full);
       case "cmd_list_ai_models": return Promise.resolve(["m"]);
       case "cmd_list_ai_requests": return Promise.resolve([]);
+      case "cmd_test_ai_connection": return Promise.resolve({ reachable: true, first_model_id: "m", message: "Connected." });
       default: return Promise.resolve(undefined);
     }
   });
@@ -126,6 +127,25 @@ describe("Settings — Your data trust summary", () => {
     const { container } = render(<Settings />);
     await waitFor(() => expect(screen.getByText(/^Experimental\.$/i)).toBeInTheDocument());
     expect(container.textContent).not.toMatch(/endpoint/i);
+  });
+
+  it("tests the connection against the Base-URL draft on screen, not the saved one", async () => {
+    wire({ ai_provider: "local", ai_base_url: "http://localhost:1234/v1" });
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText("Base URL")).toBeInTheDocument());
+    // The reader edits the Base URL but hasn't saved yet…
+    fireEvent.change(screen.getByPlaceholderText("http://localhost:1234/v1"), {
+      target: { value: "http://127.0.0.1:5555/v1" },
+    });
+    // …so Test connection must probe the DRAFT (refreshModels already does);
+    // probing the saved URL silently validates a different address.
+    fireEvent.click(screen.getByText("Test connection"));
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "cmd_test_ai_connection",
+        expect.objectContaining({ provider: "local", baseUrl: "http://127.0.0.1:5555/v1" }),
+      ),
+    );
   });
 
   it("does not flag OpenAI as experimental", async () => {

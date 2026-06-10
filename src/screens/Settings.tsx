@@ -140,6 +140,10 @@ export default function Settings() {
       const r = await invoke<ConnTestResult>("cmd_test_ai_connection", {
         provider: providerDraft,
         key: needsKey && keyDraft.trim() ? keyDraft.trim() : undefined,
+        // Probe the Base-URL draft on screen, the same way refreshModels does —
+        // otherwise testing validates the SAVED local address while a different
+        // one sits in the field. The backend only honors it for Local.
+        baseUrl: baseUrlDraft,
       });
       setConn(r);
       if (r.reachable && providerDraft === "local") refreshModels(providerDraft, baseUrlDraft);
