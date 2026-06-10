@@ -175,6 +175,33 @@ describe("Today", () => {
     expect(screen.queryByText(/Recovery/)).toBeNull();
   });
 
+  // CORE-1004: a book whose last plan was let go gets a plan-less Today card
+  // (plan_status "no_plan") — the book header stays reachable and the one
+  // obvious action is starting a plan, wired to the existing onNewPlan flow.
+  it("offers 'Start a plan' for a plan-less (no_plan) book", () => {
+    const onNewPlan = vi.fn();
+    const c = card();
+    c.plan_status = "no_plan";
+    c.plan.status = "no_plan";
+    c.section = null;
+    c.pace = { kind: "not_started" };
+    c.forecast = null;
+    c.recovery = null;
+    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} onNewPlan={onNewPlan} />);
+    // The book is still the headline — not the first-run welcome card.
+    expect(screen.getByRole("heading", { name: /The Cold Start Problem/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Welcome to Throughline/i)).toBeNull();
+    // Calm empty-state copy teaches the next step…
+    expect(screen.getByText(/Set a gentle pace whenever you're ready/i)).toBeInTheDocument();
+    // …and the one obvious action starts a plan via the existing flow.
+    fireEvent.click(screen.getByRole("button", { name: /Start a plan/i }));
+    expect(onNewPlan).toHaveBeenCalledTimes(1);
+    expect(onNewPlan.mock.calls[0][0]).toMatchObject({ id: "b1" });
+    // No day counter, no pace pressure for a plan-less book.
+    expect(screen.queryByText(/day 3 of 30/i)).toBeNull();
+    expect(screen.queryByText(/Behind ·/)).toBeNull();
+  });
+
   // CORE-1003: a PAUSED plan must read calmly — never the day-counter kicker
   // (whose clock keeps running) and never a "Behind" chip.
   it("reads calmly when the plan is paused — no day counter, no behind chip", () => {

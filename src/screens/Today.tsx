@@ -122,6 +122,30 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
   }
 
   const { book, section, section_completed, estimated_minutes, session_minutes, monthly_pct, pace, day_index, total_days, streak, recovery, plan_status, forecast, memory, teaser } = today;
+
+  // CORE-1004: a book whose every plan was let go still owns Today — the book
+  // header stays, the pace clock is silent, and the one obvious action is
+  // starting a plan (the existing onNewPlan flow → setup sheet). Without this
+  // branch the reader would meet a dead "No section assigned" card.
+  if (plan_status === "no_plan") {
+    return (
+      <div className="tl-col tl-today">
+        <div className="tl-kicker"><span className="dot" /> Today</div>
+        <h1 className="tl-today-title">{book.title}</h1>
+        {book.author && <div className="tl-today-author">{book.author}</div>}
+        <div className="tl-plans-empty">
+          <span className="mark"><TLIcon name="book" size={22} /></span>
+          <span className="big">No plan right now</span>
+          <p>Set a gentle pace whenever you're ready — a few pages a day is plenty. There's no rush.</p>
+          <button className="tl-btn tl-btn-primary" style={{ margin: "4px auto 0" }} onClick={() => onNewPlan?.(book)}>
+            <TLIcon name="flag" size={16} /> Start a plan
+          </button>
+        </div>
+        <LastTime memory={memory} />
+      </div>
+    );
+  }
+
   const pm = paceMeta(pace);
   // A freshly imported book's plan hasn't started its pace clock yet. It is, by
   // design, NEVER behind — the copy here must say so plainly and calmly.

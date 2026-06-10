@@ -16,7 +16,7 @@ use crate::commands::db_helpers::*;
 use crate::db::DbState;
 use crate::error::AppError;
 use crate::models::{
-    Book, BookSection, ImportOutcome, ReadingPlan, StyleRange, TodayCard, TodayTeaser,
+    Book, BookSection, ImportOutcome, PaceState, ReadingPlan, StyleRange, TodayCard, TodayTeaser,
 };
 use crate::{epub_classify, export, import, log, models, paths, plan, recovery, settings};
 
@@ -175,14 +175,26 @@ pub fn cmd_configure_plan(
 #[tauri::command]
 pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
     let conn = state.0.lock()?;
-    let Some(book) = fetch_active_book(&conn)? else {
+    today_card(&conn)
+}
+
+/// `cmd_today`'s actual body, extracted so it is testable against an in-memory
+/// DB (the `#[tauri::command]` wrapper above just locks and delegates).
+pub(crate) fn today_card(conn: &Connection) -> Result<Option<TodayCard>, AppError> {
+    let Some(book) = fetch_active_book(conn)? else {
         return Ok(None);
     };
-    let Some(plan) = fetch_plan_for_book(&conn, &book.id)? else {
-        return Ok(None);
+    let Some(plan) = fetch_plan_for_book(conn, &book.id)? else {
+        // CORE-1004: a book with zero (non-deleted) plans — its last plan was
+        // "let go" — must still reach Today. Returning None here strands an
+        // existing book on the first-run welcome card (no switcher, no Notes
+        // tab) and even a re-import dedups straight back onto it. Synthesize a
+        // plan-less card instead: book header + notes memory stay reachable,
+        // the pace clock is off, and the UI offers "Start a plan".
+        return Ok(Some(plan_less_card(conn, book)?));
     };
-    let sections = list_sections(&conn, &book.id)?;
-    let completed = list_completed_section_ids(&conn, &book.id)?;
+    let sections = list_sections(conn, &book.id)?;
+    let completed = list_completed_section_ids(conn, &book.id)?;
     let computed = plan::compute(&plan, &sections, &completed)?;
 
     let section = computed
@@ -210,8 +222,8 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
         (None, None)
     };
 
-    let streak = compute_streak(&conn, &book.id)?;
-    let session_minutes = crate::settings::get_reading_rhythm_minutes(&conn);
+    let streak = compute_streak(conn, &book.id)?;
+    let session_minutes = crate::settings::get_reading_rhythm_minutes(conn);
 
     // Recovery options ONLY when the plan is active and the forecast says a real
     // rebalance is warranted — never for a plan-ready/just-started book. The
@@ -232,7 +244,7 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
     };
 
     // Build the "Last time" memory before `book` is moved into the card.
-    let memory = today_memory(&conn, &book.id)?;
+    let memory = today_memory(conn, &book.id)?;
 
     // "Before you read" teaser — the book's own first (or resume-adjacent)
     // sentences plus a hand-written reading prompt. Sourced from the same local
@@ -260,6 +272,49 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
         memory,
         teaser,
     }))
+}
+
+/// The plan-less Today card (CORE-1004): the book exists but has no live plan
+/// row (every plan let go). The placeholder plan is inert — `status` "no_plan"
+/// is the recognizable marker the frontend branches on — and nothing here
+/// touches the pace clock, forecast, or recovery machinery.
+fn plan_less_card(conn: &Connection, book: Book) -> Result<TodayCard, AppError> {
+    let streak = compute_streak(conn, &book.id)?;
+    let session_minutes = crate::settings::get_reading_rhythm_minutes(conn);
+    let memory = today_memory(conn, &book.id)?;
+    let today = chrono::Utc::now().naive_utc().date().to_string();
+    let placeholder = ReadingPlan {
+        id: String::new(),
+        book_id: book.id.clone(),
+        start_date: today.clone(),
+        target_finish_date: today,
+        daily_target_units: None,
+        days_per_week: 0,
+        catchup_mode: "gentle".to_string(),
+        status: "no_plan".to_string(),
+        activated_at: None,
+        original_finish_date: None,
+    };
+    Ok(TodayCard {
+        book,
+        plan: placeholder,
+        section: None,
+        section_completed: false,
+        estimated_minutes: 0,
+        session_minutes,
+        monthly_pct: 0,
+        pace: PaceState::NotStarted,
+        day_index: 0,
+        total_days: 0,
+        streak,
+        recovery: None,
+        resume_locator: None,
+        resume_percent: None,
+        plan_status: "no_plan".to_string(),
+        forecast: None,
+        memory,
+        teaser: None,
+    })
 }
 
 /// Hand-written reading prompts — calm, literary lenses to read *through*, never
@@ -983,6 +1038,43 @@ pub fn cmd_set_active_book(book_id: String, state: State<DbState>) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CORE-1004: a book whose last plan was "let go" (soft-deleted) must still
+    /// reach Today. `cmd_today` returning None for an existing book strands the
+    /// reader on the first-run welcome card with no book switcher and no Notes
+    /// tab — library and notes intact on disk but unreachable. The composition
+    /// must instead synthesize a plan-less card (plan_status = "no_plan", no
+    /// section, pace clock off) so the UI can offer "Start a plan".
+    #[test]
+    fn today_card_synthesizes_a_plan_less_card_instead_of_none() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO books (id,title,author,source_type,source_path,source_sha256,created_at,last_opened_at)
+               VALUES ('b1','Confessions','Augustine','txt','/p','h','2026-01-01','2026-06-01T00:00:00Z');
+             -- The only plan was let go (soft-deleted): invisible to fetch_plan_for_book.
+             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle,deleted_at)
+               VALUES ('p_gone','b1','2026-01-01','2026-02-01','active','active',datetime('now'));",
+        )
+        .unwrap();
+
+        let card = today_card(&conn)
+            .expect("compose")
+            .expect("a plan-less book must still produce a Today card");
+        assert_eq!(card.book.id, "b1");
+        assert_eq!(
+            card.plan_status, "no_plan",
+            "the card must be recognizably plan-less"
+        );
+        assert!(card.section.is_none(), "no section without a plan");
+        assert!(
+            matches!(card.pace, crate::models::PaceState::NotStarted),
+            "pace clock off without a plan, got {:?}",
+            card.pace
+        );
+        assert!(card.forecast.is_none());
+        assert!(card.recovery.is_none());
+    }
 
     /// The book switcher's contract: activating a book makes it the active book
     /// (the one `cmd_today` reads from), and activating an unknown id is a
