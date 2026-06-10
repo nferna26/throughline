@@ -739,6 +739,13 @@ mod tests {
 
         let mut violations: Vec<String> = Vec::new();
         for (path, code) in backend_sources_without_comments() {
+            // log.rs is exempt: tracing_appender names rolled files by the UTC
+            // date, so prune_old_logs must do its retention math on the
+            // appender's calendar — that is filename matching, not a
+            // reader-facing reading-day boundary.
+            if path.ends_with("log.rs") {
+                continue;
+            }
             for needle in [&rust_utc_day, &rust_utc_day_2, &sql_utc_day] {
                 if code.contains(needle.as_str()) {
                     violations.push(format!(
