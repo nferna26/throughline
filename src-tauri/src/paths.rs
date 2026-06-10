@@ -70,13 +70,14 @@ pub fn default_export_root() -> Result<PathBuf> {
     Ok(home.join("GBrain").join("Reading"))
 }
 
+/// App-private dirs only. The export tree (`~/GBrain/Reading/...` by default)
+/// is deliberately NOT created here: a first launch must not plant an
+/// unexplained folder in the reader's home. Export creates its dirs on demand
+/// (`export::ensure_export_dirs`), and the settings probe
+/// (`cmd_check_export_path`) creates-and-checks a custom root when configured.
 pub fn ensure_dirs() -> Result<()> {
     std::fs::create_dir_all(app_support_dir()?)?;
     std::fs::create_dir_all(books_dir()?)?;
-    let export = default_export_root()?;
-    for sub in ["Books", "Sessions", "Notes", "Reviews", "_indexes"] {
-        std::fs::create_dir_all(export.join(sub))?;
-    }
     Ok(())
 }
 
