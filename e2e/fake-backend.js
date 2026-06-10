@@ -67,17 +67,20 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
     estimated_minutes: 6, session_minutes: 25, monthly_pct: 18,
     pace: { kind: "on_pace" }, day_index: 3, total_days: 30,
     streak: { days_read_last_7: 4, minutes_last_7: 96 },
-    recovery: null, resume_locator: null, resume_percent: null,
+    recovery: null, resume_locator: "char:0", resume_percent: 42,
     plan_status: "active",
     forecast: { state: "on_track", projected_finish_date: "2026-06-29", days_late: 0 },
     memory: {
       last_capture: { note_type: "MarginNote", body: "The whole book in one line.", chapter_label: "Book II", created_at: "2026-06-06T08:10:00Z" },
       highlight_count: 1, note_count: 1,
     },
+    // Resume-only teaser (CORE-1049): a fresh section's opening is never
+    // pre-printed; the surviving "Where you left off" variant carries the
+    // sentence the reader is returning to plus a genre-neutral prompt.
     teaser: {
       excerpt: "Begin the morning by saying to thyself, I shall meet with the busybody, the ungrateful, arrogant, deceitful, envious, unsocial.",
-      prompt: "Read for the argument — what claim is being built?",
-      locator: "char:0", is_resume_excerpt: false,
+      prompt: "Read for the thread — what is this paragraph carrying forward?",
+      locator: "char:0", is_resume_excerpt: true,
     },
   };
 
@@ -103,7 +106,7 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_today":
         if (window.__TL_FAKE_EMPTY__) return null;
         if (window.__TL_FAKE_DONE__) return Object.assign({}, TODAY, { section: null, pace: { kind: "done" }, plan_status: "active" });
-        if (window.__TL_FAKE_PLAN_READY__) return Object.assign({}, TODAY, { plan_status: "plan_ready", pace: { kind: "not_started" } });
+        if (window.__TL_FAKE_PLAN_READY__) return Object.assign({}, TODAY, { plan_status: "plan_ready", pace: { kind: "not_started" }, resume_locator: null, resume_percent: null, teaser: null });
         if (window.__TL_FAKE_BEHIND__) {
           return Object.assign({}, TODAY, {
             pace: { kind: "behind", days_behind: 6 },
