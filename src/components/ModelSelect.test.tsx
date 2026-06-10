@@ -28,4 +28,13 @@ describe("ModelSelect — price chip", () => {
     );
     expect(chip.getAttribute("aria-label")).not.toMatch(/token/i);
   });
+
+  it("renders the VISIBLE chip in plain words too — never 'Mtok' (CORE-1024)", async () => {
+    render(<ModelSelect provider="anthropic" value="claude-sonnet-4-6" onChange={() => {}} />);
+    const chip = await screen.findByLabelText(/Costs 3 dollars per million for what you send/i);
+    // The text the reader actually sees (not just the aria-label) speaks in
+    // plain words: prices per million words, no Mtok/token plumbing jargon.
+    expect(chip.textContent).toMatch(/\$3 \/ \$15 per million words/);
+    expect(chip.textContent).not.toMatch(/Mtok|token/i);
+  });
 });
