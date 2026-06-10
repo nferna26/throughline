@@ -3,6 +3,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 import TLIcon from "./TLIcon";
+import { humanizeUpdateError } from "../updateErrors";
 
 /**
  * Reader-initiated auto-update. The app NEVER checks on launch or a timer (that
@@ -34,8 +35,10 @@ export default function UpdateChecker() {
       } else {
         setPhase("uptodate");
       }
-    } catch (e: any) {
-      setMsg(e?.message ?? String(e));
+    } catch (e) {
+      // The plugin raises raw plumbing ("…release JSON from the remote") —
+      // humanize it; the reader never sees the wire detail (FT-15).
+      setMsg(humanizeUpdateError(String((e as { message?: string })?.message ?? e), "check"));
       setPhase("error");
     }
   }
@@ -56,8 +59,8 @@ export default function UpdateChecker() {
         }
       });
       await relaunch();
-    } catch (e: any) {
-      setMsg(e?.message ?? String(e));
+    } catch (e) {
+      setMsg(humanizeUpdateError(String((e as { message?: string })?.message ?? e), "download"));
       setPhase("error");
     }
   }
