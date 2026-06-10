@@ -2,9 +2,15 @@
 
 The Rust backend exposes commands to the React frontend via Tauri's `invoke` bridge. This document is the binding contract: argument names, types, return shapes, error shapes, and the semver commitment for changes.
 
-The current API version is **2**. Read it at runtime from the frontend via `invoke("cmd_api_version")`.
+The current API version is **5**. Read it at runtime from the frontend via `invoke("cmd_api_version")`.
 
 > **1 → 2:** `cmd_import_book` now returns `ImportOutcome { book, created }` instead of a bare `Book`. Return-shape change → major bump.
+>
+> **2 → 3:** cloud AI command surface (provider keys, model listing, Codex device login, request history) reshaped the AI args/returns.
+>
+> **3 → 4:** plan lifecycle — migration v008 added the lifecycle axis (`active` | `paused` | `completed` | `archived` | `superseded`) to the plan rows JS receives, and the plan-management command family landed against it (`cmd_list_plans_for_book`, `cmd_get_active_plan`, pause / resume / archive / delete).
+>
+> **4 → 5:** plans frontispiece — migration v009 added `name`, `deleted_at` (soft-delete window), and `reached_percent` to `reading_plans`; plan rows and the plans list reshaped around naming + let-go semantics.
 
 ---
 
@@ -43,7 +49,7 @@ type AppError =
 
 #### `cmd_api_version`
 - args: none
-- returns: `number` — the value of `COMMAND_API_VERSION` (currently `2`)
+- returns: `number` — the value of `COMMAND_API_VERSION` (currently `5`)
 - errors: never
 
 Use this from the frontend on startup to detect a backend that has moved to a major version your build doesn't understand.
@@ -195,6 +201,13 @@ Recovery action — clears `section_progress` for one section.
 
 Side effects: inserts a `notes` row, exports Markdown to `{export_root}/Notes/`.
 
+#### `cmd_update_note`
+- args: `{ noteId: string; noteType?: string; body?: string; shortQuote?: string; anchoredText?: string; clearShortQuote?: boolean; clearAnchoredText?: boolean }`
+- returns: `Note` — the updated row
+- errors: `NotFound` (note), `Db`, `Io` (re-export failure)
+
+COALESCE semantics: an absent field is left unchanged, so autosave can PATCH just the `body` without clobbering type/quote. Because absent means "unchanged", the `clearShortQuote` / `clearAnchoredText` booleans are the only way to NULL `short_quote` / `anchored_text` once set — the clears apply AFTER the COALESCE patch, even in the same call (CORE-1023). Both flags are **additive/optional** (a minor change — no version bump). Re-exports to the SAME stable file so the Markdown mirror updates rather than duplicates.
+
 #### `cmd_list_notes`
 - args: `{ bookId: string }`
 - returns: `Note[]` (newest first)
@@ -250,11 +263,11 @@ The call is fronted by a circuit breaker (3 failures / 60s window / 30s cool-dow
 - errors: `Ai` (URL refused or transport failure)
 
 #### `cmd_test_ai_connection`
-- args: none
+- args: `{ provider?: string; key?: string; baseUrl?: string }` — all optional; with none, the saved settings are probed
 - returns: `{ reachable: boolean; first_model_id: string | null; message: string }`
 - errors: `Ai` (validation error before the call)
 
-Deliberately bypasses the circuit breaker's `check()` — an operator clicking "Test connection" wants a real probe even when the breaker is Open. The outcome still feeds the breaker.
+`provider` + `key` test a configuration BEFORE saving it (onboarding); the key is never logged or returned. `baseUrl` is a draft for the Local arm so the LM Studio detect flow can probe an address **without persisting it** (CORE-1034) — the draft is loopback-validated exactly like the saved path. All three are **additive/optional** (minor — no version bump). Deliberately bypasses the circuit breaker's `check()` — an operator clicking "Test connection" wants a real probe even when the breaker is Open. The outcome still feeds the breaker.
 
 #### `cmd_save_ai_response_as_note`
 - args: `{ aiRequestId: string; noteType: string; body: string; locator: string; chapterLabel?: string; anchorStart?: string; anchorEnd?: string; anchoredText?: string; sessionId?: string }`
@@ -308,12 +321,13 @@ type SettingsDto = {
   ai_posture: string;        // "Local-only mode: ON" / "OFF"
   ai_base_url: string;
   ai_model: string;
-  ai_local_only: boolean;
   quote_policy: string;
   quote_warn_chars: number;
   ai_requests_retention_days: number;  // AI audit retention window (adr-001); 0 = keep forever
 };
 ```
+
+`ai_local_only` was removed from the DTO (CORE-1021): nothing consulted it — `ai_provider` is the authoritative gate. Strictly the removal of an unused field, recorded as a minor change; no version bump. The legacy settings-table key is still written for back-compat (`cmd_set_ai_settings`), it just no longer crosses the IPC surface.
 
 #### `cmd_set_export_path`
 - args: `{ path: string }`
@@ -346,7 +360,7 @@ Recommended startup pattern:
 ```ts
 import { invoke } from "@tauri-apps/api/core";
 
-const FRONTEND_EXPECTED_API_VERSION = 2;
+const FRONTEND_EXPECTED_API_VERSION = 5;
 
 async function checkBackend() {
   try {

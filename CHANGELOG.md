@@ -2,8 +2,48 @@
 
 All notable changes to Throughline are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver. The
-Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 3)
+Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
+
+## [Unreleased]
+
+The P3 "quality & polish" pass — no new features; the energy went into
+correctness, honesty, and deleting what earns nothing.
+
+### Changed
+
+- **Your reading day is your day.** Day boundaries — the plan's day counter,
+  streaks, pause/resume credit — now follow your Mac's local calendar day, never
+  the UTC date, so a section finished at 9pm counts for tonight (guard-tested so
+  it stays that way).
+- **Plainer, more honest words.** The cloud-consent dialog names the arrangement
+  you actually chose; the last plumbing words ("tokens", "endpoint", raw
+  locators) are gone from reader-visible copy; Throughline AI builds no longer
+  show the bring-your-own-key spend card.
+- **Quieter on disk.** Throughline no longer creates the `~/GBrain` export
+  folder until you first export a note, and its diagnostic log rolls daily,
+  keeping only 14 days.
+
+### Fixed
+
+- **Failures speak.** Note-save and import failures, interrupted AI answers, and
+  a failed book switch now say what happened and what to do next instead of
+  failing silently; the company "Test connection" really probes the service
+  instead of reporting a canned success.
+- **Sturdier plumbing.** Each database migration commits in its own transaction;
+  every AI provider gets its own circuit breaker, so one provider's outage can't
+  lock out the others; export-path validation is hardened; `.txt` imports are
+  capped at 100 MB; the LM Studio probe tests a draft address without
+  overwriting a custom one; "Let go" removes a purged note's exported Markdown
+  mirror along with the note.
+
+### Removed
+
+- Dead weight: two unreachable screens (the old forced AI chooser and the
+  early AI panel), the unused `ai_local_only` settings field, and test-only plan
+  helpers — deleted, with guard tests pinning them out. Pre-rename `rg.*`
+  preference keys migrate to `tl.*` once, so an existing reader's tutor consent
+  and reader preferences survive.
 
 ## [0.3.0] - 2026-06-09
 
