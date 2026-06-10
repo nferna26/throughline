@@ -5,6 +5,16 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.4.6] - 2026-06-10
+
+### Fixed
+
+- **The page holds the whole section again.** A long section no longer spills off
+  the bottom of the page onto the surrounding desk as you scroll — the page grows
+  to contain all of its text.
+- **The drop cap stays on real prose.** It no longer lands on an all-caps title or
+  a table-of-contents line; it opens the first true paragraph, as intended.
+
 ## [0.4.5] - 2026-06-10
 
 The reading page — the heart of the app — got the care it deserves.
