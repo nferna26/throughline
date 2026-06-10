@@ -558,6 +558,8 @@
 .tl-fuel.empty .fill { width: 8%; background: var(--tl-muted); }
 .tl-fuel-label { font-size: 13px; color: var(--tl-ink); }
 .tl-fuel.low .tl-fuel-label, .tl-fuel.empty .tl-fuel-label { color: var(--tl-muted); }
+/* Couldn't reach the credits check — neutral, no bar, never alarming. */
+.tl-fuel.unavailable .tl-fuel-label { color: var(--tl-muted); font-style: italic; }
 .tl-activate-lbl { display: block; font-size: 13px; color: var(--tl-muted); margin-bottom: var(--tl-2); }
 
 /* ── Book Setup Sheet ─────────────────────────────────────────────────── */
