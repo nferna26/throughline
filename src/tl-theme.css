@@ -759,8 +759,12 @@
    jumps. `--tl-margin-reserve` is set inline from the live panel width. */
 .tl-reader-body { display: flex; align-items: stretch; flex: 1; min-height: 0; background: var(--tl-desk); }
 .tl-reader-main {
+  /* A plain block scroll container — NOT a flex column. The sheet (.tl-readcol)
+     is a normal in-flow block so it grows to contain the whole section; a flex
+     column with the sheet's percentage min-height let long text overflow out the
+     bottom of the page onto the desk. */
   position: relative; flex: 1; min-width: 0; min-height: 0; overflow-y: auto;
-  background: var(--tl-desk); display: flex; flex-direction: column;
+  background: var(--tl-desk);
   transition: padding-right 160ms ease;
 }
 /* Closed: reserve the margin's width on the right so the sheet stays centered in
@@ -782,7 +786,10 @@
   border: 1px solid var(--tl-sheet-edge);
   border-radius: var(--tl-r-md);
   box-shadow: 0 1px 1px rgba(28,27,24,0.03), 0 14px 40px -28px rgba(28,27,24,0.28);
-  min-height: calc(100% - var(--tl-8));
+  /* Fill the desk so a short section's page still reaches the fold — subtract the
+     sheet's own top+bottom margin (2×--tl-7) exactly, so short pages don't carry a
+     spurious scroll and long pages simply grow past it. */
+  min-height: calc(100% - var(--tl-7) * 2);
 }
 [data-theme="dark"] .tl-reader-main .tl-readcol {
   box-shadow: 0 1px 1px rgba(0,0,0,0.25), 0 16px 44px -28px rgba(0,0,0,0.6);

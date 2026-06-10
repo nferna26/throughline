@@ -927,4 +927,19 @@ describe("firstProseDropCapOffset (drop cap lands on the first prose paragraph)"
     expect(firstProseDropCapOffset([], [])).toBeNull();
     expect(firstProseDropCapOffset([{ offset: 0, text: "TITLE" }], [{ kind: "h1", start: 0, end: 5 }])).toBeNull();
   });
+
+  // Regression (v0.4.5): a Gutenberg front-matter page whose title/byline/TOC the
+  // heading detector did NOT catch must still not get a drop cap on "WALDEN" — the
+  // cap belongs on the first real sentence, several blocks down.
+  it("skips an undetected all-caps title, byline, and table-of-contents row", () => {
+    const paras = [
+      { offset: 0, text: "WALDEN" }, // all caps, no heading range → must be skipped
+      { offset: 10, text: "and" },
+      { offset: 20, text: "by Henry David Thoreau" }, // byline: no sentence ending
+      { offset: 50, text: "Contents" }, // one-word label
+      { offset: 70, text: "Economy Where I Lived The Ponds Baker Farm Spring Conclusion" }, // TOC row: no ending punct
+      { offset: 140, text: "When I wrote the following pages, I lived alone in the woods." },
+    ];
+    expect(firstProseDropCapOffset(paras, [])).toBe(140);
+  });
 });

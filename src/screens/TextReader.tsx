@@ -1125,7 +1125,14 @@ export function firstProseDropCapOffset(
   for (const p of paragraphs) {
     if (p.pre) continue;
     if (blockRoleFor(p.offset, p.text.length, ranges)) continue; // heading / blockquote
-    if (!/[\p{L}\p{N}]/u.test(p.text)) continue; // no word char → not real prose
+    const t = p.text.trim();
+    // The drop cap marks the start of real reading, so it must land on a
+    // substantial prose SENTENCE — never a title, byline, label, all-caps line,
+    // or a table-of-contents row that the heading detector didn't catch. Three
+    // cheap signals separate prose from front-matter cruft:
+    if (!/\p{Ll}/u.test(t)) continue; // no lowercase → an ALL-CAPS title (e.g. "WALDEN")
+    if (!/\s/u.test(t)) continue; // single token → a one-word label / heading
+    if (!/[.!?"'”’)\]]$/u.test(t)) continue; // no sentence ending → a title / byline / TOC list
     return p.offset;
   }
   return null;
