@@ -231,8 +231,10 @@ export default function App() {
   async function switchBook(bookId: string) {
     try {
       await invoke("cmd_set_active_book", { bookId });
-    } catch (e: any) {
-      alert(`Could not switch book: ${e?.message ?? e}`);
+    } catch (e) {
+      // errorMessage turns any AppError shape into a human sentence — a
+      // message-less error must never surface as "[object Object]".
+      alert(`Could not switch book: ${errorMessage(e)}`);
       return;
     }
     await refreshToday();
@@ -248,8 +250,8 @@ export default function App() {
   async function newPlan(book: Book) {
     try {
       await invoke("cmd_start_new_plan", { bookId: book.id });
-    } catch (e: any) {
-      alert(`Could not start a new plan: ${e?.message ?? e}`);
+    } catch (e) {
+      alert(`Could not start a new plan: ${errorMessage(e)}`);
       return;
     }
     setView({ kind: "setup", book });
