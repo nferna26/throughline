@@ -49,7 +49,7 @@ pub fn cmd_extend_finish_date(
         .ok_or_else(|| AppError::not_found("plan", Some(book_id.clone())))?;
     let sections = list_sections(&conn, &book_id)?;
     let completed = list_completed_section_ids(&conn, &book_id)?;
-    let today = chrono::Utc::now().naive_utc().date();
+    let today = crate::plan::app_today();
     let recomputed = recovery::extend_finish_date(
         &plan,
         sections.len() as i64,

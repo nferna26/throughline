@@ -1,8 +1,18 @@
 use anyhow::Result;
-use chrono::{Duration, NaiveDate, Utc};
+use chrono::{Duration, Local, NaiveDate};
 use uuid::Uuid;
 
 use crate::models::{BookSection, FinishForecast, PaceState, ReadingPlan};
+
+/// The reader's *local* calendar day — the single seam for all "today" math
+/// (CORE-1014 / P3-16). Day boundaries (plan day index, streaks, finish-date
+/// checks) are reader-local: a section finished at 9pm in New York belongs to
+/// that evening, not to tomorrow's UTC date. Timestamps stored in the DB stay
+/// UTC/RFC3339 — only day *boundaries* resolve through here. The lib.rs
+/// guardrail test pins every day-boundary call site to this function.
+pub fn app_today() -> NaiveDate {
+    Local::now().date_naive()
+}
 
 pub const DEFAULT_DAYS: i64 = 30;
 /// Days after activation before a slip can surface (the first reading window is
@@ -12,7 +22,7 @@ pub const GRACE_DAYS: i64 = 1;
 pub const MAX_SECTIONS_PER_DAY: f64 = 6.0;
 
 pub fn build_default_plan(book_id: &str, sections: &[BookSection]) -> ReadingPlan {
-    let start = Utc::now().naive_utc().date();
+    let start = app_today();
     let finish = start + Duration::days(DEFAULT_DAYS - 1);
     let assignable = sections.iter().filter(|s| s.assignable).count() as i64;
     let daily_target = if assignable == 0 {
@@ -74,8 +84,8 @@ pub fn day_index(plan: &ReadingPlan, today: NaiveDate) -> i64 {
 }
 
 pub fn total_days(plan: &ReadingPlan) -> i64 {
-    let start = NaiveDate::parse_from_str(&plan.start_date, "%Y-%m-%d")
-        .unwrap_or_else(|_| Utc::now().naive_utc().date());
+    let start =
+        NaiveDate::parse_from_str(&plan.start_date, "%Y-%m-%d").unwrap_or_else(|_| app_today());
     let end = NaiveDate::parse_from_str(&plan.target_finish_date, "%Y-%m-%d").unwrap_or(start);
     (end.signed_duration_since(start).num_days() + 1).max(1)
 }
@@ -212,7 +222,7 @@ pub fn compute(
     sections: &[BookSection],
     completed_section_ids: &[String],
 ) -> Result<PlanComputed> {
-    let today = Utc::now().naive_utc().date();
+    let today = app_today();
     let day_idx = day_index(plan, today);
     let total = total_days(plan);
 
@@ -313,6 +323,19 @@ mod tests {
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    /// CORE-1014: the seam. `app_today()` IS the reader's local calendar day —
+    /// sampled twice around the call so a midnight rollover can't flake.
+    #[test]
+    fn app_today_is_the_local_day() {
+        let before = chrono::Local::now().date_naive();
+        let today = app_today();
+        let after = chrono::Local::now().date_naive();
+        assert!(
+            today == before || today == after,
+            "app_today() must be the local day, got {today} (local was {before}/{after})"
+        );
     }
 
     #[test]

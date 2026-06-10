@@ -665,4 +665,87 @@ mod tests {
             .unwrap();
         assert_eq!(note_count_after, 1);
     }
+
+    /// Every backend `.rs` file under `src/`, with `//`-style comment lines
+    /// stripped (same idiom as `no_unaudited_network_plugins`) so a doc comment
+    /// can name a banned pattern without tripping the source scans below.
+    fn backend_sources_without_comments() -> Vec<(std::path::PathBuf, String)> {
+        let src_dir = ["src", "src-tauri/src"]
+            .iter()
+            .find(|p| std::path::Path::new(p).join("lib.rs").exists())
+            .copied()
+            .expect("src dir not found from any working directory");
+
+        fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).expect("read src dir") {
+                let p = e.expect("dir entry").path();
+                if p.is_dir() {
+                    collect(&p, out);
+                } else if p.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        collect(std::path::Path::new(src_dir), &mut files);
+        assert!(!files.is_empty(), "source scan found no .rs files");
+
+        files
+            .into_iter()
+            .map(|p| {
+                let raw = std::fs::read_to_string(&p).expect("read source file");
+                let code: String = raw
+                    .lines()
+                    .map(|l| {
+                        let t = l.trim_start();
+                        if t.starts_with("//") || t.starts_with("///") || t.starts_with("//!") {
+                            ""
+                        } else {
+                            l
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (p, code)
+            })
+            .collect()
+    }
+
+    /// **HARD GUARDRAIL — CORE-1014 / P3-16.** All day-boundary "today" math
+    /// must go through `plan::app_today()` — the reader's LOCAL calendar day —
+    /// never the UTC day. A US evening reader finishing tonight's section at
+    /// 9pm ET belongs to tonight, not to tomorrow's UTC date. Banned shapes:
+    /// the two chrono UTC-day spellings (`.naive_utc()` + `.date()`,
+    /// `Utc::now()` + `.date_naive()`) and the SQL day boundary `DATE` of
+    /// `'now'` (uppercase, the codebase's day-comparison convention — streaks
+    /// must compare against a Rust-supplied local date param instead).
+    /// Lowercase `datetime('now')` timestamp arithmetic stays legitimate and
+    /// is deliberately not matched.
+    #[test]
+    fn day_boundaries_use_local_app_today() {
+        // Needles assembled at runtime so this test's own source never matches.
+        let rust_utc_day = format!("{}{}", "naive_utc().", "date()");
+        let rust_utc_day_2 = format!("{}{}", "Utc::now().", "date_naive()");
+        let sql_utc_day = format!("{}{}", "DATE('", "now'");
+
+        let mut violations: Vec<String> = Vec::new();
+        for (path, code) in backend_sources_without_comments() {
+            for needle in [&rust_utc_day, &rust_utc_day_2, &sql_utc_day] {
+                if code.contains(needle.as_str()) {
+                    violations.push(format!(
+                        "{}: contains `{}` — day boundaries must use plan::app_today() \
+                         (pass the local date into SQL as a param)",
+                        path.display(),
+                        needle
+                    ));
+                }
+            }
+        }
+        if !violations.is_empty() {
+            panic!(
+                "UTC day-boundary math found (CORE-1014 / P3-16):\n  - {}",
+                violations.join("\n  - ")
+            );
+        }
+    }
 }

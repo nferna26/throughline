@@ -121,7 +121,7 @@ pub fn cmd_configure_plan(
                 "invalid finish date: {target_finish_date:?} (expected YYYY-MM-DD)"
             ))
         })?;
-    let today = chrono::Utc::now().naive_utc().date();
+    let today = plan::app_today();
     if finish < today {
         return Err(AppError::validation(
             "finish date cannot be in the past".to_string(),
@@ -235,7 +235,7 @@ pub(crate) fn today_card(conn: &Connection) -> Result<Option<TodayCard>, AppErro
         .is_some_and(|f| matches!(f.state.as_str(), "needs_rebalance" | "plan_unrealistic"));
     let days_behind = computed.forecast.as_ref().map_or(0, |f| f.days_late).max(0);
     let recovery = if needs_recovery {
-        let today = chrono::Utc::now().naive_utc().date();
+        let today = plan::app_today();
         let finish = chrono::NaiveDate::parse_from_str(&plan.target_finish_date, "%Y-%m-%d")
             .unwrap_or(today);
         Some(recovery::build_bundle(days_behind.max(1), today, finish))
@@ -282,7 +282,7 @@ fn plan_less_card(conn: &Connection, book: Book) -> Result<TodayCard, AppError> 
     let streak = compute_streak(conn, &book.id)?;
     let session_minutes = crate::settings::get_reading_rhythm_minutes(conn);
     let memory = today_memory(conn, &book.id)?;
-    let today = chrono::Utc::now().naive_utc().date().to_string();
+    let today = plan::app_today().to_string();
     let placeholder = ReadingPlan {
         id: String::new(),
         book_id: book.id.clone(),
@@ -662,15 +662,19 @@ fn today_memory(
 }
 
 fn compute_streak(conn: &Connection, book_id: &str) -> rusqlite::Result<models::StreakSummary> {
+    // Streak window = the last 7 *local* days (CORE-1014). `started_at` stays a
+    // UTC timestamp in the DB; the boundary date is computed in Rust via
+    // `plan::app_today()` and passed as a param — SQL's own "now" is the UTC day.
+    let week_start = (plan::app_today() - chrono::Duration::days(6)).to_string();
     let mut stmt = conn.prepare(
         "SELECT DATE(started_at) AS d, COALESCE(SUM(minutes), 0)
          FROM reading_sessions
-         WHERE book_id = ?1 AND DATE(started_at) >= DATE('now', '-6 days')
+         WHERE book_id = ?1 AND DATE(started_at) >= ?2
          GROUP BY d",
     )?;
     let mut days = 0i64;
     let mut minutes = 0i64;
-    let mut rows = stmt.query(params![book_id])?;
+    let mut rows = stmt.query(params![book_id, week_start])?;
     while let Some(row) = rows.next()? {
         days += 1;
         minutes += row.get::<_, i64>(1)?;
