@@ -102,6 +102,20 @@ impl AiProvider {
             _ => None,
         }
     }
+    /// Human-facing brand name for reader-visible posture copy (FT-22) — the
+    /// product name a reader recognises, never a DNS host. Derived from the same
+    /// authoritative enum as `remote_host`, so it can never disagree with the
+    /// real send target. Mirrors the frontend `AI_PROVIDERS` labels.
+    pub fn display_label(self) -> &'static str {
+        match self {
+            AiProvider::Company => "Throughline AI",
+            AiProvider::OpenAi => "OpenAI",
+            AiProvider::Anthropic => "Anthropic",
+            AiProvider::Codex => "ChatGPT",
+            AiProvider::Local => "the model on this Mac",
+            AiProvider::Disabled | AiProvider::Unset => "",
+        }
+    }
 }
 /// Default length of a planned reading sitting, in minutes (the "Reading rhythm"
 /// the Book Setup Sheet defaults to). Surfaced as "Start N-minute session".
@@ -113,8 +127,8 @@ pub const DEFAULT_MARGIN_HELP: &str = "guided";
 /// The recognised margin-help levels, least → most present.
 pub const MARGIN_HELP_LEVELS: [&str; 3] = ["quiet", "guided", "deep_study"];
 pub const QUOTE_WARN_TEXT: &str =
-    "Fair use has no fixed safe word count. The default posture in Throughline is short quotes \
-     for private study only. Quotes longer than ~300 characters are warned, not blocked.";
+    "Notes keep quotes short — past about 300 characters Throughline gives you a gentle nudge, \
+     and never stops you.";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SettingsDto {
@@ -450,9 +464,10 @@ fn key_present_seeded(conn: &Connection, flag_key: &str, probe: impl FnOnce() ->
 /// never disagree with the real send target. A cloud provider names the host it
 /// sends to; everything else (local, unset, or explicitly disabled) is on-device.
 pub fn ai_posture_label(provider: AiProvider) -> String {
-    match provider.remote_host() {
-        Some(host) => format!("Sends your selection to {host}"),
-        None => "On-device only".to_string(),
+    if provider.is_remote() {
+        format!("Sends your selection to {}", provider.display_label())
+    } else {
+        "On-device only".to_string()
     }
 }
 
@@ -693,19 +708,39 @@ mod tests {
                 "{p:?} must read on-device"
             );
         }
-        // Cloud providers name the exact host the selection is sent to.
+        // Cloud providers name the PROVIDER (a reader-recognisable brand),
+        // never a DNS host (FT-22).
+        assert_eq!(
+            ai_posture_label(AiProvider::Company),
+            "Sends your selection to Throughline AI"
+        );
         assert_eq!(
             ai_posture_label(AiProvider::OpenAi),
-            "Sends your selection to api.openai.com"
+            "Sends your selection to OpenAI"
         );
         assert_eq!(
             ai_posture_label(AiProvider::Anthropic),
-            "Sends your selection to api.anthropic.com"
+            "Sends your selection to Anthropic"
         );
         assert_eq!(
             ai_posture_label(AiProvider::Codex),
-            "Sends your selection to chatgpt.com"
+            "Sends your selection to ChatGPT"
         );
+        // FT-22: no posture label may contain a dot-separated hostname.
+        let host_re = regex_lite_hostname;
+        for p in [
+            AiProvider::Company,
+            AiProvider::OpenAi,
+            AiProvider::Anthropic,
+            AiProvider::Codex,
+            AiProvider::Local,
+        ] {
+            let label = ai_posture_label(p);
+            assert!(
+                !host_re(&label),
+                "{p:?} posture label leaks a hostname: {label:?}"
+            );
+        }
         // Regression: a remote provider must never read on-device, regardless of
         // any lingering stale `local_only` flag — the label follows the provider.
         for p in [AiProvider::OpenAi, AiProvider::Anthropic, AiProvider::Codex] {
@@ -716,6 +751,37 @@ mod tests {
             );
             assert!(p.remote_host().is_some(), "{p:?} must expose a remote host");
         }
+    }
+
+    /// Tiny dependency-free "does this string contain a dotted hostname like
+    /// `foo.bar`" check: a lowercase-letter run, a dot, another lowercase-letter
+    /// run. Good enough to catch a leaked `api.openai.com` in reader copy.
+    fn regex_lite_hostname(s: &str) -> bool {
+        let b = s.as_bytes();
+        for i in 1..b.len().saturating_sub(1) {
+            if b[i] == b'.' && b[i - 1].is_ascii_lowercase() && b[i + 1].is_ascii_lowercase() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// FT-36: the quote-safety copy is reader-voiced, not fair-use legalese —
+    /// but still conveys the binding behaviour (a nudge past ~300 chars, never a
+    /// block). Copy only; the threshold/never-block behaviour is unchanged.
+    #[test]
+    fn quote_warn_text_is_plain_not_legalese() {
+        let t = QUOTE_WARN_TEXT.to_lowercase();
+        assert!(!t.contains("fair use"), "quote copy still says 'fair use'");
+        assert!(!t.contains("posture"), "quote copy still says 'posture'");
+        assert!(
+            t.contains("300"),
+            "quote copy must still name the ~300 threshold"
+        );
+        assert!(
+            t.contains("never"),
+            "quote copy must affirm it never blocks"
+        );
     }
 
     /// CORE-1021: the `ai_local_only` IPC field is dead — nothing consults it

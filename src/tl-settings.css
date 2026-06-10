@@ -1,0 +1,788 @@
+/* ============================================================
+   THROUGHLINE — Settings screen (4-section redesign)
+   Adapted from the design handoff (reference/tl-settings.css).
+   All styles scoped under .tl-settings2 so they never collide
+   with the legacy Settings styles still in tl-theme.css.
+   Tokens map to the app's existing --tl-* where they exist; the
+   handoff-only tokens are defined locally per theme below.
+   ============================================================ */
+
+.tl-settings2 {
+  /* Map handoff tokens onto the app's existing palette. The app already
+     swaps --tl-* per [data-theme]; these aliases inherit that swap. */
+  --bg: var(--tl-bg);
+  --panel: var(--tl-panel);
+  --ink: var(--tl-ink);
+  --muted: var(--tl-muted);
+  --line: var(--tl-line);
+  --accent: var(--tl-accent);
+  --accent-text: var(--tl-accent);
+  --accent-soft: var(--tl-accent-soft);
+  --accent-line: var(--tl-accent-line);
+  --on-accent: var(--tl-accent-ink);
+  --warn: var(--tl-warn);
+  --warn-soft: var(--tl-warn-soft);
+  --alert: var(--tl-alert);
+
+  /* Handoff tokens with no direct --tl-* equivalent — light values. */
+  --panel-inset: #faf8f2;
+  --ink-soft: #3a382f;
+  --faint: #908b82;
+  --line-strong: #ddd6c8;
+  --meter-track: #e8e3d8;
+  --chip: #f3f0e8;
+  --shadow-card: 0 1px 2px rgba(28, 24, 12, 0.04), 0 0 0 1px var(--line);
+
+  font-family: var(--tl-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+[data-theme="dark"] .tl-settings2 {
+  --panel-inset: #1f232a;
+  --ink-soft: #cdcbc4;
+  --faint: #777167;
+  --line-strong: #343943;
+  --meter-track: #2a2e35;
+  --chip: #20242b;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--line);
+}
+
+/* ---- Layout shell -------------------------------------------------- */
+.tl-settings2 .col2 {
+  max-width: 660px;
+  margin: 0 auto;
+  padding: 8px 32px 56px;
+}
+.tl-settings2 .page-title {
+  font-family: var(--tl-serif);
+  font-weight: 500;
+  font-size: 30px;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  margin: 0 0 4px;
+}
+.tl-settings2 .page-sub {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0 0 32px;
+}
+
+/* ---- Section scaffold ---------------------------------------------- */
+.tl-settings2 .section {
+  margin-bottom: 36px;
+}
+.tl-settings2 .section-h {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 12px;
+  padding-left: 2px;
+}
+.tl-settings2 .card {
+  background: var(--panel);
+  border-radius: 13px;
+  box-shadow: var(--shadow-card);
+}
+.tl-settings2 .card + .card {
+  margin-top: 14px;
+}
+
+/* a row inside a card */
+.tl-settings2 .row {
+  padding: 18px 20px;
+}
+.tl-settings2 .row + .row {
+  border-top: 1px solid var(--line);
+}
+.tl-settings2 .row-flex {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  justify-content: space-between;
+}
+.tl-settings2 .row-main {
+  min-width: 0;
+}
+.tl-settings2 .row-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 4px;
+}
+.tl-settings2 .row-desc {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 0;
+  max-width: 46ch;
+}
+.tl-settings2 .row-control {
+  flex: none;
+}
+
+/* ---- Inline status message ----------------------------------------- */
+.tl-settings2 .set-msg {
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+.tl-settings2 .set-msg.ok {
+  color: var(--accent-text);
+}
+.tl-settings2 .set-msg.err {
+  color: var(--alert);
+}
+
+/* ============================================================
+   PRIVACY — one calm statement (FT-21)
+   ============================================================ */
+.tl-settings2 .trust {
+  padding: 22px 22px 20px;
+}
+.tl-settings2 .trust-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.tl-settings2 .trust-head .shield {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  flex: none;
+}
+.tl-settings2 .trust-head h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+.tl-settings2 .trust-body {
+  font-size: 13.5px;
+  line-height: 1.62;
+  color: var(--ink-soft);
+  margin: 0;
+}
+.tl-settings2 .trust-points {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.tl-settings2 .trust-points li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.tl-settings2 .trust-points li svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent-text);
+}
+.tl-settings2 .trust-mode {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.tl-settings2 .trust-mode svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent-text);
+}
+.tl-settings2 .trust-mode b {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+/* ============================================================
+   TOGGLE (role=switch)
+   ============================================================ */
+.tl-settings2 .toggle {
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  position: relative;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  transition: background 160ms ease;
+  flex: none;
+}
+.tl-settings2 .toggle::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 160ms ease;
+}
+.tl-settings2 .toggle[aria-checked="true"] {
+  background: var(--accent);
+}
+.tl-settings2 .toggle[aria-checked="true"]::after {
+  transform: translateX(18px);
+}
+[data-theme="dark"] .tl-settings2 .toggle[aria-checked="true"]::after {
+  background: var(--bg);
+}
+.tl-settings2 .toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   "WHERE ANSWERS COME FROM" — paid-primary statement
+   ============================================================ */
+.tl-settings2 .primary-note {
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.tl-settings2 .primary-note svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent-text);
+}
+
+/* Quiet fallback expander "Use your own AI instead" */
+.tl-settings2 details.byo {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.tl-settings2 details.byo > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-text);
+  border-radius: 6px;
+  padding: 4px 2px;
+}
+.tl-settings2 details.byo > summary::-webkit-details-marker {
+  display: none;
+}
+.tl-settings2 details.byo > summary .chev {
+  transition: transform 180ms ease;
+}
+.tl-settings2 details.byo[open] > summary .chev {
+  transform: rotate(90deg);
+}
+.tl-settings2 details.byo > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.tl-settings2 .byo-body {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Segmented control for the fallback modes (own key / on this Mac) */
+.tl-settings2 .segmented {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  background: var(--panel-inset);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 5px;
+}
+.tl-settings2 .seg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 8px 11px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+  text-align: center;
+}
+.tl-settings2 .seg:hover {
+  color: var(--ink-soft);
+}
+.tl-settings2 .seg[aria-pressed="true"] {
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 1px var(--line-strong);
+}
+.tl-settings2 .seg[aria-pressed="true"] svg {
+  color: var(--accent-text);
+}
+.tl-settings2 .seg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Fields inside the BYO body */
+.tl-settings2 .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tl-settings2 .field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.tl-settings2 .field-desc {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 0;
+  max-width: 48ch;
+}
+.tl-settings2 .field-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.tl-settings2 .input,
+.tl-settings2 .select {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--panel-inset);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-width: 0;
+}
+.tl-settings2 .input {
+  flex: 1 1 auto;
+}
+.tl-settings2 .input:focus-visible,
+.tl-settings2 .select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.tl-settings2 .byo-warn {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--warn);
+  margin: 0;
+}
+.tl-settings2 .byo-warn svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* ============================================================
+   ALLOWANCE METER (FT-11)
+   ============================================================ */
+.tl-settings2 .allowance {
+  margin: 16px 20px 4px;
+  padding: 16px;
+  background: var(--accent-soft);
+  border-radius: 11px;
+  border: 1px solid var(--accent-line);
+}
+.tl-settings2 .allowance.low {
+  background: var(--warn-soft);
+  border-color: var(--warn);
+}
+.tl-settings2 .allowance-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 11px;
+}
+.tl-settings2 .allowance-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.tl-settings2 .allowance-label svg {
+  color: var(--accent-text);
+}
+.tl-settings2 .allowance.low .allowance-label svg {
+  color: var(--warn);
+}
+.tl-settings2 .allowance-state {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-text);
+}
+.tl-settings2 .allowance.low .allowance-state {
+  color: var(--warn);
+}
+.tl-settings2 .meter {
+  height: 9px;
+  border-radius: 999px;
+  background: var(--meter-track);
+  overflow: hidden;
+}
+.tl-settings2 .meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.tl-settings2 .allowance.low .meter-fill {
+  background: var(--warn);
+}
+.tl-settings2 .allowance-foot {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ============================================================
+   AUDIT — "what's left this Mac" (FT-12)
+   ============================================================ */
+.tl-settings2 .audit-summary {
+  padding: 20px;
+}
+.tl-settings2 .audit-lead {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.tl-settings2 .audit-lead .ico {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.tl-settings2 .audit-lead h3 {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 4px;
+  letter-spacing: -0.005em;
+}
+.tl-settings2 .audit-lead p {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+  margin: 0;
+  max-width: 48ch;
+}
+
+.tl-settings2 details.audit {
+  margin-top: 4px;
+}
+.tl-settings2 details.audit > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 0 42px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-text);
+  border-radius: 6px;
+  padding: 4px 2px;
+}
+.tl-settings2 details.audit > summary::-webkit-details-marker {
+  display: none;
+}
+.tl-settings2 details.audit > summary .chev {
+  transition: transform 180ms ease;
+}
+.tl-settings2 details.audit[open] > summary .chev {
+  transform: rotate(90deg);
+}
+.tl-settings2 details.audit > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tl-settings2 .log {
+  margin: 14px 0 0;
+  border-top: 1px solid var(--line);
+}
+.tl-settings2 .log-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px;
+  padding: 12px 20px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.tl-settings2 .log-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.tl-settings2 .log-group .ct {
+  font-weight: 400;
+  color: var(--faint);
+}
+.tl-settings2 .log-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px;
+  align-items: center;
+  padding: 9px 20px;
+  border-top: 1px solid var(--line);
+}
+.tl-settings2 .log-row:first-of-type {
+  border-top: none;
+}
+.tl-settings2 .log-what {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.tl-settings2 .log-what .when {
+  color: var(--faint);
+}
+.tl-settings2 .log-what .saved {
+  color: var(--accent-text);
+}
+.tl-settings2 .log-sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tl-settings2 .log-sent svg {
+  color: var(--faint);
+}
+.tl-settings2 .log-local {
+  color: var(--muted);
+}
+.tl-settings2 .log-more {
+  padding: 11px 20px;
+  font-size: 12.5px;
+  color: var(--faint);
+}
+.tl-settings2 .audit-empty {
+  margin: 14px 0 0 42px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.tl-settings2 .audit-controls {
+  border-top: 1px solid var(--line);
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.tl-settings2 .retain {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.tl-settings2 .stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel-inset);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.tl-settings2 .stepper .num {
+  min-width: 1.6em;
+  text-align: center;
+}
+.tl-settings2 .stepper .arrows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tl-settings2 .stepper .arrows button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  line-height: 0;
+}
+.tl-settings2 .stepper .arrows button:hover {
+  color: var(--ink);
+}
+.tl-settings2 .stepper .arrows button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+/* ============================================================
+   BUTTONS / CHIPS / LINKS
+   ============================================================ */
+.tl-settings2 .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--ink);
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.tl-settings2 .btn:hover {
+  border-color: var(--muted);
+}
+.tl-settings2 .btn svg {
+  color: var(--muted);
+}
+.tl-settings2 .btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.tl-settings2 .btn-accent {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: transparent;
+}
+.tl-settings2 .btn-accent svg {
+  color: var(--on-accent);
+}
+.tl-settings2 .btn-accent:hover {
+  filter: brightness(1.06);
+  border-color: transparent;
+}
+.tl-settings2 .btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tl-settings2 .path-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel-inset);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-family: inherit;
+  max-width: 280px;
+}
+.tl-settings2 .path-chip svg {
+  color: var(--muted);
+  flex: none;
+}
+.tl-settings2 .path-chip .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-settings2 .path-chip:hover {
+  border-color: var(--muted);
+}
+.tl-settings2 .path-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tl-settings2 .quiet-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.tl-settings2 .quiet-line svg {
+  color: var(--accent-text);
+  flex: none;
+}
+
+.tl-settings2 .meta {
+  font-size: 12.5px;
+  color: var(--faint);
+}
+
+/* About — version row */
+.tl-settings2 .about-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.tl-settings2 .about-control {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.tl-settings2 .footer-meta {
+  text-align: center;
+  margin-top: 8px;
+}
