@@ -368,8 +368,8 @@ export default function Settings() {
     if (!credits || credits.status !== "active") return null;
     const frac = Math.max(0, Math.min(1, credits.remaining_fraction));
     // "Running low" once genuinely low; otherwise calm "Plenty left". The
-    // boundary mirrors the in-margin fuel gauge (CompanyPanel.fuel: >0.33 =
-    // plenty) so the two surfaces never disagree about how much is left.
+    // boundary (>0.33 = plenty) mirrors the in-margin fuel gauge so the two
+    // surfaces never disagree about how much is left.
     const low = frac <= 0.33;
     return { pct: Math.round(frac * 100), low, state: low ? "Running low" : "Plenty left" };
   }, [credits]);
