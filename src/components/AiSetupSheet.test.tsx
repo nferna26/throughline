@@ -175,6 +175,61 @@ describe("AiSetupSheet — CONFIGURED-BUT-UNAVAILABLE (Tutor paused)", () => {
   });
 });
 
+describe("AiSetupSheet — ALREADY BOUGHT (activation door, CORE-1008)", () => {
+  it("not_connected shows a quiet 'Already bought' door alongside the free paths", async () => {
+    render(sheet("not_connected"));
+    expect(await screen.findByText(/Tutor not connected/i)).toBeInTheDocument();
+    // The activation door is present without hiding the free paths.
+    expect(screen.getByRole("button", { name: /already bought/i })).toBeInTheDocument();
+    expect(screen.getByText(/Paste API key & ask/i)).toBeInTheDocument();
+    expect(screen.getByText(/Use LM Studio on this Mac/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Copy prompt$/i)).toBeInTheDocument();
+  });
+
+  it("entering a code and confirming activates via cmd_activate_company, then hands back to re-fire the lens (no Settings detour)", async () => {
+    const onConnected = vi.fn();
+    render(sheet("not_connected", onConnected));
+    fireEvent.click(await screen.findByRole("button", { name: /already bought/i }));
+    fireEvent.change(await screen.findByLabelText(/activation code/i), {
+      target: { value: "XXXX-YYYY-ZZZZ" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Activate$/ }));
+    // Exact invoke arg casing matches CompanyPanel's call.
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("cmd_activate_company", {
+        activationToken: "XXXX-YYYY-ZZZZ",
+      }),
+    );
+    await waitFor(() => expect(onConnected).toHaveBeenCalledWith("company"));
+  });
+
+  it("a rejected code shows the backend's message and the other doors stay open", async () => {
+    mocks.invoke.mockImplementation((cmd: string) => {
+      if (cmd === "cmd_get_settings") return Promise.resolve({ ai_codex_creds_present: false });
+      if (cmd === "cmd_activate_company")
+        return Promise.reject({
+          message: "That activation code is invalid, expired, or already used.",
+        });
+      return Promise.resolve({});
+    });
+    const onConnected = vi.fn();
+    render(sheet("not_connected", onConnected));
+    fireEvent.click(await screen.findByRole("button", { name: /already bought/i }));
+    fireEvent.change(await screen.findByLabelText(/activation code/i), {
+      target: { value: "BAD-CODE" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Activate$/ }));
+    expect(
+      await screen.findByText(/That activation code is invalid, expired, or already used\./i),
+    ).toBeInTheDocument();
+    expect(onConnected).not.toHaveBeenCalled();
+    // Recoverable: the free paths are still right there.
+    expect(screen.getByText(/Paste API key & ask/i)).toBeInTheDocument();
+    expect(screen.getByText(/Use LM Studio on this Mac/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Copy prompt$/i)).toBeInTheDocument();
+  });
+});
+
 describe("AiSetupSheet — dignified fallback (copyable prompt)", () => {
   it("builds a reader-facing prompt via the network-free preview command, copies it, and shows the paste hint", async () => {
     render(sheet("not_connected"));
