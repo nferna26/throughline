@@ -446,6 +446,68 @@ mod tests {
         }
     }
 
+    /// **HARD GUARDRAIL — CORE-1011 / P2-13.** AGENTS.md is read by future agent
+    /// sessions (the codex/* workflow). Since the AI pivot, CLAUDE.md is the
+    /// binding contract: provider-authoritative selection, consent-gated cloud,
+    /// Local hardwired to loopback, briefings session-cached and non-persistent
+    /// unless saved. AGENTS.md must defer to it and must not re-teach the dead
+    /// pre-pivot posture — otherwise agents will enforce dead rules or "fix"
+    /// live cloud tutoring as a violation.
+    #[test]
+    fn agents_md_defers_to_claude_md() {
+        let raw = std::fs::read_to_string("../AGENTS.md")
+            .or_else(|_| std::fs::read_to_string("AGENTS.md"))
+            .expect("AGENTS.md not found");
+        // Strip markdown emphasis so `**cached**` can't hide a phrase from the scan.
+        let agents = raw.replace('*', "");
+
+        let mut violations: Vec<String> = Vec::new();
+
+        for stale in [
+            "never calls a remote endpoint by default",
+            "remote endpoints are refused while local-only is ON",
+        ] {
+            if agents.contains(stale) {
+                violations.push(format!(
+                    "stale pre-pivot posture still present: `{}` — cloud tutoring is a shipped, consent-gated feature",
+                    stale
+                ));
+            }
+        }
+
+        if !agents.contains("CLAUDE.md wins") {
+            violations.push(
+                "missing an explicit precedence line naming CLAUDE.md as the winner \
+                 (e.g. \"CLAUDE.md wins wherever this file disagrees\")"
+                    .to_string(),
+            );
+        }
+
+        // A cache *requirement* is only acceptable with a session-scope qualifier
+        // nearby (counsel posture: non-persistent unless saved).
+        let lower = agents.to_lowercase();
+        for line in lower.lines() {
+            let mut rest = line;
+            while let Some(pos) = rest.find("must be cached") {
+                let after: String = rest[pos..].chars().take(100).collect();
+                if !after.contains("session") {
+                    violations.push(format!(
+                        "requires briefing caching without a session-scope qualifier: `{}`",
+                        after.trim()
+                    ));
+                }
+                rest = &rest[pos + "must be cached".len()..];
+            }
+        }
+
+        if !violations.is_empty() {
+            panic!(
+                "AGENTS.md must defer to CLAUDE.md (CORE-1011 / P2-13):\n  - {}",
+                violations.join("\n  - ")
+            );
+        }
+    }
+
     /// **CRITICAL — Shot 4.** validate_base_url MUST reject non-loopback URLs
     /// when local-only is ON, and MUST allow them when local-only is OFF.
     #[test]
