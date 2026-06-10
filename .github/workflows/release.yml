@@ -69,11 +69,13 @@ jobs:
             **Install:** open the `.dmg` and drag **Throughline** into your Applications folder.
 
             Runs on macOS 11+ (Apple Silicon and Intel). See CHANGELOG.md for what changed.
-          # Published as a DRAFT so you can review before it goes live. The in-app
-          # updater only sees PUBLISHED releases (the endpoint resolves to
-          # /releases/latest) — publishing this draft is what activates the update
-          # for existing users. See docs/DISTRIBUTION.md.
-          releaseDraft: true
+          # PUBLISHED on tag, never a draft. The in-app updater only sees
+          # published releases (the endpoint resolves to /releases/latest), and
+          # a draft left unpublished strands every shipped reader on a 404 —
+          # which is exactly what happened for v0.1.0–v0.4.0 (CORE-1073).
+          # Review happens BEFORE tagging; pushing the tag is the release.
+          # See docs/DISTRIBUTION.md.
+          releaseDraft: false
           prerelease: false
           args: --target universal-apple-darwin
 
@@ -83,7 +85,7 @@ jobs:
       # CONTAINER. A website download arrives quarantined, and an un-notarized dmg
       # triggers "can't be opened because Apple cannot check it for malicious
       # software" on first double-click. So we notarize + staple the dmg here and
-      # replace the asset on the draft release. Verified necessary: spctl reports
+      # replace the asset on the release. Verified necessary: spctl reports
       # the un-notarized dmg as "rejected, source=Unnotarized Developer ID".
       # Auto-skips if the Apple secrets aren't set (the unsigned fallback build).
       - name: Notarize + staple the .dmg (website download must pass Gatekeeper)
@@ -106,6 +108,6 @@ jobs:
             --wait
           xcrun stapler staple "$DMG"
           xcrun stapler validate "$DMG"
-          echo "Re-uploading the stapled .dmg over the draft-release asset"
+          echo "Re-uploading the stapled .dmg over the release asset"
           gh release upload "${{ github.ref_name }}" "$DMG" --clobber -R "${{ github.repository }}"
           echo "✓ .dmg notarized, stapled, re-uploaded"

@@ -34,9 +34,11 @@ now builds, signs, and publishes everything below automatically on a `v*` tag �
 including the updater signing env (`TAURI_SIGNING_PRIVATE_KEY` /
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). The full website-distribution pipeline
 (secrets, hosting, cutting a release) lives in
-[`DISTRIBUTION.md`](./DISTRIBUTION.md). The updater stays inert until a release
-is **published** (drafts don't resolve to `/releases/latest`). Each release
-publishes, to the GitHub Releases of the repo the `endpoints` URL points at:
+[`DISTRIBUTION.md`](./DISTRIBUTION.md). The workflow **publishes the release as
+part of the tag build** — review happens before tagging, and once the workflow
+goes green, `/releases/latest` resolves and every installed app's *Check for
+updates* sees it. Each release publishes, to the GitHub Releases of the repo
+the `endpoints` URL points at:
 
 1. The signed + notarized `.app` (you already build this in CI — see
    [`SIGNING.md`](./SIGNING.md)).
@@ -70,9 +72,9 @@ wired; you just set the matching **repo secrets**:
 
 - **Endpoint URL.** `plugins.updater.endpoints` points at
   `https://github.com/nferna26/throughline/releases/latest/download/latest.json`.
-  The repo has been renamed to `throughline`, so this now resolves — the
-  `latest/download/latest.json` path 404s only until the first release is
-  **published** (drafts don't count).
+  This resolves as long as the latest tagged release went green — the release
+  workflow publishes on tag, and the post-release check in
+  [`DISTRIBUTION.md`](./DISTRIBUTION.md) (curl must print `200`) confirms it.
 - **`version`** in `tauri.conf.json` must increase for each release, and
   `latest.json`'s `version` must be greater than the installed app's for the
   updater to offer it.
