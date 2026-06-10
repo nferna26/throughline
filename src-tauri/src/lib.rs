@@ -4,7 +4,7 @@
 //!
 //!   - `paths`, `db`, `migrations`, `error`, `log`            — primitives
 //!   - `models`                                               — DB row structs
-//!   - `import`, `import_epub`, `epub_classify`               — book ingestion
+//!   - `import`, `import_epub`, `epub_classify`, `book_structure` — book ingestion
 //!   - `plan`, `recovery`                                     — scheduling logic
 //!   - `ai_stub`, `ai_client`                                 — AI surface
 //!   - `export`, `settings`                                   — durable artifacts + user config
@@ -28,6 +28,7 @@ pub mod ai_providers;
 pub mod ai_retention;
 pub mod ai_stub;
 pub mod bin_guardrail;
+pub mod book_structure;
 pub mod circuit_breaker;
 pub mod commands;
 pub mod db;
