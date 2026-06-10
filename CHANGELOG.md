@@ -5,6 +5,31 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.5.0] - 2026-06-10
+
+The reading page, rebuilt around the book.
+
+### Changed
+
+- **A book on a desk.** The page and your margin now sit as one centered
+  composition — open or closed, on a small window or a maximized one, the text
+  stays balanced in the middle instead of drifting to one side. Opening the
+  margin slides the page over to make room, like sliding a book across a desk;
+  an empty margin is just a quiet line, not a blank panel.
+- **Real book typography.** Books now open like books. A title page is a title
+  page — centered title, byline, a hairline rule — a table of contents reads as
+  one (in two columns when it's long), an epigraph sits apart in italics, and
+  each chapter opens with its name and an unhurried first paragraph. This holds
+  whether you bring an EPUB or a plain-text book.
+- **Books are organized by chapter.** A plain-text book's front matter (its title
+  page and contents) is now kept separate from the reading itself, so your first
+  section is the first real chapter — not the title page — and the book is paced
+  chapter by chapter.
+
+> Note: the typography and chapter structure apply to books added from this
+> version on. To see them on a title you already have, get it again from Discover.
+> The new page-and-margin layout applies to every book right away.
+
 ## [0.4.6] - 2026-06-10
 
 ### Fixed
