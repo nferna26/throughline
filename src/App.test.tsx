@@ -29,7 +29,8 @@ vi.mock("@tauri-apps/api/webview", () => ({
   }),
 }));
 
-import App, { handleDroppedPaths } from "./App";
+import App, { handleDroppedPaths, importErrorText } from "./App";
+import { errorMessage } from "./types";
 
 const BOOK = {
   id: "b1",
@@ -84,6 +85,23 @@ describe("handleDroppedPaths", () => {
     if (r.kind === "error") {
       expect(r.message).toMatch(/DRM-protected/);
     }
+  });
+});
+
+// ── The import alert: always a human sentence, never raw JSON ───────────────
+describe("importErrorText", () => {
+  it("routes a message-less AppError through errorMessage — no {\"kind\"…} JSON", () => {
+    const e = { kind: "NotFound", resource: "book", id: null };
+    expect(importErrorText(e)).toBe(`Import failed: ${errorMessage(e)}`);
+    expect(importErrorText(e)).toBe("Import failed: book not found");
+    // The old JSON.stringify fallback would have leaked this shape:
+    expect(JSON.stringify(e)).toContain('{"kind"');
+    expect(importErrorText(e)).not.toContain('{"kind"');
+  });
+
+  it("keeps the backend's human message when one exists", () => {
+    const e = { kind: "Io", message: "this EPUB looks DRM-protected." };
+    expect(importErrorText(e)).toBe("Import failed: this EPUB looks DRM-protected.");
   });
 });
 
