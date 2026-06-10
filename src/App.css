@@ -646,3 +646,21 @@ button.ghost:hover { color: var(--ink); border-color: var(--line); }
 .ai-req-preview { color: var(--ok); }
 .ai-req-sent { color: var(--warn); font-weight: 500; }
 .ai-req-note { color: var(--accent); }
+
+/* Brand: the Throughline T mark sits quietly beside the wordmark in the
+   titlebar. No badge/container. Per the design handoff the mark is forest-green
+   on light and sage on dark — that's exactly --tl-accent (#2f4e3a / #a7c5b1) —
+   while the wordmark keeps the titlebar ink color. The mark draws in
+   currentColor, so setting color on .tl-brand-mark drives its fill. Base
+   .tl-brand color/font live in tl-theme.css; this only adds layout + the
+   mark's accent color. */
+.tl-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.tl-brand-mark {
+  color: var(--tl-accent);
+  /* Optically center the mark against the wordmark's cap height. */
+  margin-top: -1px;
+}

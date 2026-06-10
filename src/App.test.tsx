@@ -261,3 +261,25 @@ describe("App command failures use the in-app banner (CORE-1041)", () => {
     );
   });
 });
+
+// ── Brand mark in the titlebar ──────────────────────────────────────────────
+// FT-14: the Throughline "T" sits beside the wordmark. It's decorative
+// (aria-hidden) since the brand button already carries the accessible name, so
+// we assert on the button + the inline SVG mark rather than a second label.
+describe("titlebar brand mark", () => {
+  it("renders the Throughline T beside the wordmark in the home button", async () => {
+    setAppImpl();
+    render(<App />);
+    await screen.findByText(/Welcome to Throughline/i);
+
+    const brand = screen.getByRole("button", { name: /Throughline — home/i });
+    expect(brand).toHaveTextContent(/Throughline/i);
+
+    const mark = brand.querySelector("svg.tl-brand-mark");
+    expect(mark).not.toBeNull();
+    // Decorative: hidden from AT so the name isn't announced twice.
+    expect(mark).toHaveAttribute("aria-hidden", "true");
+    // Drawn in currentColor so it picks up the accent (forest/sage) we set.
+    expect(mark).toHaveAttribute("fill", "currentColor");
+  });
+});

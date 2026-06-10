@@ -9,6 +9,7 @@ import NotesBrowser from "./screens/NotesBrowser";
 import BookSetupSheet from "./screens/BookSetupSheet";
 import Discover from "./screens/Discover";
 import TLIcon from "./components/TLIcon";
+import ThroughlineMark from "./components/ThroughlineMark";
 import "./App.css";
 import "./tl-theme.css";
 import type { TodayCard, ReaderMode, Book, ImportOutcome, ExportPathStatus } from "./types";
@@ -310,7 +311,8 @@ export default function App() {
       <a href="#main-content" className="skip-link">Skip to main content</a>
       <header className="tl-titlebar" data-tauri-drag-region>
         <button className="tl-brand" onClick={() => setView({ kind: "today" })} aria-label="Throughline — home">
-          Through<b>line</b>
+          <ThroughlineMark className="tl-brand-mark" size={20} />
+          <span>Through<b>line</b></span>
         </button>
         <div className="tl-titlebar-spacer" data-tauri-drag-region />
         <button
