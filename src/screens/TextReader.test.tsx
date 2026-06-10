@@ -294,6 +294,35 @@ describe("TextReader section completion (endReached)", () => {
   });
 });
 
+// FT-31: the reader's scroll container must be keyboard-pageable — Space pages
+// down, Shift+Space pages back, the most ingrained reading gesture on a Mac.
+describe("TextReader keyboard paging (FT-31)", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("makes the scroll container focusable and pages with Space / Shift+Space", async () => {
+    mockBackend([]);
+    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    const main = container.querySelector(".tl-reader-main") as HTMLElement;
+    // Focusable for keyboard users (WCAG 2.1.1).
+    expect(main.tabIndex).toBe(0);
+
+    // jsdom has no layout: supply the geometry the scroll math reads.
+    Object.defineProperty(main, "clientHeight", { value: 800, configurable: true });
+    Object.defineProperty(main, "scrollHeight", { value: 4000, configurable: true });
+    Object.defineProperty(main, "scrollTop", { value: 0, writable: true, configurable: true });
+
+    // Space pages down by ~0.9 × clientHeight (720).
+    fireEvent.keyDown(main, { key: " " });
+    expect(main.scrollTop).toBeCloseTo(720, 0);
+
+    // Shift+Space pages back the same distance.
+    fireEvent.keyDown(main, { key: " ", shiftKey: true });
+    expect(main.scrollTop).toBeCloseTo(0, 0);
+  });
+});
+
 describe("clampToolbarPosition (selection toolbar placement)", () => {
   const W = 640; // reader width; toolbar default width 300 (half = 150)
 

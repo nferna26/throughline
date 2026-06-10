@@ -272,6 +272,17 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [textSectionId, currentIdx, assignableSections, markEndReached]);
 
+  // Focus the reading column once the current section's text mounts, so Space and
+  // the arrows page immediately after the reader opens — never stealing focus from
+  // an open note/modal field the reader is typing in (only claims it from the body).
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || textSectionId == null) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && el !== active && !el.contains(active)) return;
+    el.focus({ preventScroll: true });
+  }, [textSectionId]);
+
   function scrollToOffset(within: number) {
     if (!containerRef.current) return;
     let best: HTMLParagraphElement | null = null;
@@ -318,6 +329,37 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       const locator = makeCharLocator(baseOffset + off);
       throttledSaveProgress(book.id, sec.id, locator, pct);
     }
+  }
+
+  // Keyboard paging: Space is the most ingrained reading gesture on a Mac, and a
+  // book that can't be turned by keyboard is a WCAG 2.1.1 gap. Handles Space /
+  // Shift+Space, PageUp/PageDown, arrows, and Home/End as scroll deltas on the
+  // reading column, then reconciles progress via handleScroll. Lets editable
+  // targets (note textareas) keep their native Space/arrows.
+  function onReaderKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    const el = containerRef.current;
+    if (!el) return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+    const page = Math.max(40, el.clientHeight * 0.9);
+    const line = 60;
+    let delta: number | null = null;
+    let absolute: number | null = null;
+    switch (e.key) {
+      case " ": case "Spacebar": delta = e.shiftKey ? -page : page; break;
+      case "PageDown": delta = page; break;
+      case "PageUp": delta = -page; break;
+      case "ArrowDown": delta = line; break;
+      case "ArrowUp": delta = -line; break;
+      case "Home": absolute = 0; break;
+      case "End": absolute = el.scrollHeight; break;
+      default: return;
+    }
+    e.preventDefault();
+    const max = Math.max(0, el.scrollHeight - el.clientHeight);
+    const next = absolute != null ? absolute : el.scrollTop + (delta ?? 0);
+    el.scrollTop = Math.min(max, Math.max(0, next));
+    handleScroll();
   }
 
   const locator = useMemo(() => {
@@ -680,7 +722,14 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       </div>
 
       <div className="tl-reader-body">
-        <div className="tl-reader-main" ref={containerRef} onScroll={handleScroll} onMouseUp={onTextMouseUp}>
+        <div
+          className="tl-reader-main"
+          ref={containerRef}
+          tabIndex={0}
+          onScroll={handleScroll}
+          onMouseUp={onTextMouseUp}
+          onKeyDown={onReaderKeyDown}
+        >
           {rescue && (
             <div className="tl-rescue-banner" style={{ maxWidth: `${lineWidth}px` }} role="note">
               <TLIcon name="clock" size={15} />
