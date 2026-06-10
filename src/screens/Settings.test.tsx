@@ -67,13 +67,31 @@ describe("Settings — Your data trust summary", () => {
     expect(screen.queryByText(/disabled until you re-enable/i)).toBeNull();
   });
 
-  it("flags Codex as an experimental, unofficial endpoint", async () => {
+  it("flags Codex as experimental and unofficial", async () => {
     wire({ ai_provider: "codex", ai_remote_allowed: true });
     render(<Settings />);
     // The Codex option carries a clear experimental marker steering toward OpenAI/Anthropic.
     await waitFor(() => expect(screen.getByText(/^Experimental\.$/i)).toBeInTheDocument());
-    expect(screen.getByText(/unofficial ChatGPT endpoint that can change or break/i)).toBeInTheDocument();
+    expect(screen.getByText(/unofficial ChatGPT connection that can change or break/i)).toBeInTheDocument();
     expect(screen.getByText(/choose OpenAI or Anthropic with your own API key/i)).toBeInTheDocument();
+  });
+
+  it("hides spend figures and the cap input from company-mode readers", async () => {
+    wire({ ai_provider: "company", ai_remote_allowed: true });
+    render(<Settings />);
+    // The paid build's promise: explanations, never dollars — the usage card
+    // reframes to the included purchase, with no meters to manage.
+    expect(await screen.findByText(/Included in your one-time purchase/i)).toBeInTheDocument();
+    expect(screen.queryByText("Spend so far")).toBeNull();
+    expect(screen.queryByLabelText(/Monthly AI spend cap/i)).toBeNull();
+  });
+
+  it("keeps the spend figures and cap input for a reader on their own key", async () => {
+    wire({ ai_provider: "anthropic", ai_remote_allowed: true });
+    render(<Settings />);
+    expect(await screen.findByText("Spend so far")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Monthly AI spend cap/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Included in your one-time purchase/i)).toBeNull();
   });
 
   it("renders no shell command fragments anywhere a reader can see", async () => {
@@ -84,6 +102,31 @@ describe("Settings — Your data trust summary", () => {
     expect(text).not.toMatch(/rm\s+-rf/);
     // No standalone "rm " shell fragment at all (word-boundary so prose like "Confirm " stays legal).
     expect(text).not.toMatch(/\brm\s/);
+  });
+
+  it("speaks plainly in the BYO model row — no 'token' anywhere on the screen", async () => {
+    wire({ ai_provider: "anthropic", ai_remote_allowed: true, ai_key_present_anthropic: true });
+    const { container } = render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Anthropic API key/i)).toBeInTheDocument());
+    // The model row explains pricing in plain words…
+    expect(screen.getByText(/the chip shows the going rate/i)).toBeInTheDocument();
+    // …and no reader-visible copy says "token" (the experience bar bans plumbing words).
+    expect(container.textContent).not.toMatch(/token/i);
+  });
+
+  it("describes the Local base URL without 'endpoint'", async () => {
+    wire({ ai_provider: "local" });
+    const { container } = render(<Settings />);
+    await waitFor(() => expect(screen.getByText("Base URL")).toBeInTheDocument());
+    expect(screen.getByText(/Where your local model listens/i)).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/endpoint/i);
+  });
+
+  it("keeps the Codex warning free of 'endpoint' too", async () => {
+    wire({ ai_provider: "codex", ai_remote_allowed: true });
+    const { container } = render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/^Experimental\.$/i)).toBeInTheDocument());
+    expect(container.textContent).not.toMatch(/endpoint/i);
   });
 
   it("does not flag OpenAI as experimental", async () => {

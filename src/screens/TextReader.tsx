@@ -8,7 +8,8 @@ import { briefingTextReady, type MarginHelp } from "../sectionBriefing";
 import { segmentParagraph, blockRoleFor, type StyleRange } from "../paragraphStructure";
 import { useDialog } from "../hooks/useDialog";
 import type { BookSection, Note, ReadingSession, TodayCard, ReaderMode, SettingsDto } from "../types";
-import { NOTE_TYPES, makeCharLocator, parseLocator } from "../types";
+import { NOTE_TYPES, errorMessage, makeCharLocator, parseLocator } from "../types";
+import { locatorHint } from "../locatorHint";
 import { reduceMargin, initialMarginState, marginVisible } from "../marginPanel";
 
 interface Props {
@@ -788,6 +789,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
           sessionId={session?.id ?? null}
           chapter={currentSection.label}
           locator={locator}
+          positionHint={locatorHint(locator, { start: secBase, length: Math.max(0, secEnd - secBase) })}
           onClose={() => setShowNote(false)}
         />
       )}
@@ -1029,7 +1031,10 @@ function NotePanel(props: {
   bookId: string;
   sessionId: string | null;
   chapter: string;
+  /** Stored with the note (plumbing) — never rendered; see positionHint. */
   locator: string;
+  /** Reader-facing "32% in"-style position, or null when it adds nothing. */
+  positionHint: string | null;
   onClose: () => void;
 }) {
   const [noteType, setNoteType] = useState<string>("Reflection");
@@ -1037,6 +1042,9 @@ function NotePanel(props: {
   const [shortQuote, setShortQuote] = useState("");
   const [warn, setWarn] = useState(false);
   const [saving, setSaving] = useState(false);
+  // A failed save is said out loud inside the modal (never a silent dead end);
+  // the modal stays open so the reader's words survive and Save can be retried.
+  const [saveErr, setSaveErr] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   useDialog(panelRef, props.onClose);
 
@@ -1052,6 +1060,7 @@ function NotePanel(props: {
   async function save() {
     if (!body.trim()) return;
     setSaving(true);
+    setSaveErr(null);
     try {
       await invoke<Note>("cmd_save_note", {
         bookId: props.bookId,
@@ -1063,6 +1072,8 @@ function NotePanel(props: {
         shortQuote: shortQuote.trim() || null,
       });
       props.onClose();
+    } catch (e) {
+      setSaveErr(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -1082,7 +1093,7 @@ function NotePanel(props: {
           </select>
         </label>
 
-        <div className="row"><span>Chapter: {props.chapter}</span><span>Locator: {props.locator}</span></div>
+        <div className="row"><span>Chapter: {props.chapter}</span>{props.positionHint && <span>{props.positionHint}</span>}</div>
 
         <label>Note
           <textarea
@@ -1107,6 +1118,12 @@ function NotePanel(props: {
           <p className="tl-warn-text">
             Quote exceeds ~300 characters. Fair use has no fixed safe word count — the default
             posture in Throughline is short quotes for private study only. (Saving is still allowed.)
+          </p>
+        )}
+
+        {saveErr && (
+          <p className="tl-warn-text" role="alert">
+            {saveErr} Your note is still here — try Save again, or check the export folder in Settings.
           </p>
         )}
 

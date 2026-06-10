@@ -398,6 +398,61 @@ describe("TextReader selection toolbar — Escape dismiss + a11y", () => {
   });
 });
 
+describe("TextReader New-note modal — humanized position", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("shows the chapter and a plain position, never a raw char: locator", async () => {
+    mockBackend([]);
+    // Resume mid-section so the modal's position is meaningfully non-zero:
+    // char 320 of a 1000-char section → "32% in".
+    const today = card();
+    today.resume_locator = "char:320";
+    today.resume_percent = 32;
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    const modal = screen.getByRole("dialog");
+    // Where the note lives, in reader words: the chapter + how far in.
+    expect(modal.textContent).toContain("Chapter: Chapter 1");
+    expect(modal.textContent).toContain("32% in");
+    // The raw locator string is plumbing — it never reaches the reader.
+    expect(modal.textContent).not.toMatch(/char:/);
+    expect(modal.textContent).not.toMatch(/Locator/i);
+  });
+});
+
+describe("TextReader New-note modal — save failure", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("says what happened inside the modal and stays open for retry", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_save_note": return Promise.reject({ kind: "Io", message: "Throughline can't save notes to this folder." });
+        default: return Promise.resolve(undefined);
+      }
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    fireEvent.change(screen.getByPlaceholderText(/Paraphrase, reflection/i), { target: { value: "a thought" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+
+    // The failure is said out loud, inside the modal…
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Throughline can't save notes to this folder.");
+    // …and the modal stays open with the reader's words intact, ready to retry.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("a thought")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save note" })).toBeEnabled();
+  });
+});
+
 describe("TextReader Deep Study — stale-section guard", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();

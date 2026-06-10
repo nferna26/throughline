@@ -17,6 +17,12 @@ import { purgeLegacyBriefings } from "./sectionBriefing";
 
 type BookTab = "today" | "notes";
 
+/** One human line for a failed import — routed through errorMessage so a raw
+ *  AppError ({kind:…}) never reaches the reader as JSON. Exported for tests. */
+export function importErrorText(e: unknown): string {
+  return `Import failed: ${errorMessage(e)}`;
+}
+
 /** Outcome of a file-drop import attempt. Exported for tests. */
 export type DropResult =
   | { kind: "imported"; outcome: ImportOutcome }
@@ -38,7 +44,7 @@ export async function handleDroppedPaths(paths: string[]): Promise<DropResult> {
     const outcome = await invoke<ImportOutcome>("cmd_import_book", { path: file });
     return { kind: "imported", outcome };
   } catch (e) {
-    return { kind: "error", message: `Import failed: ${errorMessage(e)}` };
+    return { kind: "error", message: importErrorText(e) };
   }
 }
 
@@ -184,11 +190,10 @@ export default function App() {
     let outcome: ImportOutcome;
     try {
       outcome = await invoke<ImportOutcome>("cmd_import_book", { path });
-    } catch (e: any) {
-      // Backend returns AppError: { kind, message }. Fall back to String(e) for
-      // anything else (network errors thrown by tauri-api itself, etc.).
-      const msg = e?.message ?? (typeof e === "string" ? e : JSON.stringify(e));
-      alert(`Import failed: ${msg}`);
+    } catch (e) {
+      // Backend returns AppError: { kind, message }. errorMessage turns any
+      // shape into a human sentence — never raw JSON in a native alert.
+      alert(importErrorText(e));
       return;
     }
     await refreshToday();

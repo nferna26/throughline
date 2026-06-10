@@ -186,6 +186,19 @@ describe("MarginTutorCard — brief default + go deeper", () => {
   });
 });
 
+describe("MarginTutorCard — quote chip", () => {
+  it("shows the passage itself, never a raw char: locator", async () => {
+    localStorage.setItem("rg.tutorEnabled", "true");
+    const { container } = render(card());
+    // The quote is the anchor the reader cares about…
+    expect(await screen.findByText(/the unjust man is happy/)).toBeInTheDocument();
+    // …and the chip carries no locator plumbing.
+    const chip = container.querySelector(".tl-quotechip");
+    expect(chip).not.toBeNull();
+    expect(chip!.textContent).not.toMatch(/char:/);
+  });
+});
+
 describe("MarginTutorCard — cap-hit three doors (CM6)", () => {
   // Company mode, proxy says the allowance is spent: cmd_ai_ask rejects with
   // CapExhausted BEFORE any stream — the card must show three doors, free first.
@@ -245,6 +258,58 @@ describe("MarginTutorCard — cap-hit three doors (CM6)", () => {
     render(card());
     fireEvent.click(await screen.findByRole("button", { name: /Let me know/i }));
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_open_support_email"));
+  });
+});
+
+describe("MarginTutorCard — first-cloud-send consent copy", () => {
+  // The backend pauses the first cloud send with NeedsCloudConsent; the dialog
+  // must describe the reader's actual arrangement (key / login / purchase) —
+  // reusing the AI_PROVIDERS disclosure so it never drifts from the picker.
+  function setConsentNeeded(provider: string, host: string) {
+    mocks.invoke.mockReset();
+    mocks.invoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings":
+          return Promise.resolve({ export_path: "/x", ai_provider: provider, ai_requests_retention_days: 90 });
+        case "cmd_ai_ask":
+          return Promise.reject({ kind: "NeedsCloudConsent", host });
+        default:
+          return Promise.resolve(null);
+      }
+    });
+  }
+
+  async function consentDialog(provider: string, host: string) {
+    localStorage.setItem("rg.tutorEnabled", "true");
+    setConsentNeeded(provider, host);
+    render(card());
+    return await screen.findByRole("dialog", { name: /Confirm cloud AI/i });
+  }
+
+  it("Codex: names the reader's login, never an API key they don't have", async () => {
+    const dialog = await consentDialog("codex", "chatgpt.com");
+    expect(dialog.textContent).toMatch(/via your Codex login/i);
+    expect(dialog.textContent).not.toMatch(/API key/i);
+    expect(dialog.textContent).toContain("Your book file never leaves this Mac.");
+  });
+
+  it("company mode: names the one-time purchase, never an API key", async () => {
+    const dialog = await consentDialog("company", "ai.readthroughline.com");
+    expect(dialog.textContent).toMatch(/under your one-time purchase/i);
+    expect(dialog.textContent).not.toMatch(/API key/i);
+    expect(dialog.textContent).toContain("Your book file never leaves this Mac.");
+  });
+
+  it("Anthropic keeps 'under your API key' (pins the BYO copy)", async () => {
+    const dialog = await consentDialog("anthropic", "api.anthropic.com");
+    expect(dialog.textContent).toMatch(/under your API key/i);
+    expect(dialog.textContent).toContain("Your book file never leaves this Mac.");
+  });
+
+  it("OpenAI keeps 'under your API key' (pins the BYO copy)", async () => {
+    const dialog = await consentDialog("openai", "api.openai.com");
+    expect(dialog.textContent).toMatch(/under your API key/i);
+    expect(dialog.textContent).toContain("Your book file never leaves this Mac.");
   });
 });
 

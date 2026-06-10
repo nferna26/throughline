@@ -7,10 +7,14 @@ const fmt = (micros: number) =>
 
 /**
  * Settings "AI usage" card (Epic B4): spend so far (all-time + this month, from
- * recorded token usage at catalogued prices) and an optional monthly spend cap
- * that stops cloud tutoring once month-to-date spend reaches it (0 = off).
+ * recorded usage at catalogued prices) and an optional monthly spend cap that
+ * stops cloud tutoring once month-to-date spend reaches it (0 = off).
+ *
+ * Company mode reframes instead: the $20 purchase includes the tutor, so the
+ * reader sees no dollar figures and no cap input (the cap doesn't apply to
+ * company calls). Usage keeps recording backstage for a future BYO switch.
  */
-export default function AiUsageCard() {
+export default function AiUsageCard({ provider }: { provider?: string }) {
   const [u, setU] = useState<UsageSummary | null>(null);
   const [capInput, setCapInput] = useState("");
 
@@ -32,6 +36,24 @@ export default function AiUsageCard() {
     load();
   };
 
+  if (provider === "company") {
+    return (
+      <div className="tl-set-group">
+        <span className="glabel">AI usage</span>
+        <div className="tl-set-card">
+          <div className="tl-set-row">
+            <div className="lhs">
+              <div className="name">Included in your one-time purchase</div>
+              <div className="desc">
+                Ask the tutor freely. If your included allowance ever runs low, the margin lets you know.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="tl-set-group">
       <span className="glabel">AI usage</span>
@@ -40,7 +62,7 @@ export default function AiUsageCard() {
           <div className="lhs">
             <div className="name">Spend so far</div>
             <div className="desc">
-              Estimated from token usage at catalogued prices (as of {u?.pricing_verified_at ?? "—"}).
+              Estimated from your recorded usage at catalogued prices (as of {u?.pricing_verified_at ?? "—"}).
               With your own key you pay your provider directly.
             </div>
           </div>
