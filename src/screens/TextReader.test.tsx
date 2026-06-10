@@ -487,21 +487,28 @@ describe("TextReader companion panel toggle", () => {
     // fixture text is the "quick brown fox" string, not Augustine.
     await waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
 
-    const aside = () => container.querySelector(".tl-sidepanel") as HTMLElement | null;
-    // Default CLOSED: the margin is MOUNTED but hidden (no layout space, display:none),
-    // the inline highlight is still painted, and the toggle shows a count badge.
-    expect(aside()!.style.display).toBe("none");
+    const spread = () => container.querySelector(".tl-spread") as HTMLElement;
+    const rail = () => container.querySelector(".tl-margin-rail") as HTMLElement;
+    // Default CLOSED: the rail is ALWAYS MOUNTED (its width/opacity animate to 0 in
+    // CSS, never display:none — so a tutor stream survives), marked aria-hidden, the
+    // inline highlight is still painted, and the toggle shows a count badge. The
+    // card's editable body is mounted even while the rail is closed.
+    expect(spread().getAttribute("data-margin")).toBe("closed");
+    expect(rail().getAttribute("aria-hidden")).toBe("true");
     expect(container.querySelector(".tl-panelcount")?.textContent).toBe("1");
-
-    // Toggle SHOWS it → the note's editable body is visible.
-    fireEvent.click(container.querySelector(".tl-paneltoggle")!);
-    await waitFor(() => expect(aside()!.style.display).not.toBe("none"));
     expect(screen.getByDisplayValue("my thought")).toBeInTheDocument();
 
-    // Toggle HIDES it again — but the card stays MOUNTED inside the hidden margin,
-    // so a tutor card's in-flight stream/answer is never lost or re-run on reopen.
+    // Toggle SHOWS it → the spread re-centers (data-margin="open") and the note's
+    // editable body is visible.
     fireEvent.click(container.querySelector(".tl-paneltoggle")!);
-    expect(aside()!.style.display).toBe("none");
+    await waitFor(() => expect(spread().getAttribute("data-margin")).toBe("open"));
+    expect(rail().getAttribute("aria-hidden")).toBe("false");
+    expect(screen.getByDisplayValue("my thought")).toBeInTheDocument();
+
+    // Toggle HIDES it again — the card stays MOUNTED inside the closed rail, so a
+    // tutor card's in-flight stream/answer is never lost or re-run on reopen.
+    fireEvent.click(container.querySelector(".tl-paneltoggle")!);
+    expect(spread().getAttribute("data-margin")).toBe("closed");
     expect(screen.getByDisplayValue("my thought")).toBeInTheDocument();
   });
 });
@@ -557,10 +564,27 @@ describe("TextReader selection toolbar — Escape dismiss + a11y", () => {
   async function selectInColumn(container: HTMLElement) {
     const p = container.querySelector("p[data-offset]") as HTMLElement;
     const main = container.querySelector(".tl-reader-main") as HTMLElement;
-    const textNode = p.firstChild as Text; // "0123456789quick brown…"
+    // The first prose paragraph now opens with a small-caps OPENER span (book
+    // convention), so the paragraph may be split into several text nodes. Walk to
+    // the text node + local offset for paragraph-relative char 10 ("quick"), so
+    // the selection is robust to the render-only opener slice.
+    const at = (root: HTMLElement, target: number): { node: Text; offset: number } => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let seen = 0;
+      let node = walker.nextNode() as Text | null;
+      while (node) {
+        const len = node.data.length;
+        if (seen + len >= target) return { node, offset: target - seen };
+        seen += len;
+        node = walker.nextNode() as Text | null;
+      }
+      throw new Error("offset past end");
+    };
+    const startPt = at(p, 10); // "quick"
+    const endPt = at(p, 15);
     const range = document.createRange();
-    range.setStart(textNode, 10); // "quick"
-    range.setEnd(textNode, 15);
+    range.setStart(startPt.node, startPt.offset);
+    range.setEnd(endPt.node, endPt.offset);
     // jsdom Ranges lack getBoundingClientRect; the toolbar geometry only needs a
     // rect-shaped object (we don't assert on coordinates).
     (range as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect =
@@ -840,18 +864,27 @@ describe("TextReader reading-page redesign (structure rendering)", () => {
     expect(em.textContent).toBe(EM_PHRASE);
   });
 
-  it("gives the first PROSE paragraph the drop-cap hook — never the heading", async () => {
+  it("gives the first PROSE paragraph the body-first class + a small-caps OPENER (never the heading)", async () => {
     mockStructured();
     const { container } = render(<TextReader today={card()} onExit={() => {}} />);
-    await waitFor(() => expect(container.querySelector("p.tl-dropcap")).not.toBeNull());
-    const cap = container.querySelector("p.tl-dropcap") as HTMLElement;
-    // The drop cap lands on the body paragraph (offset 10), not "PREFACE." (offset 0).
-    expect(cap.getAttribute("data-offset")).toBe(String(STRUCT_TEXT.indexOf("Now")));
-    expect(cap.textContent?.startsWith("Now")).toBe(true);
-    // The heading is NOT drop-capped.
-    expect(container.querySelector("p.tl-h1.tl-dropcap")).toBeNull();
-    // Exactly one paragraph carries the drop cap.
-    expect(container.querySelectorAll("p.tl-dropcap").length).toBe(1);
+    await waitFor(() => expect(container.querySelector("p.tl-body-first")).not.toBeNull());
+    const first = container.querySelector("p.tl-body-first") as HTMLElement;
+    // The opener lands on the body paragraph (offset of "Now"), not "PREFACE." (offset 0).
+    expect(first.getAttribute("data-offset")).toBe(String(STRUCT_TEXT.indexOf("Now")));
+    expect(first.textContent?.startsWith("Now")).toBe(true);
+    // The opener is a RENDER-ONLY span (small caps) — it never changes the
+    // paragraph's character count: the full text is intact and the offset unchanged.
+    const opener = first.querySelector(".tl-opener") as HTMLElement;
+    expect(opener).not.toBeNull();
+    expect(first.textContent).toBe(STRUCT_TEXT.slice(STRUCT_TEXT.indexOf("Now"))); // offsets unchanged
+    expect(opener.textContent?.length).toBeGreaterThan(0);
+    expect(STRUCT_TEXT.slice(STRUCT_TEXT.indexOf("Now")).startsWith(opener.textContent!)).toBe(true);
+    // The heading is NOT given the opener / body-first treatment.
+    expect(container.querySelector("p.tl-h1.tl-body-first")).toBeNull();
+    expect(container.querySelector("p.tl-h1 .tl-opener")).toBeNull();
+    // Exactly one paragraph opens with the small-caps opener.
+    expect(container.querySelectorAll("p.tl-body-first").length).toBe(1);
+    expect(container.querySelectorAll(".tl-opener").length).toBe(1);
   });
 
   it("keeps p[data-offset] selection anchoring intact (offsets unchanged by styling)", async () => {
@@ -867,30 +900,158 @@ describe("TextReader reading-page redesign (structure rendering)", () => {
     expect(prose.textContent).toBe(STRUCT_TEXT.slice(STRUCT_TEXT.indexOf("Now")));
   });
 
-  it("reading column container is structurally identical with the margin open vs closed (no text-shift)", async () => {
+  it("centers the sheet + margin as one spread, the same way open vs closed (no reserved gutter)", async () => {
     mockStructured();
     const { container, rerender } = render(<TextReader today={card()} onExit={() => {}} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")).not.toBeNull());
 
-    // Closed (default): the body declares the closed layout AND reserves the
-    // margin's width, so the centered sheet sits in the same box it will when open.
-    const bodyClosed = container.querySelector(".tl-reader-body") as HTMLElement;
-    expect(bodyClosed.classList.contains("tl-margin-closed")).toBe(true);
-    expect(bodyClosed.style.getPropertyValue("--tl-margin-reserve")).not.toBe("");
-    // The reading column lives inside .tl-reader-main in both states — same DOM seat.
+    // THE SPREAD is the centering container (justify-content:center in CSS); the
+    // sheet + margin rail center as a unit. Closed (default): data-margin="closed".
+    const spreadClosed = container.querySelector(".tl-spread") as HTMLElement;
+    expect(spreadClosed).not.toBeNull();
+    expect(spreadClosed.getAttribute("data-margin")).toBe("closed");
+    // NO reserved-gutter var anywhere — the centering is automatic, not measured.
+    expect(container.querySelector("[style*='--tl-margin-reserve']")).toBeNull();
+    // The sheet holds the reading column; the rail is mounted as a sibling inside
+    // the spread (always present so a tutor stream survives a close).
+    expect(container.querySelector(".tl-spread .tl-sheet .tl-readcol")).not.toBeNull();
+    expect(container.querySelector(".tl-spread .tl-margin-rail")).not.toBeNull();
+    // The reading column lives inside .tl-reader-main (the scroll/desk host) — the
+    // same DOM seat in both states (so no overflow onto the desk, no reparenting).
     expect(container.querySelector(".tl-reader-main .tl-readcol")).not.toBeNull();
 
-    // Open the margin via the toolbar toggle.
+    // Open the margin via the toolbar toggle → the SAME spread re-centers (the rail
+    // animates its flex-basis; no reserved gutter is introduced).
     fireEvent.click(container.querySelector(".tl-paneltoggle")!);
-    await waitFor(() => expect((container.querySelector(".tl-sidepanel") as HTMLElement).style.display).not.toBe("none"));
-    const bodyOpen = container.querySelector(".tl-reader-body") as HTMLElement;
-    expect(bodyOpen.classList.contains("tl-margin-open")).toBe(true);
-    // Same reserve token value drives both states (panelWidth + resizer), so the
-    // sheet's centering box width is identical open vs closed → no horizontal jump.
-    expect(bodyOpen.style.getPropertyValue("--tl-margin-reserve")).toBe(bodyClosed.style.getPropertyValue("--tl-margin-reserve"));
+    await waitFor(() => expect((container.querySelector(".tl-spread") as HTMLElement).getAttribute("data-margin")).toBe("open"));
+    const spreadOpen = container.querySelector(".tl-spread") as HTMLElement;
+    expect(spreadOpen).toBe(spreadClosed); // same node — not reparented, just re-attributed
+    expect(container.querySelector("[style*='--tl-margin-reserve']")).toBeNull();
     // The column still sits in the same .tl-reader-main seat (not reparented).
-    expect(container.querySelector(".tl-reader-main .tl-readcol")).not.toBeNull();
+    expect(container.querySelector(".tl-reader-main .tl-sheet .tl-readcol")).not.toBeNull();
     rerender(<TextReader today={card()} onExit={() => {}} />);
+  });
+});
+
+// ── Book typography: the full front-matter vocabulary renders as CSS classes on
+// p[data-offset] (never a heading tag), and a run of contents-item paragraphs is
+// wrapped in a 2-column container that keeps each child reachable + offset-exact.
+describe("TextReader book typography (front-matter vocabulary)", () => {
+  beforeEach(() => { vi.mocked(invoke).mockReset(); localStorage.clear(); });
+
+  // A Walden-shaped section: title page, contents (label/part/2 items), epigraph,
+  // chapter opening (label + title), then the first body paragraph. Each block is
+  // exactly one paragraph; its StyleRange covers its [start,end).
+  const BLOCKS = [
+    { kind: "title", text: "WALDEN" },
+    { kind: "subtitle", text: "and" },                               // lone connective
+    { kind: "subtitle", text: "ON THE DUTY OF CIVIL DISOBEDIENCE" },
+    { kind: "byline", text: "by Henry David Thoreau" },
+    { kind: "contents-label", text: "Contents" },
+    { kind: "contents-part", text: "WALDEN" },
+    { kind: "contents-item", text: "Economy" },
+    { kind: "contents-item", text: "Where I Lived, and What I Lived For" },
+    { kind: "epigraph", text: "I do not propose to write an ode to dejection." },
+    { kind: "chapter-label", text: "BOOK I" },
+    { kind: "chapter-title", text: "Economy" },
+    { kind: "body-first", text: "When I wrote the following pages I lived alone in the woods." },
+  ];
+  // Build the section text (blocks separated by a blank line) and the ranges.
+  const TY_TEXT = BLOCKS.map((b) => b.text).join("\n\n");
+  const TY_RANGES = (() => {
+    const ranges: { kind: string; start: number; end: number }[] = [];
+    let cursor = 0;
+    for (const b of BLOCKS) {
+      const start = TY_TEXT.indexOf(b.text, cursor);
+      ranges.push({ kind: b.kind, start, end: start + b.text.length });
+      cursor = start + b.text.length;
+    }
+    return ranges;
+  })();
+  function offsetOf(text: string) { return String(TY_TEXT.indexOf(text)); }
+
+  function mockTypography() {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(TY_TEXT);
+        case "cmd_read_section_structure": return Promise.resolve(TY_RANGES);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+  }
+
+  it("renders each front-matter role with its class on a p[data-offset] (never a heading tag)", async () => {
+    mockTypography();
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector("p.tl-tp-title")).not.toBeNull());
+
+    // The exact role→class map the backend's emission must match (kind → selector).
+    const expectations: Array<[string, string]> = [
+      ["title", ".tl-tp-title"],
+      ["byline", ".tl-tp-byline"],
+      ["contents-label", ".tl-toc-label"],
+      ["contents-part", ".tl-toc-part"],
+      ["epigraph", ".tl-epigraph"],
+      ["chapter-label", ".tl-ch-label"],
+      ["chapter-title", ".tl-ch-title"],
+    ];
+    for (const [kind, sel] of expectations) {
+      const el = container.querySelector(`p${sel}`) as HTMLElement;
+      expect(el, `${kind} → ${sel} should render`).not.toBeNull();
+      expect(el.tagName).toBe("P"); // never an <h1>/<h2> tag — anchoring stays exact
+      expect(el.getAttribute("data-offset")).not.toBeNull();
+    }
+    // No literal heading tags introduced anywhere in the column.
+    expect(container.querySelector(".tl-readcol h1, .tl-readcol h2, .tl-readcol h3")).toBeNull();
+  });
+
+  it("styles the lone lowercase connective ('and') as the italic connector, not a subtitle", async () => {
+    mockTypography();
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector("p.tl-tp-title")).not.toBeNull());
+    // Both subtitle paragraphs carry tl-tp-subtitle; only the lone "and" also gets
+    // tl-tp-and (the connector). The real subtitle does NOT.
+    const and = container.querySelector(`p[data-offset="${offsetOf("and")}"]`) as HTMLElement;
+    const realSub = container.querySelector(`p[data-offset="${offsetOf("ON THE DUTY OF CIVIL DISOBEDIENCE")}"]`) as HTMLElement;
+    expect(and.classList.contains("tl-tp-subtitle")).toBe(true);
+    expect(and.classList.contains("tl-tp-and")).toBe(true);
+    expect(realSub.classList.contains("tl-tp-subtitle")).toBe(true);
+    expect(realSub.classList.contains("tl-tp-and")).toBe(false);
+  });
+
+  it("wraps consecutive contents-item paragraphs in a 2-column container that keeps each child a p[data-offset]", async () => {
+    mockTypography();
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-toc-cols")).not.toBeNull());
+    const cols = container.querySelector(".tl-toc-cols") as HTMLElement;
+    // The grouping wrapper lives INSIDE the reading column (book-typography invariant).
+    expect(cols.closest(".tl-readcol")).not.toBeNull();
+    // Both items are p[data-offset] children of the wrapper, offsets exact + reachable.
+    const items = cols.querySelectorAll("p.tl-toc-item[data-offset]");
+    expect(items.length).toBe(2);
+    expect(items[0].getAttribute("data-offset")).toBe(offsetOf("Economy"));
+    // closest('p[data-offset]') from inside an item resolves to the item itself —
+    // the selection-anchoring path the golden loop depends on still works.
+    const inner = items[1].firstChild as Node;
+    expect((inner.parentElement as HTMLElement).closest("p[data-offset]")).toBe(items[1]);
+  });
+
+  it("gives the body-first paragraph the small-caps OPENER as a render-only slice (offset unchanged)", async () => {
+    mockTypography();
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    const bodyText = "When I wrote the following pages I lived alone in the woods.";
+    await waitFor(() => expect(container.querySelector("p.tl-body-first")).not.toBeNull());
+    const body = container.querySelector("p.tl-body-first") as HTMLElement;
+    expect(body.getAttribute("data-offset")).toBe(offsetOf(bodyText));
+    // The opener span exists and is render-only: the paragraph's full text is
+    // intact (no char added/lost) and the offset is unchanged.
+    const opener = body.querySelector(".tl-opener") as HTMLElement;
+    expect(opener).not.toBeNull();
+    expect(body.textContent).toBe(bodyText);
+    expect(bodyText.startsWith(opener.textContent!)).toBe(true);
   });
 });
 

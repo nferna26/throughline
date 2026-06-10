@@ -5,7 +5,7 @@ import MarginNoteCard from "../components/MarginNoteCard";
 import MarginTutorCard, { type TutorDraft, type TutorMode } from "../components/MarginTutorCard";
 import SectionBriefingCard from "../components/SectionBriefingCard";
 import { briefingTextReady, type MarginHelp } from "../sectionBriefing";
-import { segmentParagraph, blockRoleFor, type StyleRange } from "../paragraphStructure";
+import { segmentParagraph, blockRoleFor, blockRoleClass, isContentsItem, openerLength, type StyleRange } from "../paragraphStructure";
 import { useDialog } from "../hooks/useDialog";
 import type { BookSection, Note, ReadingSession, TodayCard, ReaderMode, SettingsDto } from "../types";
 import { NOTE_TYPES, errorMessage, makeCharLocator, parseLocator } from "../types";
@@ -56,13 +56,18 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     () => splitParagraphs(text, structure.filter((r) => r.kind === "pre")),
     [text, structure],
   );
-  // The offset of the FIRST real prose paragraph in the section — the one that
-  // gets the raised initial (drop cap). Skips headings, blockquotes, code, and
-  // any line with no word character (a stray marker/blank). null = none yet.
-  const dropCapOffset = useMemo(
-    () => firstProseDropCapOffset(paragraphs, structure),
-    [paragraphs, structure],
-  );
+  // The offset of the paragraph that opens a chapter with a small-caps OPENER
+  // (book convention; replaces the old drop cap). Prefer the importer's explicit
+  // `body-first` role; fall back — for legacy/plain .txt with no front-matter
+  // vocabulary — to the first real prose paragraph (skips headings, blockquotes,
+  // code, and any line with no word character). null = none yet.
+  const bodyFirstOffset = useMemo(() => {
+    const tagged = paragraphs.find(
+      (p) => !p.pre && blockRoleFor(p.offset, p.text.length, structure) === "body-first",
+    );
+    if (tagged) return tagged.offset;
+    return firstProseDropCapOffset(paragraphs, structure);
+  }, [paragraphs, structure]);
   const [session, setSession] = useState<ReadingSession | null>(null);
   const [visited, setVisited] = useState<Set<string>>(new Set());
   // Sections whose END the reader's viewport actually reached this sitting
@@ -118,10 +123,6 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   );
   const panelOpen = marginState.open;
   const pinned = marginState.pinned;
-  const [panelWidth, setPanelWidth] = useState<number>(
-    () => clampPanelWidth(parseInt(localStorage.getItem("tl.panelWidth") || "320", 10))
-  );
-  const draggingRef = useRef<boolean>(false);
   const readerRef = useRef<HTMLElement | null>(null);
   const colRef = useRef<HTMLDivElement | null>(null);
 
@@ -155,40 +156,6 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   useEffect(() => { localStorage.setItem("tl.lineWidth", String(lineWidth)); }, [lineWidth]);
   // Persist the reader's open-preference (the pin) under the long-standing key.
   useEffect(() => { localStorage.setItem("tl.panelOpen", String(pinned)); }, [pinned]);
-  useEffect(() => { localStorage.setItem("tl.panelWidth", String(panelWidth)); }, [panelWidth]);
-
-  // Drag the resizer: panel width = window-right-edge minus pointer x, clamped.
-  const startPanelDrag = useCallback((e: React.MouseEvent, opts?: { opening?: boolean }) => {
-    e.preventDefault();
-    draggingRef.current = true;
-    // Grabbing the collapsed edge first re-opens the margin; this same drag then
-    // sizes it (so it never re-collapses out from under the opening gesture).
-    const opening = !!opts?.opening;
-    if (opening) dispatchMargin("show");
-    const cleanup = () => {
-      draggingRef.current = false;
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    };
-    const onMove = (ev: MouseEvent) => {
-      if (!draggingRef.current || !readerRef.current) return;
-      const right = readerRef.current.getBoundingClientRect().right;
-      const outcome = panelDragOutcome(right - ev.clientX);
-      // Slide the divider past the minimum → collapse to the clean column, and
-      // reset the width so the Margin toggle reopens at a comfortable default
-      // (never while opening from the edge — that drag only sizes the panel up).
-      if (outcome.kind === "collapse" && !opening) {
-        setPanelWidth(DEFAULT_PANEL_WIDTH);
-        dispatchMargin("hide");
-        cleanup();
-        return;
-      }
-      setPanelWidth(outcome.kind === "resize" ? outcome.width : MIN_PANEL_WIDTH);
-    };
-    const onUp = () => cleanup();
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  }, []);
 
   // Load section list and start the session ONCE per reader open.
   useEffect(() => {
@@ -762,6 +729,75 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     setPendingDelete(null);
   }
 
+  // Render one paragraph as its `<p data-offset>`, with its book-typography role
+  // class (title/contents/epigraph/chapter/body) or legacy heading/blockquote/pre
+  // class — NEVER a heading tag, so selection anchoring keeps working. The
+  // chapter-opening paragraph (`body-first`, or the first prose para as a legacy
+  // fallback) carries a small-caps OPENER on its first few words — a render-only
+  // slice, so offsets/char-count are unchanged.
+  function renderBlock(p: Paragraph): ReactNode {
+    const role = p.pre ? null : blockRoleFor(p.offset, p.text.length, structure);
+    const roleClass = role ? blockRoleClass(role) : null;
+    const isBodyFirst = !p.pre && p.offset === bodyFirstOffset && !["title", "subtitle", "byline", "contents-label", "contents-part", "contents-item", "epigraph", "chapter-label", "chapter-title"].includes(role ?? "");
+    // The opener (small caps) only on the chapter's first prose paragraph.
+    const openerLen = isBodyFirst ? openerLength(p.text) : 0;
+    // A lone lowercase connective ("and") on the title page is emitted as a
+    // `subtitle` (per the shared vocabulary) but reads as an italic connector, not
+    // a shouting uppercase subtitle — tag it so CSS can style it down.
+    const isConnective = role === "subtitle" && /^(and|or|&)$/i.test(p.text.trim()) && p.text.trim() === p.text.trim().toLowerCase();
+    const cls = p.pre
+      ? "tl-block tl-pre"
+      : [roleClass, isBodyFirst ? "tl-body-first" : null, isConnective ? "tl-tp-and" : null].filter(Boolean).join(" ") || undefined;
+    return (
+      <p
+        key={p.offset}
+        data-offset={p.offset}
+        className={cls}
+        ref={(el) => {
+          if (el) paragraphRefs.current.set(p.offset, el);
+          else paragraphRefs.current.delete(p.offset);
+        }}
+      >
+        {renderParagraph(p.text, p.offset, highlights, structure, activeNoteId, setActiveNoteId, openerLen)}
+      </p>
+    );
+  }
+
+  // The reading column: paragraphs in document order, except a RUN of consecutive
+  // `contents-item` paragraphs is wrapped in a 2-column grouping container. That
+  // wrapper lives INSIDE the reading column and its `p[data-offset]` children keep
+  // exact offsets + remain reachable via closest('p[data-offset]'), so selection
+  // anchoring and the golden loop are unaffected (book-typography invariant).
+  function renderColumn(): ReactNode {
+    const out: ReactNode[] = [];
+    let i = 0;
+    while (i < paragraphs.length) {
+      const p = paragraphs[i];
+      const role = p.pre ? null : blockRoleFor(p.offset, p.text.length, structure);
+      if (isContentsItem(role)) {
+        const run: Paragraph[] = [];
+        while (i < paragraphs.length) {
+          const q = paragraphs[i];
+          const qRole = q.pre ? null : blockRoleFor(q.offset, q.text.length, structure);
+          if (!isContentsItem(qRole)) break;
+          run.push(q);
+          i++;
+        }
+        // Single column on narrow windows is handled in CSS (the wrapper's
+        // `columns` collapses); a lone item also reads fine in one column.
+        out.push(
+          <div className="tl-toc-cols" key={`toc-${run[0].offset}`}>
+            {run.map(renderBlock)}
+          </div>,
+        );
+        continue;
+      }
+      out.push(renderBlock(p));
+      i++;
+    }
+    return out;
+  }
+
   if (!currentSection) {
     return (
       <div className="tl-reader">
@@ -820,99 +856,60 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         <button className="tl-btn tl-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setEndingPrompt(true)}>{rescue ? "Done" : "Finish"}</button>
       </div>
 
+      {/* THE DESK: the scroll container (keyboard-pageable, owns selection +
+          endReached). Inside it the SPREAD centers the sheet + margin rail as one
+          composition (justify-content:center) — closed → the sheet alone is
+          dead-center; open → the pair re-centers. No reserved gutter, no JS
+          measuring; the rail's flex-basis animates 0↔372px and the sheet slides
+          to re-center. Capped at 1560px so ultrawide letterboxes symmetrically. */}
       <div
-        className={marginIsVisible ? "tl-reader-body tl-margin-open" : "tl-reader-body tl-margin-closed"}
-        // STABLE CENTER: when the margin is CLOSED the desk reserves the margin's
-        // width on its right (panel + the 6px resizer), mirroring the space the
-        // panel takes when OPEN — so the centered reading sheet sits in the same
-        // box either way and never shifts left/right on toggle. CSS reads this var
-        // only in the .tl-margin-closed state.
-        style={{ ["--tl-margin-reserve" as string]: `${panelWidth + 6}px` }}
+        className="tl-reader-main"
+        ref={containerRef}
+        tabIndex={0}
+        onScroll={handleScroll}
+        onMouseUp={onTextMouseUp}
+        onKeyDown={onReaderKeyDown}
       >
         <div
-          className="tl-reader-main"
-          ref={containerRef}
-          tabIndex={0}
-          onScroll={handleScroll}
-          onMouseUp={onTextMouseUp}
-          onKeyDown={onReaderKeyDown}
+          className="tl-spread"
+          data-margin={marginIsVisible ? "open" : "closed"}
         >
-          {rescue && (
-            <div className="tl-rescue-banner" style={{ maxWidth: `${lineWidth}px` }} role="note">
-              <TLIcon name="clock" size={15} />
-              <span>Ten minutes. The goal is just to stay connected to the book — not to finish anything.</span>
-            </div>
-          )}
-          {textError ? (
-            <div className="tl-readcol" style={{ maxWidth: `${lineWidth}px` }}>
-              <div className="tl-read-error" role="alert">
-                <p>{textError}</p>
-                <p className="tl-read-error-hint">The book file may have moved or be in use. Try again, or reopen this book from Today.</p>
-                <button className="tl-btn tl-btn-primary" onClick={() => { setTextError(null); setLoadNonce((n) => n + 1); }}>Try again</button>
+          <article className="tl-sheet">
+            {rescue && (
+              <div className="tl-rescue-banner" style={{ maxWidth: `${lineWidth}px` }} role="note">
+                <TLIcon name="clock" size={15} />
+                <span>Ten minutes. The goal is just to stay connected to the book — not to finish anything.</span>
               </div>
+            )}
+            {textError ? (
+              <div className="tl-readcol" style={{ maxWidth: `${lineWidth}px` }}>
+                <div className="tl-read-error" role="alert">
+                  <p>{textError}</p>
+                  <p className="tl-read-error-hint">The book file may have moved or be in use. Try again, or reopen this book from Today.</p>
+                  <button className="tl-btn tl-btn-primary" onClick={() => { setTextError(null); setLoadNonce((n) => n + 1); }}>Try again</button>
+                </div>
+              </div>
+            ) : (
+            <div className="tl-readcol" ref={colRef} style={{ maxWidth: `${lineWidth}px`, fontSize: `${fontSize}px` }}>
+              {renderColumn()}
             </div>
-          ) : (
-          <div className="tl-readcol" ref={colRef} style={{ maxWidth: `${lineWidth}px`, fontSize: `${fontSize}px` }}>
-            {paragraphs.map((p) => {
-              // Block role (heading/blockquote) styles the WHOLE paragraph via a
-              // class — never a heading TAG, so it stays a `p[data-offset]` and
-              // selection anchoring keeps working. Inline emphasis is composed
-              // inside renderParagraph.
-              const role = blockRoleFor(p.offset, p.text.length, structure);
-              // The first prose paragraph of the section opens with a raised
-              // initial (drop cap). The class drives a CSS ::first-letter rule —
-              // NO extra DOM node, so char offsets / selection anchoring are exact.
-              const dropCap = !p.pre && !role && p.offset === dropCapOffset;
-              const cls = p.pre
-                ? "tl-block tl-pre"
-                : role
-                  ? `tl-block tl-${role}`
-                  : dropCap
-                    ? "tl-dropcap"
-                    : undefined;
-              return (
-                <p
-                  key={p.offset}
-                  data-offset={p.offset}
-                  className={cls}
-                  ref={(el) => {
-                    if (el) paragraphRefs.current.set(p.offset, el);
-                    else paragraphRefs.current.delete(p.offset);
-                  }}
-                >
-                  {renderParagraph(p.text, p.offset, highlights, structure, activeNoteId, setActiveNoteId)}
-                </p>
-              );
-            })}
-          </div>
-          )}
-        </div>
+            )}
+          </article>
 
-        {/* The margin stays MOUNTED when collapsed (hidden via display:none), so a
-            tutor card's in-flight stream finishes and its answer persists — reopening
-            shows it instantly with NO re-call to the model. Only visibility toggles. */}
-        {marginIsVisible && (
-          <div
-            className={draggingRef.current ? "tl-panel-resizer dragging" : "tl-panel-resizer"}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize notes panel"
-            onMouseDown={startPanelDrag}
-          />
-        )}
-        <aside
-          className="tl-sidepanel"
-          style={{
-            flexBasis: `${panelWidth}px`,
-            width: `${panelWidth}px`,
-            display: marginIsVisible ? undefined : "none",
-          }}
-          aria-hidden={!marginIsVisible}
-          aria-label="Notes, highlights, and tutor cards"
-        >
-              <div className="tl-sidepanel-head">
-                <span>Margin</span>
-                <button className="tl-iconbtn" aria-label="Hide notes panel" title="Hide notes panel" onClick={() => dispatchMargin("hide")}>
+          {/* THE CHROMELESS MARGIN. The rail is ALWAYS mounted (only its flex-basis
+              + opacity animate to 0 when closed) so a tutor card's in-flight stream
+              finishes and its answer persists — reopening shows it instantly with
+              NO re-call to the model. Chromeless: no panel background/border — the
+              header label, close ×, and note cards sit directly on the desk. */}
+          <aside
+            className="tl-margin-rail"
+            aria-label="Margin"
+            aria-hidden={!marginIsVisible}
+          >
+            <div className="tl-margin-inner">
+              <div className="tl-margin-head">
+                <span className="tl-margin-label">Margin</span>
+                <button className="tl-iconbtn" aria-label="Close margin" title="Close margin" onClick={() => dispatchMargin("hide")} tabIndex={marginIsVisible ? 0 : -1}>
                   <TLIcon name="x" size={15} />
                 </button>
               </div>
@@ -936,10 +933,10 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
                 />
               )}
 
-              {/* Empty-state hint: only when the margin is actually shown (it has no
-                  state to preserve, so it's safe to drop from the DOM when hidden). */}
+              {/* Empty state: ONLY the one-line hint on the desk — no filled panel,
+                  no placeholder cards. */}
               {marginIsVisible && sectionNotes.length === 0 && sectionDrafts.length === 0 && !briefingVisible && marginHelp !== "quiet" && (
-                <p className="tl-sidepanel-empty">
+                <p className="tl-margin-hint">
                   Select a passage to highlight, add a note, or open a tutor prompt. Anything you capture collects here, beside the text.
                 </p>
               )}
@@ -966,18 +963,9 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
                   onDiscard={() => onTutorDiscard(d.draftId)}
                 />
               ))}
-        </aside>
-        {/* Collapsed: a slim edge grab to slide the margin back open. */}
-        {!marginIsVisible && (
-          <div
-            className="tl-margin-reopen"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Open the margin"
-            title="Drag to open the margin"
-            onMouseDown={(e) => startPanelDrag(e, { opening: true })}
-          />
-        )}
+            </div>
+          </aside>
+        </div>
       </div>
 
       {sel && (
@@ -1231,16 +1219,23 @@ function renderParagraph(
   inlineSpans: StyleRange[],
   activeId: string | null,
   setActive: (id: string) => void,
+  /** Length of a leading small-caps opener (book-convention chapter opening),
+   *  or 0 for none. A render-only slice — never changes the paragraph's offsets. */
+  openerLen = 0,
 ): ReactNode {
-  const segments = segmentParagraph(text, pOffset, highlights, inlineSpans);
-  if (segments.length === 1 && !segments[0].hlId && !segments[0].strong && !segments[0].em) {
+  const segments = segmentParagraph(text, pOffset, highlights, inlineSpans, openerLen);
+  if (segments.length === 1 && !segments[0].hlId && !segments[0].strong && !segments[0].em && !segments[0].opener) {
     return segments[0].text;
   }
   return segments.map((seg, i) => {
-    if (!seg.hlId && !seg.strong && !seg.em) return seg.text;
+    if (!seg.hlId && !seg.strong && !seg.em && !seg.opener) return seg.text;
     let node: ReactNode = seg.text;
     if (seg.em) node = <em>{node}</em>;
     if (seg.strong) node = <strong>{node}</strong>;
+    // The opener wraps the leading phrase in a render-only span (small-caps via
+    // CSS). It sits INSIDE any em/strong but OUTSIDE the highlight mark so a
+    // highlight that overlaps the opener still reads as one continuous wash.
+    if (seg.opener) node = <span className="tl-opener">{node}</span>;
     if (seg.hlId) {
       const id = seg.hlId;
       node = (

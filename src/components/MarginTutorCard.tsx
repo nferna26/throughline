@@ -292,20 +292,20 @@ export default function MarginTutorCard(props: {
   // Keep the newest streamed text in view (unless the reader scrolled up).
   useEffect(() => {
     if (!streaming || !stickToBottomRef.current) return;
-    const panel = cardRef.current?.closest(".tl-sidepanel") as HTMLElement | null;
+    const panel = cardRef.current?.closest(".tl-margin-inner, .tl-sidepanel, .tl-margin.flow") as HTMLElement | null;
     if (panel) panel.scrollTop = panel.scrollHeight;
   }, [briefAnswer, deepAnswer, streaming]);
 
   // Reset the margin to the top when the reader moves to a new passage/section,
   // so a fresh card opens at its start rather than mid-scroll (E3).
   useEffect(() => {
-    const panel = cardRef.current?.closest(".tl-sidepanel") as HTMLElement | null;
+    const panel = cardRef.current?.closest(".tl-margin-inner, .tl-sidepanel, .tl-margin.flow") as HTMLElement | null;
     if (panel) panel.scrollTop = 0;
   }, [draft.anchoredText, draft.locator]);
 
   // Detect a manual scroll-up so we stop yanking the view back down.
   useEffect(() => {
-    const panel = cardRef.current?.closest(".tl-sidepanel") as HTMLElement | null;
+    const panel = cardRef.current?.closest(".tl-margin-inner, .tl-sidepanel, .tl-margin.flow") as HTMLElement | null;
     if (!panel) return;
     const onScroll = () => {
       const nearBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 48;

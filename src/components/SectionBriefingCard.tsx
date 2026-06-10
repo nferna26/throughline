@@ -189,7 +189,7 @@ export default function SectionBriefingCard(props: {
   // Keep the streaming tail in view within the panel.
   useEffect(() => {
     if (phase !== "streaming" && phase !== "thinking") return;
-    const panel = cardRef.current?.closest(".tl-sidepanel") as HTMLElement | null;
+    const panel = cardRef.current?.closest(".tl-margin-inner, .tl-sidepanel, .tl-margin.flow") as HTMLElement | null;
     if (panel) panel.scrollTop = panel.scrollHeight;
   }, [text, phase]);
 
