@@ -363,6 +363,11 @@ where
     let _ = tx.send(StreamEvent::Done).await;
 }
 
+/// Fixed reader-facing message for a corrupted SSE stream. NEVER interpolate the
+/// payload or the parse error — mid-stream both carry book-derived text
+/// (invariant 1). Matches the OpenAI-compatible path's copy in `ai_client`.
+const STREAM_INTERRUPTED_MSG: &str = "The answer stream was interrupted — try again.";
+
 /// Strip the `data:` prefix from an SSE line, returning the JSON payload (or None
 /// for `event:`/comment/blank lines that carry no data).
 fn sse_data_payload(line: &str) -> Option<&str> {
@@ -388,7 +393,10 @@ pub fn parse_anthropic_line(line: &str) -> SseOutcome {
     };
     let v: serde_json::Value = match serde_json::from_str(payload) {
         Ok(v) => v,
-        Err(_) => return SseOutcome::Ignore,
+        // A `data:` payload that fails to parse is a transport fault — surfacing
+        // it (with fixed text) matches the OpenAI path's strictness instead of
+        // silently truncating the answer and ending with a clean Done.
+        Err(_) => return SseOutcome::Error(STREAM_INTERRUPTED_MSG.to_string()),
     };
     match v.get("type").and_then(|x| x.as_str()) {
         Some("content_block_delta") => {
@@ -938,7 +946,8 @@ pub fn parse_codex_line(line: &str) -> SseOutcome {
     };
     let v: serde_json::Value = match serde_json::from_str(payload) {
         Ok(v) => v,
-        Err(_) => return SseOutcome::Ignore,
+        // Same transport-fault contract as `parse_anthropic_line`.
+        Err(_) => return SseOutcome::Error(STREAM_INTERRUPTED_MSG.to_string()),
     };
     match v.get("type").and_then(|x| x.as_str()) {
         Some("response.output_text.delta") => match v.get("delta").and_then(|x| x.as_str()) {
@@ -1386,6 +1395,44 @@ mod tests {
             SseOutcome::Error(m) => assert_eq!(m, "boom"),
             _ => panic!("expected Error"),
         }
+    }
+
+    /// CORE-1027: a `data:` line that fails JSON parsing is a transport fault,
+    /// not noise — silently ignoring it truncates the answer while still ending
+    /// with a clean Done. Both named-event parsers must surface it with FIXED
+    /// text (mid-stream the payload is book-derived; invariant 1), matching the
+    /// OpenAI-compatible path's strictness in `ai_client`.
+    #[test]
+    fn malformed_data_lines_surface_as_generic_errors_not_silence() {
+        match parse_anthropic_line("data: {\"type\":\"content_block_delta\",\"delta\":{\"te") {
+            SseOutcome::Error(m) => {
+                assert_eq!(m, "The answer stream was interrupted — try again.");
+                assert!(
+                    !m.contains("content_block_delta"),
+                    "error text must never echo the payload: {m}"
+                );
+            }
+            _ => panic!("anthropic: malformed data line must surface, got Ignore/Delta/Done"),
+        }
+        match parse_codex_line("data: {\"type\":\"response.output_text.delta\",\"del") {
+            SseOutcome::Error(m) => {
+                assert_eq!(m, "The answer stream was interrupted — try again.")
+            }
+            _ => panic!("codex: malformed data line must surface, got Ignore/Delta/Done"),
+        }
+        // Non-data noise (event names, blanks, the [DONE] sentinel) stays ignored:
+        assert!(matches!(parse_anthropic_line("event: ping"), SseOutcome::Ignore));
+        assert!(matches!(parse_anthropic_line(""), SseOutcome::Ignore));
+        assert!(matches!(
+            parse_anthropic_line("data: [DONE]"),
+            SseOutcome::Ignore
+        ));
+        assert!(matches!(
+            parse_codex_line("event: response.created"),
+            SseOutcome::Ignore
+        ));
+        assert!(matches!(parse_codex_line(""), SseOutcome::Ignore));
+        assert!(matches!(parse_codex_line("data: [DONE]"), SseOutcome::Ignore));
     }
 
     #[test]
