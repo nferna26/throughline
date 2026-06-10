@@ -59,14 +59,17 @@ function optionIcon(o: RecoveryOption): IconName {
   }
 }
 
+// CORE-1007: GentleCatchup and WeekendCatchup are ADVICE — they change no
+// state and persist nothing, so their copy must never read as a commitment
+// ("Plan: …"). ExtendFinish is the one option that really mutates the plan.
 function describeOption(o: RecoveryOption): { primary: string; detail?: string } {
   switch (o.kind) {
     case "ResumeToday":
       return { primary: "Just read the next section", detail: "Skip recovery — open today's assigned section." };
     case "GentleCatchup":
       return {
-        primary: `Add ${o.extra_minutes} min for the next ${o.for_sessions} session${o.for_sessions === 1 ? "" : "s"}`,
-        detail: "Small, sustainable bumps until you're caught up.",
+        primary: `Try adding ${o.extra_minutes} min to your next few sittings`,
+        detail: "Just advice — nothing in your plan changes.",
       };
     case "WeekendCatchup":
       return {
@@ -366,11 +369,13 @@ function RecoveryPanel(props: {
         case "ResumeToday":
           setMessage("Just start reading — the next assigned section is ready.");
           break;
+        // Advice options (CORE-1007): no backend call, no persistence — so the
+        // message must read as advice, never as a saved plan change.
         case "GentleCatchup":
-          setMessage(`Plan: add ${option.extra_minutes} min for the next ${option.for_sessions} sessions.`);
+          setMessage(`Try adding ${option.extra_minutes} minutes to your next few sittings — no setting to change, just sit a little longer.`);
           break;
         case "WeekendCatchup":
-          setMessage("Plan: use the weekend window.");
+          setMessage("Use the weekend window when it comes — no weekday pressure, nothing to change.");
           break;
         case "ExtendFinish": {
           const r = await invoke<RecomputedPlan>("cmd_extend_finish_date", { bookId: props.bookId, addDays: option.add_days });

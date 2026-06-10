@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
 import Today from "./Today";
 import type { TodayCard } from "../types";
 
@@ -240,6 +241,63 @@ describe("Today", () => {
     expect(screen.queryByText(/restart/i)).toBeNull();
     expect(screen.queryByText(/start over/i)).toBeNull();
     expect(screen.queryByText(/current chapter/i)).toBeNull();
+  });
+});
+
+// CORE-1007: GentleCatchup / WeekendCatchup were placebo buttons — they read
+// as commitments ("Plan: add 10 min…") but changed no state and persisted
+// nothing. They are now honest advice; ExtendFinish stays the one option that
+// actually mutates the plan.
+describe("Today — recovery options are honest", () => {
+  function behindCard(): TodayCard {
+    const c = card();
+    c.recovery = {
+      headline: "Next smallest step: 10 minutes.",
+      days_behind: 3,
+      options: [
+        { kind: "GentleCatchup", extra_minutes: 10, for_sessions: 3 },
+        { kind: "WeekendCatchup", weekend_starts_in_days: 0 },
+        { kind: "ExtendFinish", add_days: 3, new_finish: "2026-06-04" },
+      ],
+    };
+    return c;
+  }
+
+  it("GentleCatchup and WeekendCatchup read as advice — no 'Plan:' claim, no backend call", () => {
+    render(<Today today={behindCard()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    // Ignore the mount-time cmd_list_plans_for_book lookup; from here on,
+    // clicking an advice option must never reach the backend.
+    vi.mocked(invoke).mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: /add(ing)? 10 min/i }));
+    // No fabricated commitment — nothing was persisted, so nothing may claim "Plan:".
+    expect(screen.queryByText(/^Plan:/)).toBeNull();
+    expect(
+      screen.getByText(/Try adding 10 minutes to your next few sittings — no setting to change, just sit a little longer\./),
+    ).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Catch up this weekend/i }));
+    expect(screen.queryByText(/^Plan:/)).toBeNull();
+    expect(screen.getByText(/no weekday pressure, nothing to change/i)).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("ExtendFinish stays the one real option: it calls cmd_extend_finish_date", async () => {
+    const onRefresh = vi.fn();
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+      cmd === "cmd_extend_finish_date"
+        ? { new_target_finish_date: "2026-06-04", new_daily_target_units: 1, remaining_sections: 4, remaining_days: 4 }
+        : [],
+    );
+    render(<Today today={behindCard()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={onRefresh} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Re-pace to finish by 2026-06-04/i }));
+    expect(await screen.findByText(/Finish date is now 2026-06-04/)).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("cmd_extend_finish_date", { bookId: "b1", addDays: 3 });
+    expect(onRefresh).toHaveBeenCalled();
+    vi.mocked(invoke).mockReset();
   });
 });
 
