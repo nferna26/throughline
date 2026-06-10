@@ -785,10 +785,12 @@ pub fn cmd_read_section_text(
 }
 
 /// Style ranges (headings/blockquotes/emphasis) for one section, in UTF-16
-/// offsets relative to the section's text — so the reader can style EPUB-derived
-/// text without mutating it. Empty for .txt books (no `structure.json`) and for
-/// any section with no captured ranges. Reads the per-book sidecar written at
-/// import; never touches the DB.
+/// offsets relative to the section's text — so the reader can style derived text
+/// without mutating it. Written at import for EPUBs (em/strong/h-roles/blockquote
+/// from the XHTML) and for newly imported Project Gutenberg `.txt` books (em from
+/// `_…_` italics, h1/h2 from heading lines). Empty for `.txt` books imported
+/// before that change (no `structure.json`) and for any section with no captured
+/// ranges. Reads the per-book sidecar written at import; never touches the DB.
 #[tauri::command]
 pub fn cmd_read_section_structure(
     book_id: String,
@@ -824,15 +826,25 @@ fn body_start_offset(book_id: &str) -> usize {
 /// must be rebased by `body_start` before slicing the RAW file — otherwise a
 /// Gutenberg-headed import renders text shifted by the header length. See
 /// [`slice_body`] for the pure slicing math (unit-tested).
+///
+/// A `.txt` book imported AFTER Gutenberg-markup cleaning has a derived
+/// `reader.txt` holding the CLEANED body (no `_…_` italics, no `[Illustration]`),
+/// whose section offsets index it directly (`body_start = 0`); prefer it. Legacy
+/// imports (raw `source.txt`, header-relative offsets) and EPUB-derived books
+/// (clean `source.txt`) fall through to the original `source.txt` path unchanged.
 pub fn read_txt_section(
     book_id: &str,
     start: usize,
     end: Option<usize>,
 ) -> std::io::Result<String> {
-    let src_path = paths::book_dir(book_id)
-        .map_err(|e| std::io::Error::other(e.to_string()))?
-        .join("source.txt");
-    let raw = fs::read_to_string(&src_path)?;
+    let dir = paths::book_dir(book_id).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let reader = dir.join("reader.txt");
+    if reader.exists() {
+        let body = fs::read_to_string(&reader)?;
+        // The cleaned body has no header to skip — offsets index it directly.
+        return Ok(slice_body(&body, 0, start, end));
+    }
+    let raw = fs::read_to_string(dir.join("source.txt"))?;
     Ok(slice_body(&raw, body_start_offset(book_id), start, end))
 }
 

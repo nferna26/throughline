@@ -34,6 +34,7 @@ pub mod db;
 pub mod epub_classify;
 pub mod error;
 pub mod export;
+pub mod gutenberg_markup;
 pub mod import;
 pub mod import_epub;
 pub mod keystore;
