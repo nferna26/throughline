@@ -134,6 +134,43 @@ pub fn cmd_get_active_plan(
     Ok(r)
 }
 
+/// `cmd_pause_plan`'s UPDATE, with "today" injected (CORE-1014: the pause day
+/// credit is a reader-local day boundary, so the date comes from
+/// `plan::app_today()` as a SQL param — never SQLite's UTC `date('now')`).
+/// Extracted so tests drive it with explicit dates.
+fn pause_plan_on(
+    conn: &rusqlite::Connection,
+    plan_id: &str,
+    today: chrono::NaiveDate,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE reading_plans SET lifecycle = 'paused', paused_at = ?2,
+           status = CASE WHEN status IN ('active','rebalanced') THEN 'paused' ELSE status END
+         WHERE id = ?1 AND lifecycle = 'active'",
+        rusqlite::params![plan_id, today.to_string()],
+    )
+}
+
+/// `cmd_resume_plan`'s UPDATE — same local-day seam as `pause_plan_on`.
+fn resume_plan_on(
+    conn: &rusqlite::Connection,
+    plan_id: &str,
+    today: chrono::NaiveDate,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE reading_plans SET
+           target_finish_date = date(target_finish_date,
+             '+' || CAST(julianday(?2) - julianday(paused_at) AS INTEGER) || ' days'),
+           paused_days_total = paused_days_total +
+             CAST(julianday(?2) - julianday(paused_at) AS INTEGER),
+           lifecycle = 'active',
+           status = CASE WHEN status = 'paused' THEN 'active' ELSE status END,
+           paused_at = NULL
+         WHERE id = ?1 AND lifecycle = 'paused' AND paused_at IS NOT NULL",
+        rusqlite::params![plan_id, today.to_string()],
+    )
+}
+
 /// Pause an active plan (its pace clock stops; resume extends the finish date).
 /// CORE-1003: pace/forecast gating keys on `status` (plan::compute), so the
 /// pause must write status='paused' too — otherwise Today keeps counting
@@ -142,13 +179,7 @@ pub fn cmd_get_active_plan(
 #[tauri::command]
 pub fn cmd_pause_plan(plan_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
-    conn.execute(
-        "UPDATE reading_plans SET lifecycle = 'paused', paused_at = date('now'),
-           status = CASE WHEN status IN ('active','rebalanced') THEN 'paused' ELSE status END
-         WHERE id = ?1 AND lifecycle = 'active'",
-        [&plan_id],
-    )
-    .map_err(AppError::from)?;
+    pause_plan_on(&conn, &plan_id, crate::plan::app_today()).map_err(AppError::from)?;
     snapshot_reached_percent(&conn, &plan_id).ok();
     Ok(())
 }
@@ -158,19 +189,7 @@ pub fn cmd_pause_plan(plan_id: String, state: State<DbState>) -> Result<(), AppE
 #[tauri::command]
 pub fn cmd_resume_plan(plan_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
-    conn.execute(
-        "UPDATE reading_plans SET
-           target_finish_date = date(target_finish_date,
-             '+' || CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER) || ' days'),
-           paused_days_total = paused_days_total +
-             CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER),
-           lifecycle = 'active',
-           status = CASE WHEN status = 'paused' THEN 'active' ELSE status END,
-           paused_at = NULL
-         WHERE id = ?1 AND lifecycle = 'paused' AND paused_at IS NOT NULL",
-        [&plan_id],
-    )
-    .map_err(AppError::from)?;
+    resume_plan_on(&conn, &plan_id, crate::plan::app_today()).map_err(AppError::from)?;
     Ok(())
 }
 
@@ -255,7 +274,14 @@ pub fn sweep_deleted_plans(conn: &rusqlite::Connection, days: i64) -> rusqlite::
 
 #[cfg(test)]
 mod tests {
+    use chrono::NaiveDate;
     use rusqlite::Connection;
+
+    use super::{pause_plan_on, resume_plan_on};
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -273,24 +299,14 @@ mod tests {
     #[test]
     fn pause_then_resume_extends_finish_by_paused_days() {
         let conn = db();
-        // Pretend it was paused 5 days ago.
+        // Paused on Jan 5, resumed on Jan 10 — explicit dates (CORE-1014: the
+        // helpers take the local day as a param; no wall clock in the test).
         conn.execute(
-            "UPDATE reading_plans SET lifecycle='paused', paused_at=date('now','-5 days') WHERE id='p1'",
+            "UPDATE reading_plans SET lifecycle='paused', paused_at='2026-01-05' WHERE id='p1'",
             [],
         )
         .unwrap();
-        // Resume math (the cmd_resume_plan SQL).
-        conn.execute(
-            "UPDATE reading_plans SET
-               target_finish_date = date(target_finish_date,
-                 '+' || CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER) || ' days'),
-               paused_days_total = paused_days_total +
-                 CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER),
-               lifecycle='active', paused_at=NULL
-             WHERE id='p1' AND lifecycle='paused'",
-            [],
-        )
-        .unwrap();
+        resume_plan_on(&conn, "p1", d(2026, 1, 10)).unwrap();
         let (finish, total, lifecycle): (String, i64, String) = conn
             .query_row(
                 "SELECT target_finish_date, paused_days_total, lifecycle FROM reading_plans WHERE id='p1'",
@@ -316,35 +332,13 @@ mod tests {
     /// pause UPDATE must write status='paused' — not just lifecycle — and the
     /// resume UPDATE must set it back to 'active'. Otherwise a reader who pauses
     /// their only plan watches "Behind · N days" keep growing during the pause.
+    /// Drives the real command helpers with explicit local days (pause Jan 5,
+    /// resume Jan 10 — 5 paused days for resume to add back).
     #[test]
     fn pause_writes_status_paused_and_resume_restores_active() {
         let conn = db();
-        // The cmd_pause_plan SQL (backdated 5 days so resume has days to add).
-        let pause = |conn: &Connection, id: &str| {
-            conn.execute(
-                "UPDATE reading_plans SET lifecycle = 'paused', paused_at = date('now','-5 days'),
-                   status = CASE WHEN status IN ('active','rebalanced') THEN 'paused' ELSE status END
-                 WHERE id = ?1 AND lifecycle = 'active'",
-                [id],
-            )
-            .unwrap();
-        };
-        // The cmd_resume_plan SQL.
-        let resume = |conn: &Connection, id: &str| {
-            conn.execute(
-                "UPDATE reading_plans SET
-                   target_finish_date = date(target_finish_date,
-                     '+' || CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER) || ' days'),
-                   paused_days_total = paused_days_total +
-                     CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER),
-                   lifecycle = 'active',
-                   status = CASE WHEN status = 'paused' THEN 'active' ELSE status END,
-                   paused_at = NULL
-                 WHERE id = ?1 AND lifecycle = 'paused' AND paused_at IS NOT NULL",
-                [id],
-            )
-            .unwrap();
-        };
+        let pause = |conn: &Connection, id: &str| pause_plan_on(conn, id, d(2026, 1, 5)).unwrap();
+        let resume = |conn: &Connection, id: &str| resume_plan_on(conn, id, d(2026, 1, 10)).unwrap();
 
         pause(&conn, "p1");
         assert_eq!(

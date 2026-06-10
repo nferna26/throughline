@@ -696,17 +696,17 @@ mod tests {
     /// never the UTC day. A US evening reader finishing tonight's section at
     /// 9pm ET belongs to tonight, not to tomorrow's UTC date. Banned shapes:
     /// the two chrono UTC-day spellings (`.naive_utc()` + `.date()`,
-    /// `Utc::now()` + `.date_naive()`) and the SQL day boundary `DATE` of
-    /// `'now'` (uppercase, the codebase's day-comparison convention — streaks
-    /// must compare against a Rust-supplied local date param instead).
-    /// Lowercase `datetime('now')` timestamp arithmetic stays legitimate and
-    /// is deliberately not matched.
+    /// `Utc::now()` + `.date_naive()`) and the SQL day boundary `date` of
+    /// `'now'` in any case — day comparisons must use a Rust-supplied local
+    /// date param instead. `datetime('now')` timestamp arithmetic stays
+    /// legitimate and is deliberately not matched (`date(` is not a prefix of
+    /// `datetime(`, so the case-folded scan can't catch it by accident).
     #[test]
     fn day_boundaries_use_local_app_today() {
         // Needles assembled at runtime so this test's own source never matches.
         let rust_utc_day = format!("{}{}", "naive_utc().", "date()");
         let rust_utc_day_2 = format!("{}{}", "Utc::now().", "date_naive()");
-        let sql_utc_day = format!("{}{}", "DATE('", "now'");
+        let sql_utc_day = format!("{}{}", "date('", "now'");
 
         let mut violations: Vec<String> = Vec::new();
         for (path, code) in backend_sources_without_comments() {
@@ -717,7 +717,7 @@ mod tests {
             if path.ends_with("log.rs") {
                 continue;
             }
-            for needle in [&rust_utc_day, &rust_utc_day_2, &sql_utc_day] {
+            for needle in [&rust_utc_day, &rust_utc_day_2] {
                 if code.contains(needle.as_str()) {
                     violations.push(format!(
                         "{}: contains `{}` — day boundaries must use plan::app_today() \
@@ -726,6 +726,14 @@ mod tests {
                         needle
                     ));
                 }
+            }
+            if code.to_lowercase().contains(sql_utc_day.as_str()) {
+                violations.push(format!(
+                    "{}: contains `{}` (any case) — day boundaries must use \
+                     plan::app_today() (pass the local date into SQL as a param)",
+                    path.display(),
+                    sql_utc_day
+                ));
             }
         }
         if !violations.is_empty() {
