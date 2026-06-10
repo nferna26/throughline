@@ -12,6 +12,17 @@ use crate::paths;
 
 /// Approximate words-per-minute for "serious reading" pace
 pub const WPM: i64 = 200;
+/// Upper bound on a .txt source file (bytes). `import_txt` reads the whole
+/// file into memory, so an accidental multi-GB drop (a log, a dataset) would
+/// balloon memory and stall the app. 100 MB is ~30× War & Peace (~3.2 MB) —
+/// far past any real book. EPUBs have their own accumulated-extraction cap
+/// (`import_epub::MAX_EXTRACTED_BODY_BYTES`).
+pub const MAX_TXT_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Pure guard for the .txt size cap: is a file of `len` bytes importable?
+pub fn txt_size_ok(len: u64) -> bool {
+    len <= MAX_TXT_BYTES
+}
 /// Target section length in characters (~10–15 min reading)
 pub const TARGET_SECTION_CHARS: usize = 9_000;
 /// Minimum prose (chars) that must follow a heading for it to count as a real
@@ -538,6 +549,16 @@ fn floor_char_boundary(body: &str, idx: usize) -> usize {
     idx
 }
 
+/// How far a single snap may walk while looking for the next split point or
+/// skipping a whitespace run. Prose has whitespace within a few chars; only
+/// pathological input (minified blobs, whitespace-free runs, mile-long
+/// whitespace runs) reaches the cap — and for those a capped split is the
+/// correct trade, because an unbounded walk made every snap O(body) and
+/// sectionize O(body²) (100 MB of NUL bytes took 887s in the CORE-1029 red run).
+/// Sectionize calls snap O(body / TARGET_SECTION_CHARS) times, so the bounded
+/// walks add at most ~body/9 bytes of total scanning — linear.
+const SNAP_WALK_WINDOW: usize = 1_000;
+
 /// Snap a byte index FORWARD to a clean reading boundary so a section never
 /// starts or ends in the middle of a word. Preference, nearest-first within a
 /// bounded window: a PARAGRAPH break (blank line) > a SENTENCE end (`.?!` then
@@ -545,24 +566,31 @@ fn floor_char_boundary(body: &str, idx: usize) -> usize {
 /// The result is always a valid UTF-8 char boundary, and the char just before it
 /// is never a word character abutting a word character at it — so `body[..b]` and
 /// `body[b..]` split cleanly. All windows are far below TARGET_SECTION_CHARS
-/// (9_000), so a snap can never collapse a section into the next one.
+/// (9_000), so a snap can never collapse a section into the next one — and every
+/// scan in here is window-bounded, so one call is O(window) no matter the input.
 fn snap_to_boundary(body: &str, idx: usize) -> usize {
     let len = body.len();
     if idx == 0 || idx >= len {
         return floor_char_boundary(body, idx);
     }
     let bytes = body.as_bytes();
+    // Skip a whitespace run, never walking more than SNAP_WALK_WINDOW: stopping
+    // mid-run still splits between whitespace chars, so no word is ever cut.
+    let skip_ws = |from: usize| {
+        let lim = (from + SNAP_WALK_WINDOW).min(len);
+        let mut k = from;
+        while k < lim && bytes[k].is_ascii_whitespace() {
+            k += 1;
+        }
+        k
+    };
 
     // 1. Paragraph break (blank line) -> first real char of the next paragraph.
     let para_window = 1_000.min(len - idx);
     for j in 0..para_window {
         let pos = idx + j;
         if bytes[pos] == b'\n' && pos + 1 < len && bytes[pos + 1] == b'\n' {
-            let mut k = pos + 2;
-            while k < len && bytes[k].is_ascii_whitespace() {
-                k += 1;
-            }
-            return floor_char_boundary(body, k);
+            return floor_char_boundary(body, skip_ws(pos + 2));
         }
     }
 
@@ -574,32 +602,50 @@ fn snap_to_boundary(body: &str, idx: usize) -> usize {
             && pos + 1 < len
             && bytes[pos + 1].is_ascii_whitespace()
         {
-            let mut k = pos + 1;
-            while k < len && bytes[k].is_ascii_whitespace() {
-                k += 1;
-            }
+            let k = skip_ws(pos + 1);
             if k < len {
                 return floor_char_boundary(body, k);
             }
         }
     }
 
-    // 3. Word boundary: advance to the first whitespace at/after idx, then to the
-    //    start of the next word. The char before the split is then whitespace, so
-    //    no word is ever cut. (Prose has whitespace within a few chars; bounded by len.)
+    // 3. Word boundary: advance to the first whitespace within the window, then
+    //    to the start of the next word. The char before the split is then
+    //    whitespace, so no word is ever cut.
+    let limit = (idx + SNAP_WALK_WINDOW).min(len);
     let mut pos = idx;
-    while pos < len && !bytes[pos].is_ascii_whitespace() {
+    while pos < limit && !bytes[pos].is_ascii_whitespace() {
         pos += 1;
     }
-    while pos < len && bytes[pos].is_ascii_whitespace() {
-        pos += 1;
-    }
-    if pos < len {
-        return floor_char_boundary(body, pos);
+    if pos < limit {
+        let k = skip_ws(pos);
+        if k < len {
+            return floor_char_boundary(body, k);
+        }
+        return floor_char_boundary(body, idx);
     }
 
-    // 4. No whitespace ahead (a pathological single-token tail): a word split is
-    //    unavoidable, so fall back to a codepoint-safe split.
+    // 4. No whitespace within the window: accept the first non-word adjacency
+    //    instead (a split is clean as long as the chars on both sides aren't
+    //    both alphanumeric — punctuation, dashes, symbols all qualify).
+    let start = floor_char_boundary(body, idx);
+    let end = floor_char_boundary(body, limit);
+    let mut prev = body[..start].chars().next_back();
+    for (off, ch) in body[start..end].char_indices() {
+        let p = start + off;
+        if p >= idx {
+            if let Some(pc) = prev {
+                if !(pc.is_alphanumeric() && ch.is_alphanumeric()) {
+                    return p;
+                }
+            }
+        }
+        prev = Some(ch);
+    }
+
+    // 5. The whole window is one solid run of word characters (pathological —
+    //    base64-ish blobs, not prose): an in-word split is unavoidable, and
+    //    walking further is the quadratic stall, so split codepoint-safely here.
     floor_char_boundary(body, idx)
 }
 
@@ -628,6 +674,18 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
     paths::ensure_dirs()?;
     if !src_path.exists() {
         return Err(anyhow!("source file does not exist: {:?}", src_path));
+    }
+    // Size cap BEFORE the whole-file read: a mistaken multi-GB drop (a log, a
+    // dataset) must be refused up front, not ballooned into memory.
+    let len = fs::metadata(src_path)
+        .with_context(|| format!("read metadata for {:?}", src_path))?
+        .len();
+    if !txt_size_ok(len) {
+        return Err(anyhow!(
+            "This file is {} MB — too large to be a book. Throughline can import text files up to {} MB.",
+            len.div_ceil(1024 * 1024),
+            MAX_TXT_BYTES / (1024 * 1024)
+        ));
     }
     let raw = fs::read_to_string(src_path).context("read source as utf-8")?;
     let (meta_title, meta_author, body_start) = extract_gutenberg_meta(&raw);
@@ -960,6 +1018,34 @@ mod tests {
     }
 
     #[test]
+    fn snap_to_boundary_never_walks_to_a_far_word_boundary() {
+        // O(n²) stall guard (follow-up to CORE-1029): on text whose next
+        // whitespace is far away — minified files, whitespace-free blobs — the
+        // word fallback must give up within its bounded window and hard-split,
+        // not walk to the distant whitespace. Per-call walks to EOF made
+        // sectionize quadratic: 100 MB of NUL bytes took 887s in the CORE-1029
+        // red run.
+        let body = format!("{}{}", "x".repeat(50_000), " tail");
+        let out = snap_to_boundary(&body, 100);
+        assert!(
+            out <= 100 + 1_000,
+            "split {out} walked to the far whitespace — the scan is unbounded"
+        );
+    }
+
+    #[test]
+    fn snap_to_boundary_never_walks_through_a_long_whitespace_run() {
+        // Same stall, other shape: a paragraph break followed by an enormous
+        // whitespace run must not be skipped to its end.
+        let body = format!("para one.\n\n{}next", " ".repeat(50_000));
+        let out = snap_to_boundary(&body, 5);
+        assert!(
+            out <= 5 + 2_000,
+            "split {out} walked the whole whitespace run"
+        );
+    }
+
+    #[test]
     fn floor_char_boundary_snaps_down_to_a_codepoint_start() {
         let s = "aé🜨b"; // bytes: a(1) é(2) 🜨(4) b(1) => len 8
         assert_eq!(floor_char_boundary(s, 0), 0);
@@ -969,6 +1055,43 @@ mod tests {
         assert_eq!(floor_char_boundary(s, 5), 3); // mid-'🜨' -> back to 3
         assert_eq!(floor_char_boundary(s, 7), 7); // boundary before 'b'
         assert_eq!(floor_char_boundary(s, 99), s.len()); // clamps to len
+    }
+
+    #[test]
+    fn txt_size_ok_boundary() {
+        assert!(
+            txt_size_ok(MAX_TXT_BYTES),
+            "exactly at the cap is importable"
+        );
+        assert!(!txt_size_ok(MAX_TXT_BYTES + 1), "one byte over is refused");
+    }
+
+    /// A multi-GB .txt (mistaken drop of a log/dataset) must be refused up
+    /// front with a friendly message — not read whole into memory. The fixture
+    /// is a sparse file (`set_len`, instant on APFS, no real bytes written).
+    #[test]
+    fn import_txt_rejects_files_over_the_size_cap() {
+        // import_txt calls paths::ensure_dirs(), which reads THROUGHLINE_DATA_DIR.
+        let _g = paths::lock_env_for_test();
+        let dir = std::env::temp_dir().join(format!("tl-txt-cap-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let big = dir.join("not-a-book.txt");
+        let f = fs::File::create(&big).unwrap();
+        f.set_len(MAX_TXT_BYTES + 1).unwrap();
+        drop(f);
+        let msg = match import_txt(&big) {
+            Ok(_) => panic!("an over-cap .txt must be refused"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(
+            msg.contains("too large to be a book"),
+            "error must say the file is too large to be a book, got: {msg}"
+        );
+        assert!(
+            msg.contains("100 MB"),
+            "error must name the limit in plain language, got: {msg}"
+        );
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

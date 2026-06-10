@@ -3,7 +3,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import TLIcon from "./TLIcon";
 import AiSetupSheet from "./AiSetupSheet";
 import TutorFuel from "./TutorFuel";
-import { aiProviderLabel, type Note, type AskHandle, type SettingsDto, type StreamEvent } from "../types";
+import { AI_PROVIDERS, aiProviderLabel, type Note, type AskHandle, type SettingsDto, type StreamEvent } from "../types";
 import { humanizeError, looksUnavailable } from "../aiErrors";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
 import "../tl-tutor.css";
@@ -429,14 +429,14 @@ export default function MarginTutorCard(props: {
         </button>
       </div>
 
-      {/* collapsed quote chip: the passage + locator, click to expand */}
+      {/* collapsed quote chip: the passage itself is the anchor the reader
+          cares about — no raw locator plumbing. Click to expand. */}
       <button
         className={`tl-quotechip${quoteOpen ? " is-open" : ""}`}
         onClick={(e) => { e.stopPropagation(); setQuoteOpen((o) => !o); }}
         title={quoteOpen ? "Hide full passage" : "Show full passage"}
       >
         <span className="tl-quotechip-text">“{draft.anchoredText}”</span>
-        {draft.locator && <span className="tl-quotechip-loc">{draft.locator}</span>}
       </button>
 
       {capExhausted ? (
@@ -658,9 +658,13 @@ export default function MarginTutorCard(props: {
         >
           <div className="tl-replan-sheet" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
             <h3>Send this passage to {cloudConsent.host}?</h3>
+            {/* The first sentence is the provider's own disclosure (AI_PROVIDERS),
+                so this dialog and the provider picker can never drift: key for
+                BYO, login for Codex, the one-time purchase for company mode. */}
             <p className="ctx">
-              Your selected passage (below) goes to <b>{cloudConsent.host}</b> under your API key so the
-              tutor can answer. Your book file never leaves this Mac. Asked once, then remembered.
+              {AI_PROVIDERS.find((p) => p.id === provider)?.disclosure
+                ?? `Your selected passage (below) is sent to ${cloudConsent.host} so the tutor can answer — never the whole book.`}{" "}
+              Your book file never leaves this Mac. Asked once, then remembered.
             </p>
             <blockquote style={{ margin: "0 0 var(--tl-4)", padding: "8px 12px", borderLeft: "2px solid var(--tl-line)", color: "var(--tl-muted)", fontSize: 13, fontStyle: "italic" }}>
               "{draft.anchoredText.length > 220 ? draft.anchoredText.slice(0, 220) + "…" : draft.anchoredText}"

@@ -134,6 +134,43 @@ pub fn cmd_get_active_plan(
     Ok(r)
 }
 
+/// `cmd_pause_plan`'s UPDATE, with "today" injected (CORE-1014: the pause day
+/// credit is a reader-local day boundary, so the date comes from
+/// `plan::app_today()` as a SQL param — never SQLite's UTC `date('now')`).
+/// Extracted so tests drive it with explicit dates.
+fn pause_plan_on(
+    conn: &rusqlite::Connection,
+    plan_id: &str,
+    today: chrono::NaiveDate,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE reading_plans SET lifecycle = 'paused', paused_at = ?2,
+           status = CASE WHEN status IN ('active','rebalanced') THEN 'paused' ELSE status END
+         WHERE id = ?1 AND lifecycle = 'active'",
+        rusqlite::params![plan_id, today.to_string()],
+    )
+}
+
+/// `cmd_resume_plan`'s UPDATE — same local-day seam as `pause_plan_on`.
+fn resume_plan_on(
+    conn: &rusqlite::Connection,
+    plan_id: &str,
+    today: chrono::NaiveDate,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE reading_plans SET
+           target_finish_date = date(target_finish_date,
+             '+' || CAST(julianday(?2) - julianday(paused_at) AS INTEGER) || ' days'),
+           paused_days_total = paused_days_total +
+             CAST(julianday(?2) - julianday(paused_at) AS INTEGER),
+           lifecycle = 'active',
+           status = CASE WHEN status = 'paused' THEN 'active' ELSE status END,
+           paused_at = NULL
+         WHERE id = ?1 AND lifecycle = 'paused' AND paused_at IS NOT NULL",
+        rusqlite::params![plan_id, today.to_string()],
+    )
+}
+
 /// Pause an active plan (its pace clock stops; resume extends the finish date).
 /// CORE-1003: pace/forecast gating keys on `status` (plan::compute), so the
 /// pause must write status='paused' too — otherwise Today keeps counting
@@ -142,13 +179,7 @@ pub fn cmd_get_active_plan(
 #[tauri::command]
 pub fn cmd_pause_plan(plan_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
-    conn.execute(
-        "UPDATE reading_plans SET lifecycle = 'paused', paused_at = date('now'),
-           status = CASE WHEN status IN ('active','rebalanced') THEN 'paused' ELSE status END
-         WHERE id = ?1 AND lifecycle = 'active'",
-        [&plan_id],
-    )
-    .map_err(AppError::from)?;
+    pause_plan_on(&conn, &plan_id, crate::plan::app_today()).map_err(AppError::from)?;
     snapshot_reached_percent(&conn, &plan_id).ok();
     Ok(())
 }
@@ -158,19 +189,7 @@ pub fn cmd_pause_plan(plan_id: String, state: State<DbState>) -> Result<(), AppE
 #[tauri::command]
 pub fn cmd_resume_plan(plan_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
-    conn.execute(
-        "UPDATE reading_plans SET
-           target_finish_date = date(target_finish_date,
-             '+' || CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER) || ' days'),
-           paused_days_total = paused_days_total +
-             CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER),
-           lifecycle = 'active',
-           status = CASE WHEN status = 'paused' THEN 'active' ELSE status END,
-           paused_at = NULL
-         WHERE id = ?1 AND lifecycle = 'paused' AND paused_at IS NOT NULL",
-        [&plan_id],
-    )
-    .map_err(AppError::from)?;
+    resume_plan_on(&conn, &plan_id, crate::plan::app_today()).map_err(AppError::from)?;
     Ok(())
 }
 
@@ -219,6 +238,23 @@ pub fn sweep_deleted_plans(conn: &rusqlite::Connection, days: i64) -> rusqlite::
         return Ok(0);
     }
     let cutoff = format!("-{days} days");
+    // CORE-1033: the purged notes' exported Markdown mirrors go with them —
+    // same contract as cmd_delete_note, so the notebook and the export stay in
+    // sync with no orphan files. Best-effort: a missing or unremovable file
+    // must never abort the sweep.
+    let mut stmt = conn.prepare(
+        "SELECT exported_markdown_path FROM notes
+         WHERE exported_markdown_path IS NOT NULL AND session_id IN (
+            SELECT s.id FROM reading_sessions s JOIN reading_plans p ON p.id = s.plan_id
+            WHERE p.deleted_at IS NOT NULL AND p.deleted_at < datetime('now', ?1))",
+    )?;
+    let mirrors: Vec<String> = stmt
+        .query_map([&cutoff], |r| r.get::<_, String>(0))?
+        .filter_map(|x| x.ok())
+        .collect();
+    for path in mirrors {
+        let _ = std::fs::remove_file(&path);
+    }
     conn.execute(
         "DELETE FROM notes WHERE session_id IN (
             SELECT s.id FROM reading_sessions s JOIN reading_plans p ON p.id = s.plan_id
@@ -238,7 +274,14 @@ pub fn sweep_deleted_plans(conn: &rusqlite::Connection, days: i64) -> rusqlite::
 
 #[cfg(test)]
 mod tests {
+    use chrono::NaiveDate;
     use rusqlite::Connection;
+
+    use super::{pause_plan_on, resume_plan_on};
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -256,24 +299,14 @@ mod tests {
     #[test]
     fn pause_then_resume_extends_finish_by_paused_days() {
         let conn = db();
-        // Pretend it was paused 5 days ago.
+        // Paused on Jan 5, resumed on Jan 10 — explicit dates (CORE-1014: the
+        // helpers take the local day as a param; no wall clock in the test).
         conn.execute(
-            "UPDATE reading_plans SET lifecycle='paused', paused_at=date('now','-5 days') WHERE id='p1'",
+            "UPDATE reading_plans SET lifecycle='paused', paused_at='2026-01-05' WHERE id='p1'",
             [],
         )
         .unwrap();
-        // Resume math (the cmd_resume_plan SQL).
-        conn.execute(
-            "UPDATE reading_plans SET
-               target_finish_date = date(target_finish_date,
-                 '+' || CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER) || ' days'),
-               paused_days_total = paused_days_total +
-                 CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER),
-               lifecycle='active', paused_at=NULL
-             WHERE id='p1' AND lifecycle='paused'",
-            [],
-        )
-        .unwrap();
+        resume_plan_on(&conn, "p1", d(2026, 1, 10)).unwrap();
         let (finish, total, lifecycle): (String, i64, String) = conn
             .query_row(
                 "SELECT target_finish_date, paused_days_total, lifecycle FROM reading_plans WHERE id='p1'",
@@ -299,35 +332,14 @@ mod tests {
     /// pause UPDATE must write status='paused' — not just lifecycle — and the
     /// resume UPDATE must set it back to 'active'. Otherwise a reader who pauses
     /// their only plan watches "Behind · N days" keep growing during the pause.
+    /// Drives the real command helpers with explicit local days (pause Jan 5,
+    /// resume Jan 10 — 5 paused days for resume to add back).
     #[test]
     fn pause_writes_status_paused_and_resume_restores_active() {
         let conn = db();
-        // The cmd_pause_plan SQL (backdated 5 days so resume has days to add).
-        let pause = |conn: &Connection, id: &str| {
-            conn.execute(
-                "UPDATE reading_plans SET lifecycle = 'paused', paused_at = date('now','-5 days'),
-                   status = CASE WHEN status IN ('active','rebalanced') THEN 'paused' ELSE status END
-                 WHERE id = ?1 AND lifecycle = 'active'",
-                [id],
-            )
-            .unwrap();
-        };
-        // The cmd_resume_plan SQL.
-        let resume = |conn: &Connection, id: &str| {
-            conn.execute(
-                "UPDATE reading_plans SET
-                   target_finish_date = date(target_finish_date,
-                     '+' || CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER) || ' days'),
-                   paused_days_total = paused_days_total +
-                     CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER),
-                   lifecycle = 'active',
-                   status = CASE WHEN status = 'paused' THEN 'active' ELSE status END,
-                   paused_at = NULL
-                 WHERE id = ?1 AND lifecycle = 'paused' AND paused_at IS NOT NULL",
-                [id],
-            )
-            .unwrap();
-        };
+        let pause = |conn: &Connection, id: &str| pause_plan_on(conn, id, d(2026, 1, 5)).unwrap();
+        let resume =
+            |conn: &Connection, id: &str| resume_plan_on(conn, id, d(2026, 1, 10)).unwrap();
 
         pause(&conn, "p1");
         assert_eq!(
@@ -407,6 +419,25 @@ mod tests {
 
     #[test]
     fn sweep_purges_only_plans_past_the_window() {
+        // CORE-1033: purged notes take their exported Markdown mirrors with
+        // them (same contract as cmd_delete_note — no orphan files once the
+        // row is gone). The mirrors live in an isolated export dir so the test
+        // never touches the user's real GBrain; env vars are process-global,
+        // so serialize against other env-touching tests.
+        let _g = crate::paths::lock_env_for_test();
+        let export_dir =
+            std::env::temp_dir().join(format!("tl-sweep-mirror-test-{}", std::process::id()));
+        std::fs::remove_dir_all(&export_dir).ok();
+        std::fs::create_dir_all(export_dir.join("Notes")).unwrap();
+        // SAFETY: env vars are process-global; the lock above serializes access.
+        unsafe {
+            std::env::set_var("THROUGHLINE_EXPORT_DIR", &export_dir);
+        }
+        let old_mirror = export_dir.join("Notes").join("n_old.md");
+        let rec_mirror = export_dir.join("Notes").join("n_rec.md");
+        std::fs::write(&old_mirror, "# old").unwrap();
+        std::fs::write(&rec_mirror, "# recent").unwrap();
+
         let conn = db();
         conn.execute_batch(
             "INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle,deleted_at)
@@ -415,9 +446,23 @@ mod tests {
                VALUES ('p_rec','b1','2026-01-01','2026-02-01','archived','archived',datetime('now','-5 days'));
              INSERT INTO reading_sessions (id,book_id,started_at,plan_id) VALUES ('s_old','b1','2026-01-02','p_old');
              INSERT INTO notes (id,book_id,session_id,note_type,locator,body,created_at,updated_at)
-               VALUES ('n_old','b1','s_old','reflection','char:0','x','2026-01-02','2026-01-02');",
+               VALUES ('n_old','b1','s_old','reflection','char:0','x','2026-01-02','2026-01-02');
+             INSERT INTO reading_sessions (id,book_id,started_at,plan_id) VALUES ('s_rec','b1','2026-01-02','p_rec');
+             INSERT INTO notes (id,book_id,session_id,note_type,locator,body,created_at,updated_at)
+               VALUES ('n_rec','b1','s_rec','reflection','char:0','y','2026-01-02','2026-01-02');",
         )
         .unwrap();
+        conn.execute(
+            "UPDATE notes SET exported_markdown_path = ?1 WHERE id = 'n_old'",
+            [old_mirror.to_string_lossy().to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE notes SET exported_markdown_path = ?1 WHERE id = 'n_rec'",
+            [rec_mirror.to_string_lossy().to_string()],
+        )
+        .unwrap();
+
         let purged = super::sweep_deleted_plans(&conn, 30).unwrap();
         assert_eq!(purged, 1, "only the plan past the 30-day window is purged");
         assert_eq!(count(&conn, "reading_plans WHERE id='p_old'"), 0);
@@ -431,10 +476,23 @@ mod tests {
             0,
             "its notes purged"
         );
+        assert!(
+            !old_mirror.exists(),
+            "the purged note's Markdown mirror is removed with the row"
+        );
         assert_eq!(
             count(&conn, "reading_plans WHERE id='p_rec'"),
             1,
             "in-window kept"
         );
+        assert_eq!(count(&conn, "notes WHERE id='n_rec'"), 1, "its notes kept");
+        assert!(
+            rec_mirror.exists(),
+            "a kept note's Markdown mirror is untouched"
+        );
+
+        unsafe {
+            std::env::remove_var("THROUGHLINE_EXPORT_DIR");
+        }
     }
 }

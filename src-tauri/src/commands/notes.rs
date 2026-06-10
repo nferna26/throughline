@@ -45,7 +45,9 @@ pub fn cmd_save_note(
 
 /// Update an existing note in place (autosave / edit on a marginalia card).
 /// COALESCE semantics: a `None` field is left unchanged, so the frontend can
-/// PATCH just the body during autosave without clobbering type/quote. Re-exports
+/// PATCH just the body during autosave without clobbering type/quote. Because
+/// `None` means "unchanged", the dedicated `clear_*` flags (additive, API-minor)
+/// are the only way to NULL `short_quote` / `anchored_text` once set. Re-exports
 /// to the SAME stable file so the Markdown mirror updates rather than duplicates.
 #[tauri::command]
 pub fn cmd_update_note(
@@ -54,9 +56,36 @@ pub fn cmd_update_note(
     body: Option<String>,
     short_quote: Option<String>,
     anchored_text: Option<String>,
+    clear_short_quote: Option<bool>,
+    clear_anchored_text: Option<bool>,
     state: State<DbState>,
 ) -> Result<Note, AppError> {
     let conn = state.0.lock()?;
+    update_note_impl(
+        &conn,
+        &note_id,
+        note_type,
+        body,
+        short_quote,
+        anchored_text,
+        clear_short_quote,
+        clear_anchored_text,
+    )
+}
+
+/// `cmd_update_note`'s actual body, extracted so it is testable against an
+/// in-memory DB (the `#[tauri::command]` wrapper above just locks and delegates).
+#[allow(clippy::too_many_arguments)]
+fn update_note_impl(
+    conn: &rusqlite::Connection,
+    note_id: &str,
+    note_type: Option<String>,
+    body: Option<String>,
+    short_quote: Option<String>,
+    anchored_text: Option<String>,
+    clear_short_quote: Option<bool>,
+    clear_anchored_text: Option<bool>,
+) -> Result<Note, AppError> {
     let now = Utc::now().to_rfc3339();
     let n = conn.execute(
         "UPDATE notes SET
@@ -69,10 +98,24 @@ pub fn cmd_update_note(
         params![note_id, note_type, body, short_quote, anchored_text, now],
     )?;
     if n == 0 {
-        return Err(AppError::not_found("note", Some(note_id)));
+        return Err(AppError::not_found("note", Some(note_id.to_string())));
     }
-    let note = read_note(&conn, &note_id)?;
-    reexport_note(&conn, note)
+    // Clears apply AFTER the COALESCE patch (CORE-1023): a flagged field is
+    // NULLed even in the same call that patched other fields.
+    if clear_short_quote.unwrap_or(false) {
+        conn.execute(
+            "UPDATE notes SET short_quote = NULL WHERE id = ?1",
+            params![note_id],
+        )?;
+    }
+    if clear_anchored_text.unwrap_or(false) {
+        conn.execute(
+            "UPDATE notes SET anchored_text = NULL WHERE id = ?1",
+            params![note_id],
+        )?;
+    }
+    let note = read_note(conn, note_id)?;
+    reexport_note(conn, note)
 }
 
 /// Delete a note and remove its exported Markdown mirror (so the notebook and
@@ -200,38 +243,98 @@ mod tests {
         assert!(note.anchored_text.is_none());
     }
 
+    /// Point the Markdown mirror at an isolated temp dir for the duration of
+    /// `f` (update_note_impl re-exports through `paths::default_export_root()`,
+    /// which honors THROUGHLINE_EXPORT_DIR) and serialize against other
+    /// env-touching tests so nothing ever lands in the user's real GBrain.
+    fn with_isolated_export_dir(label: &str, f: impl FnOnce()) {
+        let _g = crate::paths::lock_env_for_test();
+        let export_dir = std::env::temp_dir().join(format!("tl-{label}-{}", std::process::id()));
+        std::fs::remove_dir_all(&export_dir).ok();
+        std::fs::create_dir_all(&export_dir).unwrap();
+        // SAFETY: env vars are process-global; the lock above serializes access.
+        unsafe {
+            std::env::set_var("THROUGHLINE_EXPORT_DIR", &export_dir);
+        }
+        f();
+        std::fs::remove_dir_all(&export_dir).ok();
+        unsafe {
+            std::env::remove_var("THROUGHLINE_EXPORT_DIR");
+        }
+    }
+
     #[test]
     fn update_coalesce_keeps_unprovided_fields() {
-        let conn = migrated();
-        insert_note(&conn, "note_c", Some(("char:0", "char:9", "hi")));
-        // Mirror cmd_update_note's COALESCE UPDATE: patch body only.
-        conn.execute(
-            "UPDATE notes SET
-               note_type = COALESCE(?2, note_type),
-               body = COALESCE(?3, body),
-               short_quote = COALESCE(?4, short_quote),
-               anchored_text = COALESCE(?5, anchored_text),
-               updated_at = ?6
-             WHERE id = ?1",
-            params![
+        with_isolated_export_dir("note-coalesce-test", || {
+            let conn = migrated();
+            insert_note(&conn, "note_c", Some(("char:0", "char:9", "hi")));
+            // Patch body only: None everywhere else — clear flags included —
+            // leaves every other field unchanged.
+            let note = update_note_impl(
+                &conn,
                 "note_c",
-                Option::<String>::None,
-                Some("edited body"),
-                Option::<String>::None,
-                Option::<String>::None,
-                "2026-05-29T11:00:00Z"
-            ],
-        )
-        .unwrap();
-        let note = read_note(&conn, "note_c").unwrap();
-        assert_eq!(note.body, "edited body", "body patched");
-        assert_eq!(note.note_type, "MarginNote", "type preserved by COALESCE");
-        assert_eq!(
-            note.anchored_text.as_deref(),
-            Some("hi"),
-            "anchor preserved"
-        );
-        assert_ne!(note.updated_at, note.created_at, "updated_at advanced");
+                None,
+                Some("edited body".to_string()),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(note.body, "edited body", "body patched");
+            assert_eq!(note.note_type, "MarginNote", "type preserved by COALESCE");
+            assert_eq!(
+                note.anchored_text.as_deref(),
+                Some("hi"),
+                "anchor preserved"
+            );
+            assert_ne!(note.updated_at, note.created_at, "updated_at advanced");
+        });
+    }
+
+    /// CORE-1023 / P3-25: COALESCE semantics alone can never CLEAR a field, so
+    /// the dedicated clear flags must NULL short_quote / anchored_text — and the
+    /// re-exported Markdown mirror must drop the quote block with it.
+    #[test]
+    fn update_clear_flags_null_quote_and_anchor_and_update_the_mirror() {
+        with_isolated_export_dir("note-clear-test", || {
+            let conn = migrated();
+            conn.execute(
+                "INSERT INTO notes (id, book_id, session_id, note_type, locator, chapter_label, body, short_quote, created_at, updated_at, exported_markdown_path, anchor_start, anchor_end, anchored_text)
+                 VALUES ('note_q','b1',NULL,'Highlight','char:5','Chapter 1','my note','keep me','2026-05-29T10:00:00Z','2026-05-29T10:00:00Z',NULL,'char:5','char:12','anchored run')",
+                [],
+            )
+            .unwrap();
+
+            // Clear the quote only: body/type/anchor untouched.
+            let note = update_note_impl(&conn, "note_q", None, None, None, None, Some(true), None)
+                .unwrap();
+            assert!(note.short_quote.is_none(), "short_quote cleared");
+            assert_eq!(note.body, "my note", "body untouched");
+            assert_eq!(note.note_type, "Highlight", "type untouched");
+            assert_eq!(
+                note.anchored_text.as_deref(),
+                Some("anchored run"),
+                "anchored_text untouched by the quote clear"
+            );
+            // The Markdown mirror re-exported without the quote block.
+            let md_path = note
+                .exported_markdown_path
+                .as_deref()
+                .expect("mirror re-exported");
+            let md = std::fs::read_to_string(md_path).expect("exported markdown exists");
+            assert!(
+                !md.contains("keep me"),
+                "the mirror must drop the cleared quote block:\n{md}"
+            );
+            assert!(md.contains("my note"), "body still exported");
+
+            // Clear the anchored text with the second flag.
+            let note = update_note_impl(&conn, "note_q", None, None, None, None, None, Some(true))
+                .unwrap();
+            assert!(note.anchored_text.is_none(), "anchored_text cleared");
+            assert!(note.short_quote.is_none(), "short_quote stays cleared");
+        });
     }
 
     #[test]

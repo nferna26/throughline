@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import TLIcon, { type IconName } from "../components/TLIcon";
 import type { Book, Note } from "../types";
-import { parseLocator } from "../types";
+import { locatorHint } from "../locatorHint";
 
 interface Props {
   book: Book;
@@ -32,13 +32,6 @@ function badgeFor(noteType: string): { variant: "note" | "quote" | "question"; i
   if (noteType === "Short Quote") return { variant: "quote", icon: "quote" };
   if (noteType === "Question") return { variant: "question", icon: "help" };
   return { variant: "note", icon: "note" };
-}
-
-function locatorHint(note: Note): string | null {
-  const loc = parseLocator(note.locator);
-  if (loc.kind === "percent") return `${loc.value}% in`;
-  if (loc.kind === "cfi") return "EPUB locator";
-  return null; // char locators add no reader-facing value beyond the chapter header
 }
 
 function fmtDate(iso: string): string {
@@ -129,7 +122,7 @@ export default function NotesBrowser({ book }: Props) {
           <h3 className="tl-notebook-chapter-h">{chapter}</h3>
           {chapterNotes.map((n) => {
             const b = badgeFor(n.note_type);
-            const hint = locatorHint(n);
+            const hint = locatorHint(n.locator);
             return (
               <article className="tl-note" key={n.id}>
                 <div className="tl-note-top">

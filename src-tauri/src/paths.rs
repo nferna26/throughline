@@ -70,13 +70,15 @@ pub fn default_export_root() -> Result<PathBuf> {
     Ok(home.join("GBrain").join("Reading"))
 }
 
+/// App-private dirs only. The export tree (`~/GBrain/Reading/...` by default)
+/// is deliberately NOT created here: a first launch must not plant an
+/// unexplained folder in the reader's home. Export creates its dirs on demand
+/// (`export::ensure_export_dirs`); the launch probe (`cmd_check_export_path`)
+/// never creates either — a missing root is fine until the first export —
+/// and only reader-initiated setup (`cmd_set_export_path`) creates the tree.
 pub fn ensure_dirs() -> Result<()> {
     std::fs::create_dir_all(app_support_dir()?)?;
     std::fs::create_dir_all(books_dir()?)?;
-    let export = default_export_root()?;
-    for sub in ["Books", "Sessions", "Notes", "Reviews", "_indexes"] {
-        std::fs::create_dir_all(export.join(sub))?;
-    }
     Ok(())
 }
 
@@ -97,7 +99,7 @@ pub fn atomic_write_string(dest: &std::path::Path, content: &str) -> Result<()> 
 
     // Unique per-process temp path that lives next to the destination so the
     // rename is guaranteed to be same-filesystem (and therefore atomic on Unix).
-    let base_name = dest.file_name().and_then(|s| s.to_str()).unwrap_or("rg");
+    let base_name = dest.file_name().and_then(|s| s.to_str()).unwrap_or("tl");
     let tmp = parent.join(format!(
         ".{}.tmp.{}.{}",
         base_name,

@@ -22,7 +22,9 @@ use crate::{epub_classify, export, import, log, models, paths, plan, recovery, s
 
 #[tauri::command]
 pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<ImportOutcome, AppError> {
-    eprintln!("[tl] cmd_import_book called with path={}", path);
+    // Never log the source path: stderr/app.log are diagnostic surfaces and the
+    // file name is content-adjacent metadata (CORE-1017 — usage, never content).
+    tracing::debug!(category = "import", "cmd_import_book invoked");
     import_or_dedup(&PathBuf::from(&path), state.inner())
 }
 
@@ -42,10 +44,11 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
     if let Ok(sha) = import::hash_file(src) {
         let conn = state.0.lock()?;
         if let Some(existing) = fetch_book_by_sha(&conn, &sha)? {
-            eprintln!(
-                "[tl] import_or_dedup: dedup hit (sha {}…) -> existing book_id={}",
-                &sha[..8.min(sha.len())],
-                existing.id
+            tracing::info!(
+                category = "import",
+                book_id = %existing.id,
+                sha256_prefix = &sha[..8.min(sha.len())],
+                "import_or_dedup: dedup hit — switching to existing book"
             );
             bump_last_opened_at(&conn, &existing.id)?;
             return Ok(ImportOutcome {
@@ -58,15 +61,22 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
     let result = match import::import_any(src) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[tl] import_or_dedup: import_any failed: {:#}", e);
+            tracing::warn!(
+                category = "import",
+                "import_or_dedup: import_any failed: {:#}",
+                e
+            );
             return Err(AppError::io(format!("import failed: {:#}", e)));
         }
     };
-    eprintln!(
-        "[tl] import_or_dedup: imported '{}' [{}] with {} sections",
-        result.book.title,
-        result.book.source_type,
-        result.sections.len()
+    // book_id + section count are enough here — the title stays out of the
+    // diagnostic stream (log_import below records it in the on-disk app.log).
+    tracing::info!(
+        category = "import",
+        book_id = %result.book.id,
+        source_type = %result.book.source_type,
+        sections = result.sections.len(),
+        "import_or_dedup: imported"
     );
     let conn = state.0.lock()?;
     insert_book(&conn, &result.book)?;
@@ -87,7 +97,7 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
         result.sections.len(),
         &result.book.source_sha256,
     );
-    eprintln!("[tl] import_or_dedup: OK book_id={}", result.book.id);
+    tracing::info!(category = "import", book_id = %result.book.id, "import_or_dedup: OK");
     Ok(ImportOutcome {
         book: result.book,
         created: true,
@@ -121,7 +131,7 @@ pub fn cmd_configure_plan(
                 "invalid finish date: {target_finish_date:?} (expected YYYY-MM-DD)"
             ))
         })?;
-    let today = chrono::Utc::now().naive_utc().date();
+    let today = plan::app_today();
     if finish < today {
         return Err(AppError::validation(
             "finish date cannot be in the past".to_string(),
@@ -235,7 +245,7 @@ pub(crate) fn today_card(conn: &Connection) -> Result<Option<TodayCard>, AppErro
         .is_some_and(|f| matches!(f.state.as_str(), "needs_rebalance" | "plan_unrealistic"));
     let days_behind = computed.forecast.as_ref().map_or(0, |f| f.days_late).max(0);
     let recovery = if needs_recovery {
-        let today = chrono::Utc::now().naive_utc().date();
+        let today = plan::app_today();
         let finish = chrono::NaiveDate::parse_from_str(&plan.target_finish_date, "%Y-%m-%d")
             .unwrap_or(today);
         Some(recovery::build_bundle(days_behind.max(1), today, finish))
@@ -282,7 +292,7 @@ fn plan_less_card(conn: &Connection, book: Book) -> Result<TodayCard, AppError> 
     let streak = compute_streak(conn, &book.id)?;
     let session_minutes = crate::settings::get_reading_rhythm_minutes(conn);
     let memory = today_memory(conn, &book.id)?;
-    let today = chrono::Utc::now().naive_utc().date().to_string();
+    let today = plan::app_today().to_string();
     let placeholder = ReadingPlan {
         id: String::new(),
         book_id: book.id.clone(),
@@ -662,23 +672,47 @@ fn today_memory(
 }
 
 fn compute_streak(conn: &Connection, book_id: &str) -> rusqlite::Result<models::StreakSummary> {
+    // Streak days are the reader's *local* calendar days (CORE-1014): both the
+    // 7-day window boundary AND each session's day bucket. `started_at` stays a
+    // UTC timestamp in the DB, and SQL's DATE() of it is the UTC day — a 9pm-ET
+    // session would land on "tomorrow", and an evening + next-morning pair
+    // would collapse into one day — so each stamp converts through
+    // `plan::local_day_of` and the window math runs in Rust on explicit dates.
     let mut stmt = conn.prepare(
-        "SELECT DATE(started_at) AS d, COALESCE(SUM(minutes), 0)
-         FROM reading_sessions
-         WHERE book_id = ?1 AND DATE(started_at) >= DATE('now', '-6 days')
-         GROUP BY d",
+        "SELECT started_at, COALESCE(minutes, 0) FROM reading_sessions WHERE book_id = ?1",
     )?;
-    let mut days = 0i64;
-    let mut minutes = 0i64;
+    let mut sessions: Vec<(chrono::NaiveDate, i64)> = Vec::new();
     let mut rows = stmt.query(params![book_id])?;
     while let Some(row) = rows.next()? {
-        days += 1;
-        minutes += row.get::<_, i64>(1)?;
+        let started: String = row.get(0)?;
+        if let Some(day) = plan::local_day_of(&started) {
+            sessions.push((day, row.get(1)?));
+        }
     }
-    Ok(models::StreakSummary {
-        days_read_last_7: days,
+    Ok(summarize_streak(&sessions, plan::app_today()))
+}
+
+/// Pure 7-day-window aggregation over already-localized `(day, minutes)`
+/// pairs: distinct days read and total minutes from `today - 6` onward. Split
+/// from `compute_streak` so the bucketing logic is tested with explicit dates
+/// (the repo's no-wall-clock test discipline).
+fn summarize_streak(
+    sessions: &[(chrono::NaiveDate, i64)],
+    today: chrono::NaiveDate,
+) -> models::StreakSummary {
+    let week_start = today - chrono::Duration::days(6);
+    let mut days = std::collections::BTreeSet::new();
+    let mut minutes = 0i64;
+    for (day, mins) in sessions {
+        if *day >= week_start {
+            days.insert(*day);
+            minutes += *mins;
+        }
+    }
+    models::StreakSummary {
+        days_read_last_7: days.len() as i64,
         minutes_last_7: minutes,
-    })
+    }
 }
 
 #[tauri::command]
@@ -701,7 +735,7 @@ pub fn cmd_read_section_text(
         .optional()?;
     if source_type.as_deref() == Some("epub") {
         if let Err(e) = crate::import_epub::ensure_epub_text(&conn, &book_id) {
-            eprintln!("[tl] epub text backfill skipped for {book_id}: {e}");
+            tracing::warn!("epub text backfill skipped for {book_id}: {e}");
         }
     }
     let mut stmt = conn.prepare(
@@ -853,9 +887,10 @@ fn canonical_assignable_sections(
                 list_sections(conn, book_id)?
             }
             Err(e) => {
-                eprintln!(
+                tracing::warn!(
                     "reclassify failed for {}: {} — falling back to original list",
-                    book_id, e
+                    book_id,
+                    e
                 );
                 all
             }
@@ -1038,6 +1073,49 @@ pub fn cmd_set_active_book(book_id: String, state: State<DbState>) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn d(y: i32, m: u32, day: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    /// CORE-1014: an evening session and the next morning's session are TWO
+    /// distinct reading days (UTC bucketing collapsed them whenever the
+    /// evening stamp crossed the UTC midnight), and two sittings on the same
+    /// local day stay ONE day. Explicit injected dates — no wall clock.
+    #[test]
+    fn streak_counts_distinct_local_days() {
+        let today = d(2026, 6, 10);
+        let sessions = vec![
+            (d(2026, 6, 9), 30),  // last night
+            (d(2026, 6, 10), 20), // this morning
+            (d(2026, 6, 10), 10), // second sitting today — same day
+        ];
+        let s = summarize_streak(&sessions, today);
+        assert_eq!(s.days_read_last_7, 2, "evening + morning are two days");
+        assert_eq!(s.minutes_last_7, 60);
+    }
+
+    /// The window is the last 7 local days inclusive: `today - 6` is in,
+    /// `today - 7` is out (its minutes don't count either).
+    #[test]
+    fn streak_window_is_seven_local_days_inclusive() {
+        let today = d(2026, 6, 10);
+        let sessions = vec![
+            (d(2026, 6, 4), 15), // exactly today - 6 → inside
+            (d(2026, 6, 3), 45), // today - 7 → outside
+        ];
+        let s = summarize_streak(&sessions, today);
+        assert_eq!(s.days_read_last_7, 1);
+        assert_eq!(s.minutes_last_7, 15);
+    }
+
+    /// No sessions → a calm zero, not an error.
+    #[test]
+    fn streak_is_zero_with_no_sessions() {
+        let s = summarize_streak(&[], d(2026, 6, 10));
+        assert_eq!(s.days_read_last_7, 0);
+        assert_eq!(s.minutes_last_7, 0);
+    }
 
     /// CORE-1004: a book whose last plan was "let go" (soft-deleted) must still
     /// reach Today. `cmd_today` returning None for an existing book strands the

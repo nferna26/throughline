@@ -13,7 +13,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 // The reader persists panel open/width to localStorage; clear it before each
 // test so the companion panel starts at its CLOSED default (tests that need it
-// open set rg.panelOpen="true" explicitly).
+// open set tl.panelOpen="true" explicitly).
 beforeEach(() => localStorage.clear());
 
 const section: BookSection = {
@@ -77,7 +77,7 @@ function mockBackend(notes: Note[]) {
 describe("TextReader Companion Margin", () => {
   // These cases assert the margin CARD is visible, so open the panel (the new
   // default is closed). Runs after the module-level localStorage.clear().
-  beforeEach(() => { vi.mocked(invoke).mockReset(); localStorage.setItem("rg.panelOpen", "true"); });
+  beforeEach(() => { vi.mocked(invoke).mockReset(); localStorage.setItem("tl.panelOpen", "true"); });
 
   it("paints an anchored note as an inline highlight and a margin card", async () => {
     mockBackend([note({ body: "my thought" })]);
@@ -355,7 +355,7 @@ describe("splitParagraphs (Gutenberg soft-wrap reflow)", () => {
 });
 
 describe("TextReader selection toolbar — Escape dismiss + a11y", () => {
-  beforeEach(() => { vi.mocked(invoke).mockReset(); localStorage.setItem("rg.panelOpen", "true"); });
+  beforeEach(() => { vi.mocked(invoke).mockReset(); localStorage.setItem("tl.panelOpen", "true"); });
 
   // Drive a real DOM selection over the rendered paragraph so the floating
   // toolbar appears, then assert Escape dismisses it. jsdom's getBoundingClientRect
@@ -398,12 +398,67 @@ describe("TextReader selection toolbar — Escape dismiss + a11y", () => {
   });
 });
 
+describe("TextReader New-note modal — humanized position", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("shows the chapter and a plain position, never a raw char: locator", async () => {
+    mockBackend([]);
+    // Resume mid-section so the modal's position is meaningfully non-zero:
+    // char 320 of a 1000-char section → "32% in".
+    const today = card();
+    today.resume_locator = "char:320";
+    today.resume_percent = 32;
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    const modal = screen.getByRole("dialog");
+    // Where the note lives, in reader words: the chapter + how far in.
+    expect(modal.textContent).toContain("Chapter: Chapter 1");
+    expect(modal.textContent).toContain("32% in");
+    // The raw locator string is plumbing — it never reaches the reader.
+    expect(modal.textContent).not.toMatch(/char:/);
+    expect(modal.textContent).not.toMatch(/Locator/i);
+  });
+});
+
+describe("TextReader New-note modal — save failure", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("says what happened inside the modal and stays open for retry", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_save_note": return Promise.reject({ kind: "Io", message: "Throughline can't save notes to this folder." });
+        default: return Promise.resolve(undefined);
+      }
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    fireEvent.change(screen.getByPlaceholderText(/Paraphrase, reflection/i), { target: { value: "a thought" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+
+    // The failure is said out loud, inside the modal…
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Throughline can't save notes to this folder.");
+    // …and the modal stays open with the reader's words intact, ready to retry.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("a thought")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save note" })).toBeEnabled();
+  });
+});
+
 describe("TextReader Deep Study — stale-section guard", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
     localStorage.clear();
-    localStorage.setItem("rg.panelOpen", "true");
-    localStorage.setItem("rg.tutorEnabled", "true"); // consent given → briefing can auto-generate
+    localStorage.setItem("tl.panelOpen", "true");
+    localStorage.setItem("tl.tutorEnabled", "true"); // consent given → briefing can auto-generate
   });
 
   const A_TEXT = "0123456789AAAA section one body text for the briefing.";
@@ -432,7 +487,7 @@ describe("TextReader Deep Study — stale-section guard", () => {
         case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
         case "cmd_read_section_text": return textPromises[args.sectionId as string] ?? Promise.resolve("");
         case "cmd_list_notes": return Promise.resolve([]);
-        case "cmd_get_settings": return Promise.resolve({ ai_provider: "local", ai_base_url: "http://localhost:1234/v1", ai_model: "m", ai_local_only: true, margin_help: "deep_study" });
+        case "cmd_get_settings": return Promise.resolve({ ai_provider: "local", ai_base_url: "http://localhost:1234/v1", ai_model: "m", margin_help: "deep_study" });
         case "cmd_test_ai_connection": return Promise.resolve({ reachable: true, first_model_id: "m", message: "ok" });
         case "cmd_ai_ask": return Promise.resolve({ ai_request_id: "ai_1", prompt_sent: "(hidden)", provider_host: "localhost" });
         default: return Promise.resolve(undefined);

@@ -36,7 +36,7 @@ import "../tl-tutor.css";
  */
 
 /** Which provider the paste-key wizard is configuring. Codex is kept but marked
- *  experimental (unofficial endpoint); Local has its own detect flow below. */
+ *  experimental (unofficial connection); Local has its own detect flow below. */
 type KeyProvider = "openai" | "anthropic" | "codex";
 
 /** The sheet's top-level state machine. `not_connected` is the first-run entry;
@@ -218,9 +218,14 @@ export default function AiSetupSheet(props: {
     setDetect("checking");
     setLocalModel(null);
     try {
-      // Point the probe at the local endpoint (loopback-validated backend-side).
-      await invoke("cmd_set_ai_settings", { baseUrl: LOCAL_BASE_URL }).catch(() => {});
-      const conn = await invoke<ConnTestResult>("cmd_test_ai_connection", { provider: "local" });
+      // Probe the local endpoint as a DRAFT (loopback-validated backend-side) —
+      // never persist it just to point the probe, or merely opening this panel
+      // would overwrite a reader's saved custom base URL. Persisting happens
+      // only on the explicit "Use this model & answer" (useLocalModel).
+      const conn = await invoke<ConnTestResult>("cmd_test_ai_connection", {
+        provider: "local",
+        baseUrl: LOCAL_BASE_URL,
+      });
       if (!conn.reachable) {
         setDetect("no_server");
         return;
@@ -384,7 +389,7 @@ export default function AiSetupSheet(props: {
                 <span>
                   {aiProviderLabel(p)}
                   {p === "codex" && (
-                    <span style={sx.tag}>Experimental — unofficial endpoint</span>
+                    <span style={sx.tag}>Experimental — unofficial connection</span>
                   )}
                 </span>
               </label>

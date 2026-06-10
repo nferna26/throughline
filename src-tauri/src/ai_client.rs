@@ -19,12 +19,31 @@ use tokio::sync::mpsc;
 use url::Url;
 
 use crate::circuit_breaker::{Breaker, BreakerConfig};
+use crate::settings::AiProvider;
 
-/// Process-global breaker for the AI surface. Single user, single endpoint,
-/// so one breaker is enough. Lazy-initialized with the production config.
-fn breaker() -> &'static Breaker {
-    static BREAKER: OnceLock<Breaker> = OnceLock::new();
-    BREAKER.get_or_init(|| Breaker::new(BreakerConfig::default()))
+/// Process-global, per-provider breakers for the AI surface. One breaker per
+/// provider so a hung LM Studio can't block a freshly-configured cloud call
+/// (and vice versa). Lazy-initialized with the production config. Disabled and
+/// Unset never reach the network but share one inert breaker so the function
+/// stays total.
+pub fn breaker_for(provider: AiProvider) -> &'static Breaker {
+    fn init(cell: &'static OnceLock<Breaker>) -> &'static Breaker {
+        cell.get_or_init(|| Breaker::new(BreakerConfig::default()))
+    }
+    static LOCAL: OnceLock<Breaker> = OnceLock::new();
+    static OPENAI: OnceLock<Breaker> = OnceLock::new();
+    static ANTHROPIC: OnceLock<Breaker> = OnceLock::new();
+    static CODEX: OnceLock<Breaker> = OnceLock::new();
+    static COMPANY: OnceLock<Breaker> = OnceLock::new();
+    static INERT: OnceLock<Breaker> = OnceLock::new();
+    match provider {
+        AiProvider::Local => init(&LOCAL),
+        AiProvider::OpenAi => init(&OPENAI),
+        AiProvider::Anthropic => init(&ANTHROPIC),
+        AiProvider::Codex => init(&CODEX),
+        AiProvider::Company => init(&COMPANY),
+        AiProvider::Disabled | AiProvider::Unset => init(&INERT),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -277,8 +296,15 @@ impl Default for ChatCallOpts {
 /// this function itself is IO-only and does not touch the DB.
 pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEvent>> {
     let url = validate_base_url(&opts.base_url, opts.local_only)?;
+    // This call path serves Local (LM Studio) and OpenAI cloud; pick the
+    // matching breaker so their failures stay isolated.
+    let breaker = breaker_for(if opts.cloud_openai {
+        AiProvider::OpenAi
+    } else {
+        AiProvider::Local
+    });
     // Fail fast if the breaker is Open — don't hand the user a 180s hang.
-    if let Err(e) = breaker().check() {
+    if let Err(e) = breaker.check() {
         return Err(anyhow!("AI service unavailable: {}", e));
     }
     let endpoint = format!("{}/chat/completions", url.as_str().trim_end_matches('/'));
@@ -314,7 +340,7 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
-                breaker().on_failure();
+                breaker.on_failure();
                 let _ = tx
                     .send(StreamEvent::Error {
                         message: format!("request failed: {}", e),
@@ -325,7 +351,7 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
         };
         let status = resp.status();
         if !status.is_success() {
-            breaker().on_failure();
+            breaker.on_failure();
             let snippet = resp.text().await.unwrap_or_default();
             let snippet = snippet.chars().take(500).collect::<String>();
             let _ = tx
@@ -343,7 +369,7 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
                 let chunk = match chunk {
                     Ok(b) => b,
                     Err(e) => {
-                        breaker().on_failure();
+                        breaker.on_failure();
                         let _ = tx
                             .send(StreamEvent::Error {
                                 message: format!("stream error: {}", e),
@@ -358,7 +384,7 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
                     let line = String::from_utf8_lossy(&line_bytes);
                     match parse_sse_data_line(&line) {
                         Ok(Some(text)) if text == "[DONE]" => {
-                            breaker().on_success();
+                            breaker.on_success();
                             let _ = tx.send(StreamEvent::Done).await;
                             return;
                         }
@@ -372,7 +398,7 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
                             // is FIXED — never interpolate the parse error or the line, which
                             // mid-stream contain book-derived text (invariant 1).
                             if line.trim_start().starts_with("data:") {
-                                breaker().on_failure();
+                                breaker.on_failure();
                                 let _ = tx
                                     .send(StreamEvent::Error {
                                         message: "The answer stream was interrupted — try again."
@@ -388,12 +414,12 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
             // Stream ended without a [DONE] sentinel. Some servers (LM Studio
             // for short responses) close cleanly without one. Count it as a
             // success since we got data without an error.
-            breaker().on_success();
+            breaker.on_success();
             let _ = tx.send(StreamEvent::Done).await;
         } else {
             match resp.json::<OpenAiBlockingResponse>().await {
                 Ok(j) => {
-                    breaker().on_success();
+                    breaker.on_success();
                     let text = j
                         .choices
                         .first()
@@ -405,7 +431,7 @@ pub async fn run_chat_call(opts: ChatCallOpts) -> Result<mpsc::Receiver<StreamEv
                     let _ = tx.send(StreamEvent::Done).await;
                 }
                 Err(e) => {
-                    breaker().on_failure();
+                    breaker.on_failure();
                     let _ = tx
                         .send(StreamEvent::Error {
                             message: format!("decode blocking response: {}", e),
@@ -459,7 +485,8 @@ pub async fn test_connection(base_url: &str, local_only: bool) -> Result<(bool, 
     // operator pressing "Test connection" wants a real probe even when the
     // breaker is Open. But the outcome STILL feeds the breaker: a successful
     // probe is the cheapest way to close the circuit; a failed probe keeps
-    // the breaker informed.
+    // the breaker informed. This probe only ever targets the Local server.
+    let breaker = breaker_for(AiProvider::Local);
     let endpoint = format!("{}/models", url.as_str().trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
@@ -467,7 +494,7 @@ pub async fn test_connection(base_url: &str, local_only: bool) -> Result<(bool, 
     match client.get(&endpoint).bearer_auth("local").send().await {
         Ok(resp) => {
             if !resp.status().is_success() {
-                breaker().on_failure();
+                breaker.on_failure();
                 return Ok((false, None));
             }
             #[derive(Deserialize)]
@@ -482,11 +509,11 @@ pub async fn test_connection(base_url: &str, local_only: bool) -> Result<(bool, 
             let typed: ModelsResp =
                 serde_json::from_value(body).unwrap_or(ModelsResp { data: None });
             let first = typed.data.and_then(|v| v.into_iter().next().map(|m| m.id));
-            breaker().on_success();
+            breaker.on_success();
             Ok((true, first))
         }
         Err(_) => {
-            breaker().on_failure();
+            breaker.on_failure();
             Ok((false, None))
         }
     }
@@ -610,6 +637,34 @@ mod tests {
         let r = parse_sse_data_line(r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#)
             .unwrap();
         assert!(r.is_none());
+    }
+
+    /// CORE-1028: breakers are per-provider — three LM Studio failures must not
+    /// block a freshly-configured cloud call (and vice versa).
+    #[test]
+    fn breaker_for_isolates_providers() {
+        use crate::settings::AiProvider;
+        let local = breaker_for(AiProvider::Local);
+        local.on_failure();
+        local.on_failure();
+        local.on_failure();
+        assert!(
+            local.check().is_err(),
+            "3 failures inside the window open the Local breaker"
+        );
+        assert!(
+            breaker_for(AiProvider::OpenAi).check().is_ok(),
+            "an Open Local breaker must not block OpenAI"
+        );
+        assert!(
+            breaker_for(AiProvider::Company).check().is_ok(),
+            "an Open Local breaker must not block Company"
+        );
+        // Same provider → the same breaker instance (per-provider state persists).
+        assert!(std::ptr::eq(local, breaker_for(AiProvider::Local)));
+        // Reset: the breakers are process-global; never leak Open into other tests.
+        local.on_success();
+        assert!(breaker_for(AiProvider::Local).check().is_ok());
     }
 
     /// Invariant 1: the parse error for a malformed SSE line must not include

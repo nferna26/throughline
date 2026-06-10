@@ -140,6 +140,10 @@ export default function Settings() {
       const r = await invoke<ConnTestResult>("cmd_test_ai_connection", {
         provider: providerDraft,
         key: needsKey && keyDraft.trim() ? keyDraft.trim() : undefined,
+        // Probe the Base-URL draft on screen, the same way refreshModels does —
+        // otherwise testing validates the SAVED local address while a different
+        // one sits in the field. The backend only honors it for Local.
+        baseUrl: baseUrlDraft,
       });
       setConn(r);
       if (r.reachable && providerDraft === "local") refreshModels(providerDraft, baseUrlDraft);
@@ -247,7 +251,7 @@ export default function Settings() {
               </p>
               {providerDraft === "codex" && (
                 <p className="tl-trust-warn" style={{ marginTop: "var(--tl-3)", paddingTop: 0, borderTop: "none" }}>
-                  <TLIcon name="behind" size={14} /> <span><strong>Experimental.</strong> Codex talks to an unofficial ChatGPT endpoint that can change or break without warning. For a reliable tutor, choose OpenAI or Anthropic with your own API key.</span>
+                  <TLIcon name="behind" size={14} /> <span><strong>Experimental.</strong> Codex talks to an unofficial ChatGPT connection that can change or break without warning. For a reliable tutor, choose OpenAI or Anthropic with your own API key.</span>
                 </p>
               )}
             </div>
@@ -259,7 +263,7 @@ export default function Settings() {
                 <div className="tl-set-row col">
                   <div className="lhs">
                     <div className="name">Base URL</div>
-                    <div className="desc">An OpenAI-compatible local endpoint (LM Studio, llama.cpp). Must be a loopback address.</div>
+                    <div className="desc">Where your local model listens (LM Studio's default address works as-is). It must be an address on this Mac.</div>
                   </div>
                   <input className="tl-input" type="text" value={baseUrlDraft} onChange={(e) => setBaseUrlDraft(e.target.value)} spellCheck={false} placeholder="http://localhost:1234/v1" />
                 </div>
@@ -301,7 +305,7 @@ export default function Settings() {
                 <div className="tl-set-row col">
                   <div className="lhs">
                     <div className="name">Model</div>
-                    <div className="desc">Defaults to the best-value model; the chip shows its price per million tokens.</div>
+                    <div className="desc">Defaults to the best-value model; the chip shows the going rate for heavy vs. light models.</div>
                   </div>
                   <ModelSelect provider={providerDraft} value={modelDraft} onChange={setModelDraft} />
                 </div>
@@ -339,8 +343,8 @@ export default function Settings() {
           </div>
         </div>
 
-        {/* ── AI usage + spend cap (B4) ── */}
-        <AiUsageCard />
+        {/* ── AI usage + spend cap (B4) — reframed in company mode ── */}
+        <AiUsageCard provider={dto?.ai_provider} />
 
         {/* ── Request history (audit) ── */}
         {dto && <AiHistory retentionDays={dto.ai_requests_retention_days} onSettingsChanged={refresh} />}

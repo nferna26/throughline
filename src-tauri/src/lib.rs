@@ -69,6 +69,14 @@ use crate::db::DbState;
 ///   new imports) — a return-shape change.
 /// - 2 → 3: cloud AI command surface (provider keys, model listing, Codex device
 ///   login, request history) reshaped the AI args/returns.
+/// - 3 → 4: plan lifecycle (Epic A1/A2) — migration v008 added the `lifecycle`
+///   axis (active | paused | completed | archived | superseded) to the plan
+///   rows JS receives, and the plan-management command family landed against it
+///   (`cmd_list_plans_for_book`, `cmd_get_active_plan`, pause / resume /
+///   archive / delete).
+/// - 4 → 5: plans frontispiece (P2.1) — migration v009 added `name`,
+///   `deleted_at` (soft-delete window), and `reached_percent` to reading_plans;
+///   plan rows and the plans list reshaped around naming + let-go semantics.
 pub const COMMAND_API_VERSION: u32 = 5;
 
 /// Open the database, recovering from a CORRUPT file rather than crash-looping on
@@ -94,7 +102,7 @@ fn open_db_resilient() -> rusqlite::Connection {
             if !looks_corrupt {
                 panic!("Throughline could not open its database (usually a permissions or disk problem, not data loss): {e:#}");
             }
-            eprintln!("[tl] database appears corrupt; preserving it and starting fresh: {e:#}");
+            tracing::error!("database appears corrupt; preserving it and starting fresh: {e:#}");
             if let Ok(dbp) = paths::db_path() {
                 let bak = dbp.with_file_name(format!("reading.corrupt-{}.db", std::process::id()));
                 let _ = std::fs::rename(&dbp, &bak);
@@ -134,19 +142,20 @@ pub fn run() {
     {
         let days = settings::get_ai_retention_days(&conn);
         match ai_retention::sweep(&conn, days) {
-            Ok(n) if n > 0 => eprintln!(
-                "[tl] ai_retention: swept {} ai_requests row(s) older than {} days",
-                n, days
+            Ok(n) if n > 0 => tracing::info!(
+                "ai_retention: swept {} ai_requests row(s) older than {} days",
+                n,
+                days
             ),
             Ok(_) => {}
-            Err(e) => eprintln!("[tl] ai_retention: sweep failed: {}", e),
+            Err(e) => tracing::warn!("ai_retention: sweep failed: {}", e),
         }
     }
     // Purge plans "let go" longer than 30 days ago, with their sessions + notes.
     match commands::plans::sweep_deleted_plans(&conn, 30) {
-        Ok(n) if n > 0 => eprintln!("[tl] plan_retention: purged {} let-go plan(s)", n),
+        Ok(n) if n > 0 => tracing::info!("plan_retention: purged {} let-go plan(s)", n),
         Ok(_) => {}
-        Err(e) => eprintln!("[tl] plan_retention: sweep failed: {}", e),
+        Err(e) => tracing::warn!("plan_retention: sweep failed: {}", e),
     }
     let state = DbState(Mutex::new(conn));
 
@@ -267,8 +276,7 @@ mod tests {
     use rusqlite::params;
 
     use crate::import::{estimate_minutes_for_chars, sectionize};
-    use crate::models::PaceState;
-    use crate::plan::{assigned_section_index, expected_completed, pace_state};
+    use crate::plan::assigned_section_index;
     use crate::{ai_client, db, export, paths};
 
     #[test]
@@ -299,34 +307,6 @@ mod tests {
     #[test]
     fn test_estimate_minutes() {
         assert!(estimate_minutes_for_chars(10_000) >= 1);
-    }
-
-    #[test]
-    fn test_pace_state_on_pace_when_caught_up() {
-        let state = pace_state(30, 5, 30, 5);
-        matches!(state, PaceState::OnPace);
-    }
-
-    #[test]
-    fn test_pace_state_behind() {
-        let state = pace_state(30, 8, 30, 10);
-        if let PaceState::Behind { days_behind } = state {
-            assert_eq!(days_behind, 2);
-        } else {
-            panic!("expected Behind")
-        }
-    }
-
-    #[test]
-    fn test_pace_state_recovery_when_far_behind() {
-        let state = pace_state(30, 0, 30, 10);
-        matches!(state, PaceState::Recovery);
-    }
-
-    #[test]
-    fn test_expected_completed_endpoints() {
-        assert_eq!(expected_completed(30, 30, 0), 0);
-        assert_eq!(expected_completed(30, 30, 30), 30);
     }
 
     #[test]
@@ -664,5 +644,185 @@ mod tests {
             )
             .unwrap();
         assert_eq!(note_count_after, 1);
+    }
+
+    /// Every backend `.rs` file under `src/`, with `//`-style comment lines
+    /// stripped (same idiom as `no_unaudited_network_plugins`) so a doc comment
+    /// can name a banned pattern without tripping the source scans below.
+    fn backend_sources_without_comments() -> Vec<(std::path::PathBuf, String)> {
+        let src_dir = ["src", "src-tauri/src"]
+            .iter()
+            .find(|p| std::path::Path::new(p).join("lib.rs").exists())
+            .copied()
+            .expect("src dir not found from any working directory");
+
+        fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).expect("read src dir") {
+                let p = e.expect("dir entry").path();
+                if p.is_dir() {
+                    collect(&p, out);
+                } else if p.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        collect(std::path::Path::new(src_dir), &mut files);
+        assert!(!files.is_empty(), "source scan found no .rs files");
+
+        files
+            .into_iter()
+            .map(|p| {
+                let raw = std::fs::read_to_string(&p).expect("read source file");
+                let code: String = raw
+                    .lines()
+                    .map(|l| {
+                        let t = l.trim_start();
+                        if t.starts_with("//") || t.starts_with("///") || t.starts_with("//!") {
+                            ""
+                        } else {
+                            l
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (p, code)
+            })
+            .collect()
+    }
+
+    /// **HARD GUARDRAIL — CORE-1014 / P3-16.** All day-boundary "today" math
+    /// must go through `plan::app_today()` — the reader's LOCAL calendar day —
+    /// never the UTC day. A US evening reader finishing tonight's section at
+    /// 9pm ET belongs to tonight, not to tomorrow's UTC date. Banned shapes:
+    /// the two chrono UTC-day spellings (`.naive_utc()` + `.date()`,
+    /// `Utc::now()` + `.date_naive()`) and the SQL day boundary `date` of
+    /// `'now'` in any case — day comparisons must use a Rust-supplied local
+    /// date param instead. `datetime('now')` timestamp arithmetic stays
+    /// legitimate and is deliberately not matched (`date(` is not a prefix of
+    /// `datetime(`, so the case-folded scan can't catch it by accident).
+    #[test]
+    fn day_boundaries_use_local_app_today() {
+        // Needles assembled at runtime so this test's own source never matches.
+        let rust_utc_day = format!("{}{}", "naive_utc().", "date()");
+        let rust_utc_day_2 = format!("{}{}", "Utc::now().", "date_naive()");
+        let sql_utc_day = format!("{}{}", "date('", "now'");
+        // SQL day-bucketing of a stored UTC timestamp is the same bug from the
+        // other side: `DATE(started_at)` groups a session by the UTC day of its
+        // RFC3339 stamp (9pm ET lands on "tomorrow"). Bucket in Rust via
+        // `plan::local_day_of` instead.
+        let sql_started_day = format!("{}{}", "date(", "started_at");
+
+        let mut violations: Vec<String> = Vec::new();
+        for (path, code) in backend_sources_without_comments() {
+            // log.rs is exempt: tracing_appender names rolled files by the UTC
+            // date, so prune_old_logs must do its retention math on the
+            // appender's calendar — that is filename matching, not a
+            // reader-facing reading-day boundary.
+            if path.ends_with("log.rs") {
+                continue;
+            }
+            for needle in [&rust_utc_day, &rust_utc_day_2] {
+                if code.contains(needle.as_str()) {
+                    violations.push(format!(
+                        "{}: contains `{}` — day boundaries must use plan::app_today() \
+                         (pass the local date into SQL as a param)",
+                        path.display(),
+                        needle
+                    ));
+                }
+            }
+            if code.to_lowercase().contains(sql_utc_day.as_str()) {
+                violations.push(format!(
+                    "{}: contains `{}` (any case) — day boundaries must use \
+                     plan::app_today() (pass the local date into SQL as a param)",
+                    path.display(),
+                    sql_utc_day
+                ));
+            }
+            if code.to_lowercase().contains(sql_started_day.as_str()) {
+                violations.push(format!(
+                    "{}: contains `{}` (any case) — sessions must bucket by the \
+                     reader's LOCAL day via plan::local_day_of, not SQL's UTC \
+                     DATE() of the stored timestamp",
+                    path.display(),
+                    sql_started_day
+                ));
+            }
+        }
+        if !violations.is_empty() {
+            panic!(
+                "UTC day-boundary math found (CORE-1014 / P3-16):\n  - {}",
+                violations.join("\n  - ")
+            );
+        }
+    }
+
+    /// **HARD GUARDRAIL — CORE-1017 / P3-19.** A GUI app's stderr lands in the
+    /// macOS unified log (sysdiagnose-collectable), and book paths/titles are
+    /// content-adjacent metadata — invariant 1 is "usage, never content". So no
+    /// command may `eprintln!` anything that references a reader's `path`, a
+    /// book `title`, or an import `result.book`. Diagnostics belong in
+    /// `tracing` (the local app.log), with ids and counts, not paths/titles.
+    #[test]
+    fn commands_do_not_eprintln_reader_content() {
+        let needles = ["path", "title", "result.book"];
+        let mut violations: Vec<String> = Vec::new();
+        for (path, code) in backend_sources_without_comments() {
+            if !path.components().any(|c| c.as_os_str() == "commands") {
+                continue;
+            }
+            let mut rest = code.as_str();
+            while let Some(pos) = rest.find("eprintln!") {
+                let call = &rest[pos..];
+                let end = call.find(");").map(|i| i + 2).unwrap_or(call.len());
+                let call = call[..end].split_whitespace().collect::<Vec<_>>().join(" ");
+                for n in needles {
+                    if call.contains(n) {
+                        violations.push(format!(
+                            "{}: `{}` references `{}` — route through tracing and drop the reader content",
+                            path.display(),
+                            call,
+                            n
+                        ));
+                    }
+                }
+                rest = &rest[pos + "eprintln!".len()..];
+            }
+        }
+        if !violations.is_empty() {
+            panic!(
+                "stderr writes referencing reader content (CORE-1017 / P3-19):\n  - {}",
+                violations.join("\n  - ")
+            );
+        }
+    }
+
+    /// **GUARDRAIL — CORE-1032 / P3-35.** The doc comment on
+    /// `COMMAND_API_VERSION` promises a per-major history; this pins it
+    /// complete. Every major up to the current constant must have its
+    /// `- {n-1} → {n}:` line, so a future bump fails this test until its
+    /// history line is written — that's the point: the archaeology is recorded
+    /// while it is still remembered.
+    #[test]
+    fn command_api_version_history_is_complete() {
+        let lib_src = std::fs::read_to_string("src/lib.rs")
+            .or_else(|_| std::fs::read_to_string("src-tauri/src/lib.rs"))
+            .expect("src/lib.rs not found");
+        let mut missing: Vec<String> = Vec::new();
+        for n in 2..=crate::COMMAND_API_VERSION {
+            let marker = format!("- {} → {}:", n - 1, n);
+            if !lib_src.contains(&marker) {
+                missing.push(marker);
+            }
+        }
+        if !missing.is_empty() {
+            panic!(
+                "COMMAND_API_VERSION is {} but its doc history is missing: {} \
+                 (CORE-1032 / P3-35 — record why each major bumped before it's forgotten)",
+                crate::COMMAND_API_VERSION,
+                missing.join(", ")
+            );
+        }
     }
 }

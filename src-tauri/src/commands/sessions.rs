@@ -6,7 +6,7 @@
 //! ends behind pace, so logically it belongs with the reading-progress flow.
 
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use tauri::State;
 use uuid::Uuid;
 
@@ -49,7 +49,7 @@ pub fn cmd_extend_finish_date(
         .ok_or_else(|| AppError::not_found("plan", Some(book_id.clone())))?;
     let sections = list_sections(&conn, &book_id)?;
     let completed = list_completed_section_ids(&conn, &book_id)?;
-    let today = chrono::Utc::now().naive_utc().date();
+    let today = crate::plan::app_today();
     let recomputed = recovery::extend_finish_date(
         &plan,
         sections.len() as i64,
@@ -174,24 +174,7 @@ pub fn cmd_end_session(
     let session = stmt.query_row(params![session_id], session_from_row)?;
 
     // If every assignable section is now complete, mark the plan completed.
-    let (assignable_total, assignable_done): (i64, i64) = conn
-        .query_row(
-            "SELECT
-               (SELECT COUNT(*) FROM book_sections WHERE book_id = ?1 AND assignable = 1),
-               (SELECT COUNT(*) FROM book_sections bs
-                  JOIN section_progress sp ON sp.book_id = bs.book_id AND sp.section_id = bs.id
-                  WHERE bs.book_id = ?1 AND bs.assignable = 1 AND sp.completed_at IS NOT NULL)",
-            params![session.book_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap_or((0, 0));
-    if assignable_total > 0 && assignable_done >= assignable_total {
-        conn.execute(
-            "UPDATE reading_plans SET status = 'completed' WHERE book_id = ?1 AND status != 'completed'",
-            params![session.book_id],
-        )
-        .ok();
-    }
+    complete_plan_if_book_done(&conn, &session.book_id);
 
     if let Ok(Some(book)) = (|| -> rusqlite::Result<Option<Book>> {
         let mut s = conn.prepare(
@@ -214,4 +197,84 @@ pub fn cmd_end_session(
         }
     }
     Ok(session)
+}
+
+/// When every assignable section of `book_id` is complete, mark its plan
+/// `completed`. Best-effort — a failure here must never fail the session end.
+fn complete_plan_if_book_done(conn: &Connection, book_id: &str) {
+    let (assignable_total, assignable_done): (i64, i64) = conn
+        .query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM book_sections WHERE book_id = ?1 AND assignable = 1),
+               (SELECT COUNT(*) FROM book_sections bs
+                  JOIN section_progress sp ON sp.book_id = bs.book_id AND sp.section_id = bs.id
+                  WHERE bs.book_id = ?1 AND bs.assignable = 1 AND sp.completed_at IS NOT NULL)",
+            params![book_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((0, 0));
+    if assignable_total > 0 && assignable_done >= assignable_total {
+        // Lifecycle filter (CORE-1022): only the live plan may flip — archived /
+        // superseded / let-go plans are "earlier attempts" history, not today's.
+        conn.execute(
+            "UPDATE reading_plans SET status = 'completed'
+             WHERE book_id = ?1 AND status != 'completed'
+               AND lifecycle = 'active' AND deleted_at IS NULL",
+            params![book_id],
+        )
+        .ok();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// CORE-1022 / P3-24: when the last assignable section completes, only the
+    /// LIVE plan may flip to 'completed'. Archived and let-go (soft-deleted)
+    /// plans are the book's history — the "earlier attempts" record — and
+    /// rewriting their status corrupts it.
+    #[test]
+    fn plan_completion_skips_archived_and_let_go_plans() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO books (id,title,author,source_type,source_path,source_sha256,created_at,last_opened_at)
+               VALUES ('b1','T',NULL,'txt','/x','sha','2026-01-01',NULL);
+             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle)
+               VALUES ('p_live','b1','2026-01-01','2026-02-01','active','active');
+             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle)
+               VALUES ('p_old','b1','2026-01-01','2026-02-01','active','archived');
+             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle,deleted_at)
+               VALUES ('p_gone','b1','2026-01-01','2026-02-01','active','active',datetime('now'));
+             INSERT INTO book_sections (id,book_id,label,sort_order,assignable)
+               VALUES ('s1','b1','S1',0,1);
+             INSERT INTO section_progress (book_id,section_id,completed_at,last_locator)
+               VALUES ('b1','s1','2026-01-05T10:00:00Z',NULL);",
+        )
+        .unwrap();
+
+        complete_plan_if_book_done(&conn, "b1");
+
+        let status = |id: &str| -> String {
+            conn.query_row(
+                "SELECT status FROM reading_plans WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(status("p_live"), "completed", "the live plan completes");
+        assert_eq!(
+            status("p_old"),
+            "active",
+            "an archived plan's history must not be rewritten"
+        );
+        assert_eq!(
+            status("p_gone"),
+            "active",
+            "a let-go (soft-deleted) plan must not be rewritten"
+        );
+    }
 }

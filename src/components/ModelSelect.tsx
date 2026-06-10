@@ -4,8 +4,10 @@ import type { ModelInfo } from "../types";
 
 /**
  * Cloud model picker: a dropdown of the provider's catalogue (cmd_model_catalog)
- * with a per-Mtok price chip beside the selected model, so the reader chooses with
- * cost in view. A hand-typed model that isn't catalogued is preserved as "(custom)".
+ * with a price chip beside the selected model, so the reader chooses with cost in
+ * view. The chip speaks plainly — "$X / $Y per million words" (the going-rate
+ * approximation; never "Mtok"/"tokens", per the experience bar's ban on plumbing
+ * words). A hand-typed model that isn't catalogued is preserved as "(custom)".
  * Local (LM Studio) keeps its own detected-models UI in Settings — this is cloud-only.
  */
 export default function ModelSelect({
@@ -59,9 +61,9 @@ export default function ModelSelect({
       {sel && (
         <span
           className="tl-price-chip"
-          aria-label={`Costs ${sel.input_per_mtok} dollars per million input tokens and ${sel.output_per_mtok} per million output`}
+          aria-label={`Costs ${sel.input_per_mtok} dollars per million for what you send and ${sel.output_per_mtok} per million for what it writes back`}
         >
-          ${sel.input_per_mtok} / ${sel.output_per_mtok} <span className="unit">per Mtok</span>
+          ${sel.input_per_mtok} / ${sel.output_per_mtok} <span className="unit">per million words</span>
         </span>
       )}
     </div>

@@ -14,8 +14,15 @@ import "./tl-theme.css";
 import type { TodayCard, ReaderMode, Book, ImportOutcome, ExportPathStatus } from "./types";
 import { errorMessage } from "./types";
 import { purgeLegacyBriefings } from "./sectionBriefing";
+import { migrateLegacyLocalStorageKeys } from "./legacyStorage";
 
 type BookTab = "today" | "notes";
+
+/** One human line for a failed import — routed through errorMessage so a raw
+ *  AppError ({kind:…}) never reaches the reader as JSON. Exported for tests. */
+export function importErrorText(e: unknown): string {
+  return `Import failed: ${errorMessage(e)}`;
+}
 
 /** Outcome of a file-drop import attempt. Exported for tests. */
 export type DropResult =
@@ -38,7 +45,7 @@ export async function handleDroppedPaths(paths: string[]): Promise<DropResult> {
     const outcome = await invoke<ImportOutcome>("cmd_import_book", { path: file });
     return { kind: "imported", outcome };
   } catch (e) {
-    return { kind: "error", message: `Import failed: ${errorMessage(e)}` };
+    return { kind: "error", message: importErrorText(e) };
   }
 }
 
@@ -96,6 +103,9 @@ export default function App() {
     // localStorage. The counsel posture (CLAUDE.md §3) is "non-persistent
     // unless saved", so remove any leftovers — the live cache is in-memory.
     purgeLegacyBriefings();
+    // One-time rename shim (CORE-1031): carry pre-rename preference keys (tutor
+    // consent, font size, panel state) over to their tl.* twins, then drop them.
+    migrateLegacyLocalStorageKeys();
   }, []);
 
   // Activation feedback (CORE-1009): the deep link is the buyer's
@@ -184,11 +194,10 @@ export default function App() {
     let outcome: ImportOutcome;
     try {
       outcome = await invoke<ImportOutcome>("cmd_import_book", { path });
-    } catch (e: any) {
-      // Backend returns AppError: { kind, message }. Fall back to String(e) for
-      // anything else (network errors thrown by tauri-api itself, etc.).
-      const msg = e?.message ?? (typeof e === "string" ? e : JSON.stringify(e));
-      alert(`Import failed: ${msg}`);
+    } catch (e) {
+      // Backend returns AppError: { kind, message }. errorMessage turns any
+      // shape into a human sentence — never raw JSON in a native alert.
+      alert(importErrorText(e));
       return;
     }
     await refreshToday();
@@ -222,8 +231,10 @@ export default function App() {
   async function switchBook(bookId: string) {
     try {
       await invoke("cmd_set_active_book", { bookId });
-    } catch (e: any) {
-      alert(`Could not switch book: ${e?.message ?? e}`);
+    } catch (e) {
+      // errorMessage turns any AppError shape into a human sentence — a
+      // message-less error must never surface as "[object Object]".
+      alert(`Could not switch book: ${errorMessage(e)}`);
       return;
     }
     await refreshToday();
@@ -239,8 +250,8 @@ export default function App() {
   async function newPlan(book: Book) {
     try {
       await invoke("cmd_start_new_plan", { bookId: book.id });
-    } catch (e: any) {
-      alert(`Could not start a new plan: ${e?.message ?? e}`);
+    } catch (e) {
+      alert(`Could not start a new plan: ${errorMessage(e)}`);
       return;
     }
     setView({ kind: "setup", book });

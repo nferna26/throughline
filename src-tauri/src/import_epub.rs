@@ -243,7 +243,10 @@ fn build_spine_entries<R: std::io::Read + std::io::Seek>(
     }
     entries.dedup_by(|a, b| a.href == b.href);
     if !entries.is_empty() && !entries.iter().any(|e| e.assignable) {
-        eprintln!("classifier marked every spine item as front matter — keeping all as assignable");
+        tracing::warn!(
+            category = "import",
+            "classifier marked every spine item as front matter — keeping all as assignable"
+        );
         for e in entries.iter_mut() {
             e.assignable = true;
         }
@@ -269,6 +272,10 @@ fn extract_sections<R: std::io::Read + std::io::Seek>(
     let mut body = String::new();
     let mut out: Vec<SectionExtract> = Vec::with_capacity(entries.len());
     for entry in entries {
+        // TODO(CORE-1029): `get_resource_str` decompresses a spine member fully
+        // into memory BEFORE the accumulated check below can see it, so one
+        // multi-GB member still allocates once before being refused. Bounding
+        // it up front needs a declared-size API from the `epub` crate.
         let extracted = doc
             .get_resource_str(&entry.idref)
             .map(|(html, _mime)| extract_section(&html))

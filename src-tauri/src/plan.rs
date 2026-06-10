@@ -1,8 +1,33 @@
 use anyhow::Result;
-use chrono::{Duration, NaiveDate, Utc};
+use chrono::{Duration, Local, NaiveDate};
 use uuid::Uuid;
 
 use crate::models::{BookSection, FinishForecast, PaceState, ReadingPlan};
+
+/// The reader's *local* calendar day — the single seam for all "today" math
+/// (CORE-1014 / P3-16). Day boundaries (plan day index, streaks, finish-date
+/// checks) are reader-local: a section finished at 9pm in New York belongs to
+/// that evening, not to tomorrow's UTC date. Timestamps stored in the DB stay
+/// UTC/RFC3339 — only day *boundaries* resolve through here. The lib.rs
+/// guardrail test pins every day-boundary call site to this function.
+pub fn app_today() -> NaiveDate {
+    Local::now().date_naive()
+}
+
+/// The reader-LOCAL calendar day of a stored UTC RFC3339 timestamp — the
+/// companion seam to `app_today()` (CORE-1014 family). A session started or a
+/// plan activated at 9pm in New York belongs to that evening, not to
+/// tomorrow's UTC date: slicing the timestamp's first 10 chars takes the UTC
+/// day, so the full instant is parsed and converted instead. Stored
+/// timestamps stay UTC — only the day derivation is local. Falls back to the
+/// bare `YYYY-MM-DD` prefix for legacy/malformed values that aren't full
+/// RFC3339 timestamps.
+pub fn local_day_of(ts: &str) -> Option<NaiveDate> {
+    match chrono::DateTime::parse_from_rfc3339(ts) {
+        Ok(dt) => Some(dt.with_timezone(&Local).date_naive()),
+        Err(_) => NaiveDate::parse_from_str(ts.get(..10).unwrap_or(ts), "%Y-%m-%d").ok(),
+    }
+}
 
 pub const DEFAULT_DAYS: i64 = 30;
 /// Days after activation before a slip can surface (the first reading window is
@@ -12,7 +37,7 @@ pub const GRACE_DAYS: i64 = 1;
 pub const MAX_SECTIONS_PER_DAY: f64 = 6.0;
 
 pub fn build_default_plan(book_id: &str, sections: &[BookSection]) -> ReadingPlan {
-    let start = Utc::now().naive_utc().date();
+    let start = app_today();
     let finish = start + Duration::days(DEFAULT_DAYS - 1);
     let assignable = sections.iter().filter(|s| s.assignable).count() as i64;
     let daily_target = if assignable == 0 {
@@ -74,8 +99,8 @@ pub fn day_index(plan: &ReadingPlan, today: NaiveDate) -> i64 {
 }
 
 pub fn total_days(plan: &ReadingPlan) -> i64 {
-    let start = NaiveDate::parse_from_str(&plan.start_date, "%Y-%m-%d")
-        .unwrap_or_else(|_| Utc::now().naive_utc().date());
+    let start =
+        NaiveDate::parse_from_str(&plan.start_date, "%Y-%m-%d").unwrap_or_else(|_| app_today());
     let end = NaiveDate::parse_from_str(&plan.target_finish_date, "%Y-%m-%d").unwrap_or(start);
     (end.signed_duration_since(start).num_days() + 1).max(1)
 }
@@ -93,43 +118,6 @@ pub fn assigned_section_index(
     // Distribute sections roughly evenly across days.
     let idx = ((d - 1) as f64 * sections_count as f64 / total_days as f64).floor() as usize;
     Some(idx.min(sections_count - 1))
-}
-
-/// How many sections *should* be completed by end of day_idx.
-pub fn expected_completed(sections_count: usize, total_days: i64, day_idx: i64) -> usize {
-    if sections_count == 0 || total_days <= 0 {
-        return 0;
-    }
-    let d = day_idx.clamp(0, total_days);
-    ((d as f64 * sections_count as f64 / total_days as f64).round() as usize).min(sections_count)
-}
-
-pub fn pace_state(
-    sections_count: usize,
-    completed: usize,
-    total_days: i64,
-    day_idx: i64,
-) -> PaceState {
-    if sections_count == 0 {
-        return PaceState::NotStarted;
-    }
-    if completed >= sections_count {
-        return PaceState::Done;
-    }
-    let expected = expected_completed(sections_count, total_days, day_idx);
-    if completed >= expected {
-        PaceState::OnPace
-    } else {
-        let deficit = expected as i64 - completed as i64;
-        // 1 section behind = "behind"; >=3 sections behind = recovery
-        if deficit >= 3 {
-            PaceState::Recovery
-        } else {
-            PaceState::Behind {
-                days_behind: deficit,
-            }
-        }
-    }
 }
 
 /// Forward-looking finish forecast from the OBSERVED reading rate — gentle, not
@@ -212,7 +200,7 @@ pub fn compute(
     sections: &[BookSection],
     completed_section_ids: &[String],
 ) -> Result<PlanComputed> {
-    let today = Utc::now().naive_utc().date();
+    let today = app_today();
     let day_idx = day_index(plan, today);
     let total = total_days(plan);
 
@@ -255,10 +243,13 @@ pub fn compute(
     // once it is ACTIVE, past the grace window, and the forecast actually slips.
     // A plan-ready (freshly imported) or paused book is never behind.
     let active = matches!(plan.status.as_str(), "active" | "rebalanced");
+    // The grace-window anchor is the LOCAL day of activation (CORE-1014
+    // family): `activated_at` is a UTC RFC3339 stamp, and slicing its date
+    // prefix took the UTC day — an evening activation looked a day late.
     let act_ref = plan
         .activated_at
         .as_deref()
-        .and_then(|s| NaiveDate::parse_from_str(s.get(..10).unwrap_or(s), "%Y-%m-%d").ok())
+        .and_then(local_day_of)
         .unwrap_or_else(|| {
             NaiveDate::parse_from_str(&plan.start_date, "%Y-%m-%d").unwrap_or(today)
         });
@@ -313,6 +304,44 @@ mod tests {
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    /// CORE-1014: the seam. `app_today()` IS the reader's local calendar day —
+    /// sampled twice around the call so a midnight rollover can't flake.
+    #[test]
+    fn app_today_is_the_local_day() {
+        let before = chrono::Local::now().date_naive();
+        let today = app_today();
+        let after = chrono::Local::now().date_naive();
+        assert!(
+            today == before || today == after,
+            "app_today() must be the local day, got {today} (local was {before}/{after})"
+        );
+    }
+
+    /// CORE-1014 family: the timestamp→day seam. `local_day_of` IS the local
+    /// calendar day of the parsed instant — verified against the same chrono
+    /// conversion inline, so the test is green in any host timezone (no TZ
+    /// manipulation, mirroring `app_today_is_the_local_day`).
+    #[test]
+    fn local_day_of_is_the_local_day_of_the_instant() {
+        let ts = "2026-06-09T23:30:00Z";
+        let expected = chrono::DateTime::parse_from_rfc3339(ts)
+            .unwrap()
+            .with_timezone(&chrono::Local)
+            .date_naive();
+        assert_eq!(local_day_of(ts), Some(expected));
+        // The same instant written with an explicit offset resolves identically.
+        assert_eq!(local_day_of("2026-06-09T19:30:00-04:00"), Some(expected));
+    }
+
+    /// Legacy/malformed values that aren't full RFC3339 fall back to the bare
+    /// date prefix (old rows stored `YYYY-MM-DD`), and garbage stays None.
+    #[test]
+    fn local_day_of_falls_back_to_the_date_prefix_for_legacy_values() {
+        assert_eq!(local_day_of("2020-01-01"), Some(d(2020, 1, 1)));
+        assert_eq!(local_day_of("2020-01-01 10:00:00"), Some(d(2020, 1, 1)));
+        assert_eq!(local_day_of("garbage"), None);
     }
 
     #[test]
