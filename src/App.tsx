@@ -140,11 +140,17 @@ export default function App() {
     return () => unlisten?.();
   }, []);
 
+  // The calm dismissable notice banner. It carries every "that didn't work"
+  // moment — a refused drop, a failed import, a book that wouldn't switch, a
+  // plan that wouldn't start. It must be in-app: window.alert is a dead
+  // channel in the shipped WKWebView (no alert panel is wired up), so anything
+  // sent there vanishes without a trace (CORE-1041).
+  const [notice, setNotice] = useState<string | null>(null);
+
   // Drag a book in (golden loop, first link). The webview intercepts OS file
   // drops; .txt/.epub routes through the same import + setup flow as the file
-  // picker, anything else gets a calm dismissable notice. The dynamic import +
+  // picker, anything else gets the notice banner. The dynamic import +
   // try/catch makes this a no-op outside Tauri (the test harness / a browser).
-  const [dropNotice, setDropNotice] = useState<string | null>(null);
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     (async () => {
@@ -154,13 +160,13 @@ export default function App() {
           if (event.payload.type !== "drop") return;
           const result = await handleDroppedPaths(event.payload.paths);
           if (result.kind === "imported") {
-            setDropNotice(null);
+            setNotice(null);
             await refreshToday();
             // Same routing as importBook: genuinely new → Book Setup Sheet;
             // a dedup just lands on Today as the active book.
             setView(result.outcome.created ? { kind: "setup", book: result.outcome.book } : { kind: "today" });
           } else if (result.kind === "unsupported" || result.kind === "error") {
-            setDropNotice(result.message);
+            setNotice(result.message);
           }
         });
       } catch {
@@ -196,8 +202,8 @@ export default function App() {
       outcome = await invoke<ImportOutcome>("cmd_import_book", { path });
     } catch (e) {
       // Backend returns AppError: { kind, message }. errorMessage turns any
-      // shape into a human sentence — never raw JSON in a native alert.
-      alert(importErrorText(e));
+      // shape into a human sentence — never raw JSON in the banner.
+      setNotice(importErrorText(e));
       return;
     }
     await refreshToday();
@@ -234,7 +240,7 @@ export default function App() {
     } catch (e) {
       // errorMessage turns any AppError shape into a human sentence — a
       // message-less error must never surface as "[object Object]".
-      alert(`Could not switch book: ${errorMessage(e)}`);
+      setNotice(`Could not switch book: ${errorMessage(e)}`);
       return;
     }
     await refreshToday();
@@ -251,7 +257,7 @@ export default function App() {
     try {
       await invoke("cmd_start_new_plan", { bookId: book.id });
     } catch (e) {
-      alert(`Could not start a new plan: ${errorMessage(e)}`);
+      setNotice(`Could not start a new plan: ${errorMessage(e)}`);
       return;
     }
     setView({ kind: "setup", book });
@@ -356,11 +362,11 @@ export default function App() {
         </div>
       )}
 
-      {dropNotice && (
+      {notice && (
         <div className="tl-export-warning" role="alert">
           <TLIcon name="behind" size={16} />
-          <span>{dropNotice}</span>
-          <button className="tl-btn-quiet" onClick={() => setDropNotice(null)}>OK</button>
+          <span>{notice}</span>
+          <button className="tl-btn-quiet" onClick={() => setNotice(null)}>OK</button>
         </div>
       )}
 
