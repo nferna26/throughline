@@ -128,14 +128,12 @@ pub struct SettingsDto {
     /// request actually goes: an on-device label for local/unset/disabled, and a
     /// "sends to <host>" label for a cloud provider.
     pub ai_posture: String,
-    /// AI base URL (default http://localhost:1234/v1). May point at any
-    /// OpenAI-compatible endpoint, but is rejected at call time if it is
-    /// non-loopback while local_only is true.
+    /// Local AI base URL (default http://localhost:1234/v1). Loopback-only —
+    /// validated at save (cmd_set_ai_settings); cloud endpoints are code
+    /// constants, never user-set.
     pub ai_base_url: String,
     /// User-typed model name (e.g. "qwen2.5-7b-instruct"). Free-form.
     pub ai_model: String,
-    /// HARD privacy invariant: when true, the client refuses any non-loopback URL.
-    pub ai_local_only: bool,
     pub quote_policy: String,
     /// Quote warn threshold in characters. Surfaced so the settings UI shows
     /// the exact policy number, not just prose.
@@ -286,6 +284,10 @@ pub fn set_string(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Legacy `ai_local_only` read. The AUTHORITATIVE gate is `ai_provider`; this
+/// key is only kept in sync for old readers (see cmd_set_ai_settings) and is
+/// no longer part of the IPC surface. Still consulted by the AI acceptance
+/// example's diagnostics.
 pub fn get_local_only(conn: &Connection) -> bool {
     // Default ON. The flag is stored as a string ("true"/"false") so it shares
     // the same key/value table as the others.
@@ -443,7 +445,6 @@ pub fn ai_posture_label(provider: AiProvider) -> String {
 
 pub fn build_dto(conn: &Connection) -> Result<SettingsDto> {
     let export = get_export_path(conn)?;
-    let local_only = get_local_only(conn);
     let provider = get_ai_provider(conn);
     Ok(SettingsDto {
         export_path: export.to_string_lossy().to_string(),
@@ -452,7 +453,6 @@ pub fn build_dto(conn: &Connection) -> Result<SettingsDto> {
         ai_posture: ai_posture_label(provider),
         ai_base_url: get_ai_base_url(conn),
         ai_model: get_ai_model(conn),
-        ai_local_only: local_only,
         quote_policy: QUOTE_WARN_TEXT.to_string(),
         quote_warn_chars: 300,
         ai_requests_retention_days: get_ai_retention_days(conn),
@@ -691,6 +691,41 @@ mod tests {
             );
             assert!(p.remote_host().is_some(), "{p:?} must expose a remote host");
         }
+    }
+
+    /// CORE-1021: the `ai_local_only` IPC field is dead — nothing consults it
+    /// at call time anymore (the AUTHORITATIVE `ai_provider` is what gates the
+    /// send target), so the DTO must not carry it. A hand-built DTO is used
+    /// rather than `build_dto`, which touches the filesystem/Keychain and so is
+    /// never exercised in the default suite.
+    #[test]
+    fn dto_carries_no_dead_local_only_field() {
+        let dto = SettingsDto {
+            export_path: "/tmp/x".into(),
+            export_path_is_default: true,
+            app_data_path: "/tmp/app".into(),
+            ai_posture: ai_posture_label(AiProvider::Local),
+            ai_base_url: DEFAULT_AI_BASE_URL.into(),
+            ai_model: DEFAULT_AI_MODEL.into(),
+            quote_policy: QUOTE_WARN_TEXT.into(),
+            quote_warn_chars: 300,
+            ai_requests_retention_days: 90,
+            margin_help: DEFAULT_MARGIN_HELP.into(),
+            ai_provider: AiProvider::Local.as_str().into(),
+            ai_provider_chosen: true,
+            ai_remote_allowed: false,
+            ai_model_openai: DEFAULT_OPENAI_MODEL.into(),
+            ai_model_anthropic: DEFAULT_ANTHROPIC_MODEL.into(),
+            ai_model_codex: DEFAULT_CODEX_MODEL.into(),
+            ai_key_present_openai: false,
+            ai_key_present_anthropic: false,
+            ai_codex_creds_present: false,
+        };
+        let v = serde_json::to_value(&dto).unwrap();
+        assert!(
+            v.get("ai_local_only").is_none(),
+            "the dead ai_local_only field must not reach the IPC surface"
+        );
     }
 
     #[test]
