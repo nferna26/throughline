@@ -178,7 +178,7 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
     <div className="tl-col tl-today">
       <div className="tl-kicker">
         <span className="dot" />
-        {planReady ? "Today — plan ready" : paused ? "Paused — resume whenever you're ready" : `Today — day ${day_index} of ${total_days}`}
+        {planReady ? "Today" : paused ? "Paused — resume whenever you're ready" : `Today — day ${day_index} of ${total_days}`}
         {plansCount > 1 && (
           <button className="tl-plans-link" onClick={() => setShowPlans(true)} aria-label="See plans for this book">
             <TLIcon name="swap" size={14} /> Plans <span className="cnt">· {plansCount - 1} earlier</span>
@@ -197,11 +197,10 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
             <span className="sep" />
             <span className="item">{monthly_pct}% complete</span>
             <span className="sep" />
-            {planReady ? (
-              <span className="tl-pace on" aria-label="Plan ready — you are not behind">
-                <TLIcon name="flag" size={15} /> Plan ready
-              </span>
-            ) : paused ? (
+            {/* FT-19 (CORE-1052): the plan-ready fact lives in the single note
+                below — the chip must not echo it. A not-yet-started plan reads
+                its calm pace ("Not started"); a paused plan reads "Paused". */}
+            {paused ? (
               <span className="tl-pace on" aria-label="Pace: Paused">
                 <TLIcon name="clock" size={15} /> Paused
               </span>

@@ -169,6 +169,9 @@ describe("Today", () => {
     c.recovery = null;
     render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
     expect(screen.getByText(/Plan ready\. You are not behind/i)).toBeInTheDocument();
+    // FT-19 (CORE-1052): the plan-ready fact is stated exactly once — no kicker
+    // echo, no meta chip repeat. One calm statement is the bar.
+    expect((document.body.textContent ?? "").match(/plan ready/gi)).toHaveLength(1);
     // The accusatory pace chip ("Behind · N days") and the recovery panel must
     // not appear for a not-yet-started plan.
     expect(screen.queryByText(/Behind ·/)).toBeNull();
