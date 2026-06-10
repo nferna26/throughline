@@ -614,7 +614,6 @@
 }
 
 /* ════════ form controls (shared) ════════ */
-.tl-field-label { font-size: 12px; font-weight: 600; color: var(--tl-muted); margin-bottom: 6px; display: block; }
 .tl-input, .tl-select, .tl-textarea {
   width: 100%; font-family: var(--tl-sans); font-size: 14px; color: var(--tl-ink);
   background: var(--tl-bg); border: 1px solid var(--tl-line); border-radius: var(--tl-r-sm);
@@ -947,7 +946,6 @@
   box-shadow: var(--tl-shadow-pop); width: 92%; max-width: 520px; max-height: 88vh; overflow: auto;
   padding: var(--tl-5); display: flex; flex-direction: column; gap: var(--tl-3);
 }
-.tl-modal.wide { max-width: 580px; }
 .tl-modal-head { display: flex; align-items: center; justify-content: space-between; }
 .tl-modal-head .t { margin: 0; font-family: var(--tl-serif); font-weight: 500; font-size: 20px; color: var(--tl-ink); display: flex; align-items: center; gap: 8px; }
 .tl-modal label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; color: var(--tl-muted); }
@@ -955,50 +953,10 @@
 .tl-modal .prompt { font-size: 15px; color: var(--tl-ink); margin: 0; line-height: 1.5; }
 .tl-warn-text { color: var(--tl-warn); font-size: 12.5px; line-height: 1.5; margin: 0; }
 
-/* AI tutor pieces */
-.tl-localtag {
-  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
-  font-size: 11px; font-weight: 600; color: var(--tl-ok);
-  padding: 4px 9px; border-radius: var(--tl-r-pill);
-  background: var(--tl-accent-soft); border: 1px solid var(--tl-accent-line);
-}
-.tl-localtag.off { color: var(--tl-warn); background: var(--tl-warn-soft); border-color: color-mix(in oklab, var(--tl-warn) 30%, transparent); }
-.tl-quoted {
-  font-family: var(--tl-serif); font-style: italic; font-size: 15px; line-height: 1.5; color: var(--tl-ink);
-  padding: var(--tl-3) var(--tl-4); border-left: 2px solid var(--tl-accent-line);
-  background: var(--tl-accent-soft); border-radius: 0 var(--tl-r-sm) var(--tl-r-sm) 0;
-  max-height: 180px; overflow: auto; white-space: pre-wrap;
-}
-.tl-ai-answer {
-  font-size: 14px; line-height: 1.6; color: var(--tl-ink); white-space: pre-wrap;
-  background: var(--tl-bg); border: 1px solid var(--tl-line); border-radius: var(--tl-r-sm);
-  padding: var(--tl-3) var(--tl-4); max-height: 320px; overflow: auto; min-height: 80px; margin: 0;
-}
-.tl-section-h { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--tl-muted); font-weight: 600; margin: var(--tl-2) 0 0; }
-
-/* ── AI provider onboarding (forced first-run chooser) ── */
-.tl-onboard { display: flex; justify-content: center; padding: var(--tl-9) var(--tl-7); }
-.tl-onboard-card { max-width: 620px; width: 100%; padding: var(--tl-9); }
-.tl-onboard-title { font-family: var(--tl-serif); font-size: 1.5em; margin: 0 0 0.3em; color: var(--tl-ink); }
-.tl-onboard-sub { color: var(--tl-muted); margin: 0 0 1.2em; line-height: 1.55; }
-.tl-onboard-opts { display: flex; flex-direction: column; gap: 8px; }
-.tl-onboard-opt { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid color-mix(in oklab, var(--tl-ink) 12%, transparent); border-radius: 8px; cursor: pointer; transition: border-color .12s, background .12s; }
-.tl-onboard-opt:hover { border-color: color-mix(in oklab, var(--tl-accent) 40%, transparent); }
-.tl-onboard-opt.is-active { border-color: var(--tl-accent); background: color-mix(in oklab, var(--tl-accent) 7%, transparent); }
-.tl-onboard-opt input { margin-top: 3px; }
-.tl-onboard-opt-body { display: flex; flex-direction: column; gap: 3px; }
-.tl-onboard-opt-label { font-weight: 600; color: var(--tl-ink); display: flex; align-items: center; gap: 8px; }
-.tl-onboard-opt-desc { font-size: 0.88em; color: var(--tl-muted); line-height: 1.45; }
-.tl-onboard-tag { font-size: 0.7em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 999px; background: color-mix(in oklab, var(--tl-accent) 18%, transparent); color: color-mix(in oklab, var(--tl-accent) 80%, var(--tl-ink)); }
-.tl-onboard-tag.on-device { background: color-mix(in oklab, var(--tl-ink) 10%, transparent); color: var(--tl-muted); }
-.tl-onboard-config { margin: 12px 0 0; padding: 12px; border-radius: 8px; background: color-mix(in oklab, var(--tl-ink) 4%, transparent); }
+/* ── AI status lines (CodexLogin, UpdateChecker) ── */
 .tl-onboard-hint { font-size: 0.85em; color: var(--tl-muted); margin: 6px 0 0; line-height: 1.45; }
-.tl-onboard-test { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
 .tl-onboard-ok { display: inline-flex; align-items: center; gap: 5px; font-size: 0.88em; color: color-mix(in oklab, #2ea043 80%, var(--tl-ink)); }
 .tl-onboard-bad { display: inline-flex; align-items: center; gap: 5px; font-size: 0.88em; color: #c0392b; }
-.tl-onboard-actions { display: flex; justify-content: flex-end; margin-top: 18px; }
-.tl-field { display: flex; flex-direction: column; gap: 5px; font-size: 0.9em; color: var(--tl-muted); }
-.tl-field input { padding: 8px 10px; border: 1px solid color-mix(in oklab, var(--tl-ink) 18%, transparent); border-radius: 6px; background: var(--tl-paper, #fff); color: var(--tl-ink); font: inherit; }
 
 /* ── Codex (ChatGPT) device-code login ── */
 .tl-codexlogin { margin-top: 8px; }
