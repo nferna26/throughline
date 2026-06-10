@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, cleanup, act } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, act, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 // ── Tauri surface mocks ──────────────────────────────────────────────────────
 // App talks to: core (invoke), plugin-dialog (file picker), event (tl-activate
@@ -30,7 +31,9 @@ vi.mock("@tauri-apps/api/webview", () => ({
 }));
 
 import App, { handleDroppedPaths, importErrorText } from "./App";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { errorMessage } from "./types";
+import type { TodayCard } from "./types";
 
 const BOOK = {
   id: "b1",
@@ -106,9 +109,14 @@ describe("importErrorText", () => {
 });
 
 // ── App wiring: a real drop routes like a picker import ─────────────────────
+// An override may be a value (resolved) or a thunk (called — lets a test make
+// a command reject).
 function setAppImpl(overrides: Record<string, unknown> = {}) {
   mocks.invoke.mockImplementation((cmd: string) => {
-    if (cmd in overrides) return Promise.resolve(overrides[cmd]);
+    if (cmd in overrides) {
+      const v = overrides[cmd];
+      return typeof v === "function" ? (v as () => Promise<unknown>)() : Promise.resolve(v);
+    }
     switch (cmd) {
       case "cmd_today":
         return Promise.resolve(null);
@@ -160,5 +168,96 @@ describe("App drag-and-drop import", () => {
       await mocks.dragHandlers[0]({ payload: { type: "leave" } });
     });
     expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_import_book", expect.anything());
+  });
+});
+
+// ── Failed commands speak through the in-app banner (CORE-1041) ─────────────
+// window.alert() is a dead channel in the shipped build — the pinned wry's
+// WKWebView delegate implements no alert panel, so alert() is silently dropped.
+// These errors must land in the same dismissable role="alert" banner the
+// drag-drop path already uses, or the reader sees nothing at all.
+const BOOK2 = { ...BOOK, id: "b2", title: "Middlemarch", author: "George Eliot" };
+
+const NO_PLAN_TODAY: TodayCard = {
+  book: BOOK,
+  plan: {
+    id: "p1",
+    book_id: BOOK.id,
+    start_date: "2026-06-01",
+    target_finish_date: "2026-07-01",
+    daily_target_units: 1,
+    days_per_week: 7,
+    catchup_mode: "extend",
+    status: "completed",
+    activated_at: null,
+    original_finish_date: null,
+  },
+  section: null,
+  section_completed: false,
+  estimated_minutes: 0,
+  session_minutes: 25,
+  monthly_pct: 0,
+  pace: { kind: "not_started" },
+  day_index: 0,
+  total_days: 0,
+  streak: { days_read_last_7: 0, minutes_last_7: 0 },
+  recovery: null,
+  resume_locator: null,
+  resume_percent: null,
+  plan_status: "no_plan",
+  forecast: null,
+  memory: { last_capture: null, highlight_count: 0, note_count: 0 },
+  teaser: null,
+};
+
+describe("App command failures use the in-app banner (CORE-1041)", () => {
+  it("a failed picker import shows the import error, dismissable with OK", async () => {
+    setAppImpl({
+      cmd_import_book: () =>
+        Promise.reject({ kind: "Drm", message: "this EPUB looks DRM-protected." }),
+    });
+    vi.mocked(openDialog).mockResolvedValueOnce("/tmp/locked.epub");
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Import a file instead/i }));
+
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent("Import failed: this EPUB looks DRM-protected.");
+    // The reader can put it away.
+    await userEvent.click(within(banner).getByRole("button", { name: "OK" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a failed book switch says so in the banner", async () => {
+    setAppImpl({
+      cmd_today: NO_PLAN_TODAY,
+      cmd_list_books: [BOOK, BOOK2],
+      cmd_set_active_book: () =>
+        Promise.reject({ kind: "NotFound", resource: "book", id: null }),
+    });
+    render(<App />);
+
+    // Open the book switcher and pick the other book.
+    await userEvent.click(await screen.findByTitle("Switch book"));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Middlemarch/ }));
+
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent("Could not switch book: book not found");
+  });
+
+  it("a failed new plan says so in the banner", async () => {
+    setAppImpl({
+      cmd_today: NO_PLAN_TODAY,
+      cmd_start_new_plan: () =>
+        Promise.reject({ kind: "Io", message: "could not write to the reading database." }),
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Start a plan/i }));
+
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent(
+      "Could not start a new plan: could not write to the reading database."
+    );
   });
 });

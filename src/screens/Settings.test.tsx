@@ -148,6 +148,45 @@ describe("Settings — Your data trust summary", () => {
     );
   });
 
+  // FT-06 (CORE-1039): the tutor toggle gates ALL providers, so its copy must
+  // tell the truth per provider. In the paid build the company provider sends
+  // the reader's selection to the cloud — "local answer" / "local model call"
+  // are privacy-material misstatements, and "before the next call" is plumbing.
+  it("never claims a local answer while a cloud provider is live (toggle on)", async () => {
+    localStorage.setItem("tl.tutorEnabled", "true");
+    wire({ ai_provider: "company", ai_remote_allowed: true });
+    const { container } = render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Your book files stay on this Mac/i)).toBeInTheDocument());
+    expect(screen.queryByText(/local answer/i)).toBeNull();
+    expect(screen.queryByText(/local model call/i)).toBeNull();
+    expect(container.textContent).not.toMatch(/Local AI tutor/);
+    expect(container.textContent).not.toMatch(/before the next call/i);
+    // The row says, honestly, where the answer comes from…
+    expect(screen.getByText(/answer in the margin from Throughline AI/i)).toBeInTheDocument();
+    // …and is named for what it controls: the tutor, not a "local" one.
+    expect(screen.getByRole("switch", { name: "AI tutor" })).toBeInTheDocument();
+    localStorage.clear();
+  });
+
+  it("off copy never speaks of a 'local model call' with a cloud provider", async () => {
+    localStorage.clear();
+    wire({ ai_provider: "company", ai_remote_allowed: true });
+    const { container } = render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Your book files stay on this Mac/i)).toBeInTheDocument());
+    expect(screen.queryByText(/local model call/i)).toBeNull();
+    expect(screen.getByText(/Throughline asks before anything is sent/i)).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/before the next call/i);
+  });
+
+  it("still truthfully says the answer stays on this Mac with the local provider", async () => {
+    localStorage.setItem("tl.tutorEnabled", "true");
+    wire({ ai_provider: "local", ai_remote_allowed: false });
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Your book files stay on this Mac/i)).toBeInTheDocument());
+    expect(screen.getByText(/answer in the margin from the model on this Mac/i)).toBeInTheDocument();
+    localStorage.clear();
+  });
+
   it("does not flag OpenAI as experimental", async () => {
     wire({ ai_provider: "openai", ai_remote_allowed: true });
     render(<Settings />);

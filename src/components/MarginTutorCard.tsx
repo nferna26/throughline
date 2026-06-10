@@ -520,6 +520,7 @@ export default function MarginTutorCard(props: {
             sectionLabel: draft.chapter || null,
           }}
           initialState="unavailable"
+          provider={provider ?? undefined}
           onConnected={onSetupConnected}
         />
       ) : phase === "consent" ? (

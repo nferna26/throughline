@@ -37,7 +37,7 @@ export default function Settings() {
   const [models, setModels] = useState<string[] | null>(null);
   const [modelsErr, setModelsErr] = useState<string | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
-  // Local AI tutor consent (opt-in, revocable). A UI preference in localStorage,
+  // AI tutor consent (opt-in, revocable). A UI preference in localStorage,
   // shared with the in-margin consent card via tutorConsent.
   const [tutorOn, setTutorOn] = useState(isTutorEnabled);
 
@@ -214,18 +214,22 @@ export default function Settings() {
           <div className="tl-set-card">
             <div className="tl-set-row">
               <div className="lhs">
-                <div className="name">Local AI tutor</div>
+                <div className="name">AI tutor</div>
+                {/* The toggle gates EVERY provider, so its words follow the
+                    saved provider — never a "local" claim while a cloud
+                    provider answers (the trust card above says where the
+                    selection goes; this row must agree with it). */}
                 <div className="desc">
                   {tutorOn
-                    ? "On. Select a passage and choose a lens (Explain · Context · Define) to stream a local answer in the margin. Turn off to require consent again before the next call."
-                    : "Off (opt-in). The first time you open a tutor lens, Throughline asks for consent before any local model call."}
+                    ? `On. Select a passage and choose a lens (Explain · Context · Define) to get an answer in the margin${dto?.ai_remote_allowed ? ` from ${aiProviderLabel(dto.ai_provider)}` : " from the model on this Mac"}. Turn off and the tutor asks for your okay before answering again.`
+                    : "Off. The first time you open a tutor lens, Throughline asks before anything is sent."}
                 </div>
               </div>
               <button
                 className="tl-switch"
                 role="switch"
                 aria-checked={tutorOn}
-                aria-label="Local AI tutor"
+                aria-label="AI tutor"
                 onClick={() => { const next = !tutorOn; setTutorEnabled(next); setTutorOn(next); }}
               />
             </div>

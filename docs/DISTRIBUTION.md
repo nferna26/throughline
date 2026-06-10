@@ -24,14 +24,15 @@ when you push a version tag. One macOS job produces, for a **universal** binary
 | `Throughline.app.tar.gz.sig` | minisign signature of the payload. |
 | `latest.json` | The update manifest the app polls. |
 
-tauri-action uploads all four to a GitHub **draft** Release. You review, then
-publish. Publishing is the single switch that (a) makes the download link live
-and (b) activates auto-update for existing users.
+tauri-action uploads all four to a GitHub Release and **publishes it
+immediately**. Pushing the tag is the single switch that (a) makes the download
+link live and (b) activates auto-update for existing users — so all review
+happens **before** tagging (the repo's RC practice: `SHOT1_RC.md`,
+`WEEKEND_RC_LOG.md`).
 
 ```
 git tag v0.1.0
-git push origin v0.1.0       # → CI builds, signs, notarizes, creates a DRAFT release
-# review the draft on GitHub → Publish
+git push origin v0.1.0       # → CI builds, signs, notarizes, PUBLISHES the release
 ```
 
 ---
@@ -151,13 +152,25 @@ won't install.
    The updater only offers an update when `latest.json`'s `version` is **greater
    than** the installed app's, so this must climb every release.
 2. Update `CHANGELOG.md`.
-3. `git tag vX.Y.Z && git push origin vX.Y.Z`.
-4. Watch the **Release** workflow go green.
-5. Open the **draft** release on GitHub, sanity-check the `.dmg` opens cleanly on
-   a real Mac (ideally one that never had the dev build), then **Publish**.
-6. Your website's download link (pointing at `/releases/latest/download/...`)
-   now serves it; existing users get the update next time they click *Check for
-   updates*.
+3. Review the release candidate **now** — pushing the tag publishes, there is no
+   draft to catch mistakes afterwards.
+4. `git tag vX.Y.Z && git push origin vX.Y.Z`.
+5. Watch the **Release** workflow go green. The release is published the moment
+   the workflow finishes: your website's download link (pointing at
+   `/releases/latest/download/...`) serves it, and existing users get the update
+   next time they click *Check for updates*.
+6. **Confirm the updater can see it** — this gate is what catches a broken
+   pipeline before a reader does:
+
+   ```
+   curl -sL -o /dev/null -w '%{http_code}' \
+     https://github.com/nferna26/throughline/releases/latest/download/latest.json
+   ```
+
+   Must print `200`. Anything else means the release didn't publish — stop and
+   fix before announcing.
+7. Sanity-check the `.dmg` opens cleanly on a real Mac (ideally one that never
+   had the dev build).
 
 ---
 
@@ -169,6 +182,9 @@ Done:
   Application: Trainable LLC* cert is in the keychain.
 - ✅ **Updater signing key** (`TAURI_SIGNING_PRIVATE_KEY`) uploaded; its public
   half matches the `pubkey` baked into `tauri.conf.json`.
+- ✅ **Releases publish on tag.** v0.4.0 is live, `/releases/latest` resolves,
+  and the workflow publishes every future tag directly — no draft step, no
+  manual Publish click to forget (it was forgotten four releases in a row).
 
 Remaining:
 - **Push the branch + a tag.** The release workflow checks out the tagged commit,
@@ -176,5 +192,3 @@ Remaining:
   `git push` the branch and `git tag vX.Y.Z && git push origin vX.Y.Z`.
 - **Test the notarized `.dmg`** on a clean Mac — Gatekeeper should open it with no
   warning and no right-click.
-- **Publish the draft release** the workflow creates — that activates both the
-  download link and auto-update.

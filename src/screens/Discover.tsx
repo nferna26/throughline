@@ -376,14 +376,28 @@ export default function Discover({ onBack, onPicked }: Props) {
                 <span>Searching the library…</span>
               </div>
             ) : d.results.length === 0 ? (
-              <div className="tl-disc-empty">
-                <span className="ico"><TLIcon name="search" size={30} /></span>
-                <span className="big">No matches</span>
-                <span>“{d.query.trim()}” isn’t in the public-domain library.</span>
-                <button className="searchall" onClick={() => d.setQuery("")}>
-                  <TLIcon name="chevronLeft" size={15} /> Back to the shelves
-                </button>
-              </div>
+              // Zero hits mean different things depending on what was searched.
+              // Offline, only the small built-in shelf was looked at — a miss
+              // there says NOTHING about the library, so never assert absence.
+              d.offline ? (
+                <div className="tl-disc-empty">
+                  <span className="ico"><TLIcon name="globe" size={30} /></span>
+                  <span className="big">We couldn’t search the full library</span>
+                  <span>We can’t reach it right now, so we only searched a built-in shelf of popular titles. “{d.query.trim()}” may still be there — try again in a moment.</span>
+                  <button className="searchall" onClick={() => d.runSearch(d.query)}>
+                    <TLIcon name="refresh" size={15} /> Try again
+                  </button>
+                </div>
+              ) : (
+                <div className="tl-disc-empty">
+                  <span className="ico"><TLIcon name="search" size={30} /></span>
+                  <span className="big">No matches</span>
+                  <span>“{d.query.trim()}” isn’t in the public-domain library.</span>
+                  <button className="searchall" onClick={() => d.setQuery("")}>
+                    <TLIcon name="chevronLeft" size={15} /> Back to the shelves
+                  </button>
+                </div>
+              )
             ) : (
               <>
                 <div className="tl-index">
