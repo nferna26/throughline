@@ -1370,7 +1370,11 @@ async fn test_company(base_url: &str, license: &str, timeout: Duration) -> ConnT
             (
                 false,
                 None,
-                humanize_http("Throughline AI", status, &r.text().await.unwrap_or_default()),
+                humanize_http(
+                    "Throughline AI",
+                    status,
+                    &r.text().await.unwrap_or_default(),
+                ),
             )
         }
         Err(_) => {
@@ -1564,7 +1568,10 @@ mod tests {
             _ => panic!("codex: malformed data line must surface, got Ignore/Delta/Done"),
         }
         // Non-data noise (event names, blanks, the [DONE] sentinel) stays ignored:
-        assert!(matches!(parse_anthropic_line("event: ping"), SseOutcome::Ignore));
+        assert!(matches!(
+            parse_anthropic_line("event: ping"),
+            SseOutcome::Ignore
+        ));
         assert!(matches!(parse_anthropic_line(""), SseOutcome::Ignore));
         assert!(matches!(
             parse_anthropic_line("data: [DONE]"),
@@ -1575,7 +1582,10 @@ mod tests {
             SseOutcome::Ignore
         ));
         assert!(matches!(parse_codex_line(""), SseOutcome::Ignore));
-        assert!(matches!(parse_codex_line("data: [DONE]"), SseOutcome::Ignore));
+        assert!(matches!(
+            parse_codex_line("data: [DONE]"),
+            SseOutcome::Ignore
+        ));
     }
 
     #[test]

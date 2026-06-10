@@ -213,7 +213,11 @@ mod tests {
     fn launch_check_does_not_create_a_missing_export_root() {
         let _g = crate::paths::lock_env_for_test();
         let missing = std::env::temp_dir()
-            .join(format!("tl-launch-check-{}-{}", std::process::id(), line!()))
+            .join(format!(
+                "tl-launch-check-{}-{}",
+                std::process::id(),
+                line!()
+            ))
             .join("not-created-yet");
         unsafe {
             std::env::set_var("THROUGHLINE_EXPORT_DIR", &missing);

@@ -338,7 +338,8 @@ mod tests {
     fn pause_writes_status_paused_and_resume_restores_active() {
         let conn = db();
         let pause = |conn: &Connection, id: &str| pause_plan_on(conn, id, d(2026, 1, 5)).unwrap();
-        let resume = |conn: &Connection, id: &str| resume_plan_on(conn, id, d(2026, 1, 10)).unwrap();
+        let resume =
+            |conn: &Connection, id: &str| resume_plan_on(conn, id, d(2026, 1, 10)).unwrap();
 
         pause(&conn, "p1");
         assert_eq!(

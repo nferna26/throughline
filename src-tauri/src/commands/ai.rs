@@ -1228,8 +1228,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         crate::migrations::apply_pending(&conn).unwrap();
         // A reader running their local server on a custom port.
-        settings::set_string(&conn, settings::KEY_AI_BASE_URL, "http://localhost:8080/v1")
-            .unwrap();
+        settings::set_string(&conn, settings::KEY_AI_BASE_URL, "http://localhost:8080/v1").unwrap();
 
         let (prov, _key, base_url, _model) = resolve_conn_test_inputs(
             &conn,
