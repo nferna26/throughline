@@ -269,16 +269,24 @@ fn extract_sections<R: std::io::Read + std::io::Seek>(
     doc: &mut epub::doc::EpubDoc<R>,
     entries: &[SpineEntry],
 ) -> Result<(String, Vec<SectionExtract>)> {
+    // The EPUB3 navigation document's resource path (fragment-stripped), used to
+    // recognise the table-of-contents spine item by href. None for EPUB2.
+    let nav_href = doc.get_nav_id().and_then(|id| {
+        doc.resources
+            .get(&id)
+            .map(|r| strip_fragment(&r.path.to_string_lossy()))
+    });
     let mut body = String::new();
     let mut out: Vec<SectionExtract> = Vec::with_capacity(entries.len());
     for entry in entries {
+        let kind = section_kind_for(entry, nav_href.as_deref());
         // TODO(CORE-1029): `get_resource_str` decompresses a spine member fully
         // into memory BEFORE the accumulated check below can see it, so one
         // multi-GB member still allocates once before being refused. Bounding
         // it up front needs a declared-size API from the `epub` crate.
         let extracted = doc
             .get_resource_str(&entry.idref)
-            .map(|(html, _mime)| extract_section(&html))
+            .map(|(html, _mime)| extract_section_with_kind(&html, kind))
             .unwrap_or_default();
         if !body.is_empty() {
             body.push_str("\n\n");
@@ -301,6 +309,51 @@ fn extract_sections<R: std::io::Read + std::io::Seek>(
         });
     }
     Ok((body, out))
+}
+
+/// Decide a spine item's book-typesetting role from signals available before we
+/// open its XHTML: the EPUB3 nav document href, the item's assignability (the
+/// classifier already told us whether it's front/back matter), and label/idref
+/// hints. This is the HEURISTIC layer; an authoritative inline `epub:type`
+/// landmark inside the XHTML can still promote a `Plain` result during
+/// extraction (see `promote_kind_from_epubtype`).
+///
+/// • An assignable (body) item → `Chapter`.
+/// • The nav document, or a "contents"/"toc"-labelled item → `Toc`.
+/// • A "title page"/"titlepage"/"half title" item → `TitlePage`.
+/// • An "epigraph"-labelled item → `Epigraph`.
+/// • Everything else (copyright, dedication, about-the-author, …) → `Plain`.
+fn section_kind_for(entry: &SpineEntry, nav_href: Option<&str>) -> SectionKind {
+    if entry.assignable {
+        return SectionKind::Chapter;
+    }
+    // Front/back matter: refine into a typeset role when we recognise one.
+    if let Some(nav) = nav_href {
+        if entry.href == nav {
+            return SectionKind::Toc;
+        }
+    }
+    // Normalize label + idref to a lowercase, separator-free needle (same shape the
+    // classifier uses) so "Title_Page" and "title-page" both match.
+    let hay = format!("{} {}", entry.label, entry.idref)
+        .to_ascii_lowercase()
+        .replace(['_', '-'], " ");
+    if hay.contains("title page") || hay.contains("titlepage") || hay.contains("half title") {
+        return SectionKind::TitlePage;
+    }
+    if hay.contains("table of contents") || hay.contains("contents") || has_token(&hay, "toc") {
+        return SectionKind::Toc;
+    }
+    if hay.contains("epigraph") {
+        return SectionKind::Epigraph;
+    }
+    SectionKind::Plain
+}
+
+/// True when `needle` appears as a whole space-delimited token in `hay` (so "toc"
+/// matches "toc" / "front toc" but never "protocol").
+fn has_token(hay: &str, needle: &str) -> bool {
+    hay.split_ascii_whitespace().any(|t| t == needle)
 }
 
 #[cfg(unix)]
@@ -408,6 +461,35 @@ pub struct ExtractedSection {
     pub ranges: Vec<StyleRange>,
 }
 
+/// The book-typesetting role of a whole spine item, derived at the call site from
+/// the EPUB's own semantics (the nav document, the classifier's front/back-matter
+/// verdict, and label/idref hints). It tells the extractor which NEW block roles
+/// (`title`/`subtitle`/`byline`, `contents-*`, `epigraph`, `chapter-*`,
+/// `body-first`) it may emit for THIS document. Inline `epub:type` attributes
+/// inside the XHTML refine this further (and can promote a `Plain` section that
+/// turns out to carry `epub:type="titlepage"` / `"toc"`). `Plain` emits only the
+/// legacy h1–h6/blockquote/pre/em/strong ranges — exactly as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SectionKind {
+    /// The title page: main title → `title`, secondary title → `subtitle`,
+    /// author line → `byline`.
+    TitlePage,
+    /// The table of contents / nav document: the "Contents" heading →
+    /// `contents-label`, part groupings → `contents-part`, each entry →
+    /// `contents-item`.
+    Toc,
+    /// A standalone epigraph page: its quoted block → `epigraph`.
+    Epigraph,
+    /// An assignable body spine item (a chapter): the opening heading →
+    /// `chapter-title` (a kicker above it → `chapter-label`), and the first prose
+    /// paragraph after it → `body-first`. Interior headings stay h2–h6.
+    Chapter,
+    /// Front/back matter with no special typesetting (copyright, dedication,
+    /// "about the author", …) — legacy ranges only.
+    #[default]
+    Plain,
+}
+
 /// Decode one HTML/XML entity name (the part between `&` and `;`). Handles the
 /// XML predefined entities, numeric refs (`#123`, `#x1F`), and the common
 /// typographic/accented HTML named entities EPUBs use. Unknown names → None
@@ -512,6 +594,23 @@ struct Extractor {
     block_stack: Vec<(String, u32)>,
     ranges: Vec<StyleRange>,
     skip: Option<String>,
+    // ---- book-typography role state ----
+    // The document's role (set by the caller). Drives which NEW block roles this
+    // section may emit. `Plain` → legacy behaviour only.
+    kind: SectionKind,
+    // Has the chapter's opening heading (its `chapter-title`) been claimed yet?
+    // Gates which heading becomes the title vs an interior h2–h6.
+    saw_chapter_title: bool,
+    // Has any chapter heading/kicker been seen? The FIRST plain prose paragraph
+    // after it becomes `body-first` exactly once.
+    saw_chapter_heading: bool,
+    body_first_done: bool,
+    // On a TitlePage, the first title-ish block is `title`, the next a `subtitle`.
+    saw_title: bool,
+    // Depth of currently-open `<p>`/`<li>` elements that pushed a roled range onto
+    // the block stack, innermost last. A close pops a range iff the matching open
+    // pushed one. (h1–h6/blockquote keep their own always-tracked path.)
+    roled_pl_stack: Vec<bool>,
     // Code-block state. `code` is Some while inside a code container (`<pre>` or a
     // block whose class is code-ish, e.g. `table.processedcode`). `code_verbatim`
     // preserves whitespace (true for <pre>); otherwise we collapse the XHTML
@@ -560,34 +659,68 @@ fn normalize_code(buf: &str) -> String {
     lines[first..last].join("\n")
 }
 
-/// Extract the `class` attribute value from a tag's inner text (quote-aware so
-/// multi-class values like `cf methodname` survive). Empty when absent.
-fn class_of(raw: &str) -> String {
+/// Extract a named attribute's value from a tag's inner text (quote-aware so
+/// multi-token values like `cf methodname` survive). `attr` must be lowercase and
+/// include the `=` (e.g. `"class="`). Empty when absent. The match requires the
+/// char before `attr` to be a tag boundary (`<` start, whitespace, or `/`) so
+/// `class=` never matches inside `someclass=` and `epub:type=` is found whether
+/// the source writes `epub:type` or a default-namespaced `type`.
+fn attr_of(raw: &str, attr: &str) -> String {
     let lower = raw.to_ascii_lowercase();
-    let Some(p) = lower.find("class=") else {
-        return String::new();
-    };
-    let rest = &raw[p + 6..];
-    let bytes = rest.as_bytes();
-    if bytes.is_empty() {
-        return String::new();
-    }
-    let q = bytes[0];
-    if q == b'"' || q == b'\'' {
-        if let Some(end) = rest[1..].find(q as char) {
-            return rest[1..1 + end].to_string();
+    let mut from = 0usize;
+    while let Some(rel) = lower[from..].find(attr) {
+        let p = from + rel;
+        let ok_boundary = p == 0
+            || lower[..p]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_whitespace() || c == '"' || c == '\'' || c == '/');
+        if !ok_boundary {
+            from = p + attr.len();
+            continue;
         }
-        String::new()
-    } else {
+        let rest = &raw[p + attr.len()..];
+        let bytes = rest.as_bytes();
+        if bytes.is_empty() {
+            return String::new();
+        }
+        let q = bytes[0];
+        if q == b'"' || q == b'\'' {
+            return rest[1..]
+                .find(q as char)
+                .map(|end| rest[1..1 + end].to_string())
+                .unwrap_or_default();
+        }
         let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-        rest[..end].to_string()
+        return rest[..end].to_string();
     }
+    String::new()
+}
+
+/// Extract the `class` attribute value from a tag's inner text. Empty when absent.
+fn class_of(raw: &str) -> String {
+    attr_of(raw, "class=")
+}
+
+/// Extract the `epub:type` (or default-namespaced `type`) attribute — the EPUB3
+/// structural-semantics vocabulary (`titlepage`, `toc`, `epigraph`, `title`,
+/// `subtitle`, `bridgehead`, …). EPUBs may declare the epub namespace under any
+/// prefix; `epub:type` is by far the most common, so we match it directly and
+/// fall back to a bare `type=` only on elements where a plain HTML `type` is
+/// meaningless (handled by the caller). Returns lowercase, space-separated.
+fn epubtype_of(raw: &str) -> String {
+    let v = attr_of(raw, "epub:type=");
+    if !v.is_empty() {
+        return v.to_ascii_lowercase();
+    }
+    String::new()
 }
 
 impl Extractor {
-    fn new() -> Self {
+    fn new(kind: SectionKind) -> Self {
         Extractor {
             at_para_start: true,
+            kind,
             ..Default::default()
         }
     }
@@ -746,7 +879,134 @@ impl Extractor {
         }
         self.para_break();
     }
-    fn handle_tag(&mut self, name: &str, class: &str, is_close: bool, is_selfclose: bool) {
+    /// Open a block whose role was decided up front (a NEW book-typography role,
+    /// or a legacy heading kept under a new name). Always tracked: its range spans
+    /// exactly its paragraph, like a heading.
+    fn open_roled_block(&mut self, role: &str, marks_heading: bool) {
+        self.para_break();
+        self.block_stack.push((role.to_string(), self.u16));
+        if marks_heading {
+            self.saw_chapter_heading = true;
+        }
+    }
+    /// Open an `<h1>`–`<h6>` / `<blockquote>`. In a roled section these can carry
+    /// a NEW book-typography role (chapter-title, contents-label, epigraph, …);
+    /// otherwise they keep their legacy tag name. Either way the block is tracked
+    /// and its range spans exactly its paragraph (so it remains a `p[data-offset]`
+    /// in the reader — the role is a class, never a heading tag).
+    fn open_heading_or_quote(&mut self, name: &str, etype: &str, class: &str) {
+        let is_heading = matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
+        let role = if self.kind == SectionKind::Plain {
+            None
+        } else {
+            self.decide_block_role(name, etype, class)
+        };
+        match role {
+            Some(r) => {
+                // A chapter-title / chapter-label heading also arms `body-first`.
+                let marks_heading = self.kind == SectionKind::Chapter
+                    && (r == "chapter-title" || r == "chapter-label");
+                self.open_roled_block(&r, marks_heading);
+            }
+            None => {
+                // Legacy heading/blockquote. On a chapter page an interior heading
+                // that isn't the title still marks that a heading has been seen so a
+                // late first paragraph won't be mis-tagged before any heading.
+                if is_heading && self.kind == SectionKind::Chapter {
+                    self.saw_chapter_heading = true;
+                }
+                self.open_block(name, true);
+            }
+        }
+    }
+    /// Decide the book-typography role for a block element that is OPENING, from
+    /// the section kind, the element's `epub:type`, its tag name, and position.
+    /// Returns `(role, marks_heading)` when a NEW role applies; None means "fall
+    /// through to legacy handling" (h1–h6/blockquote tracked by tag, prose plain).
+    ///
+    /// Pure intent → easy to keep aligned with the txt path and the frontend's
+    /// role→class map. The role STRINGS here are the shared vocabulary.
+    fn decide_block_role(&mut self, name: &str, etype: &str, class: &str) -> Option<String> {
+        let is_heading = matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
+        let class_l = class.to_ascii_lowercase();
+        let has = |needle: &str| etype.split_ascii_whitespace().any(|t| t == needle);
+        // A leading lowercase "and" between two titles is the italic connector the
+        // frontend styles; it rides the `subtitle` role (handled by the caller's
+        // text check, not here).
+        match self.kind {
+            SectionKind::TitlePage => {
+                // epub:type is authoritative on a title page.
+                if has("title") || (!self.saw_title && (is_heading || class_l.contains("title")))
+                {
+                    // The first title-ish block is the main title; a later one is a
+                    // secondary title (subtitle).
+                    if self.saw_title {
+                        return Some("subtitle".into());
+                    }
+                    self.saw_title = true;
+                    return Some("title".into());
+                }
+                if has("subtitle") || class_l.contains("subtitle") {
+                    return Some("subtitle".into());
+                }
+                if has("author") || has("z3998:author") || class_l.contains("author") {
+                    return Some("byline".into());
+                }
+                // A bare <p> on a title page after the title is usually the byline.
+                if name == "p" && self.saw_title {
+                    return Some("byline".into());
+                }
+                None
+            }
+            SectionKind::Toc => {
+                if has("title") || (is_heading && !self.saw_title) {
+                    self.saw_title = true;
+                    return Some("contents-label".into());
+                }
+                // Nested list headings / part labels.
+                if class_l.contains("part") || has("part") {
+                    return Some("contents-part".into());
+                }
+                // Each entry line: a list item or a paragraph row in the nav/toc.
+                if matches!(name, "li" | "p") {
+                    return Some("contents-item".into());
+                }
+                None
+            }
+            SectionKind::Epigraph => {
+                // The quoted block (blockquote OR the page's paragraphs) is the epigraph.
+                if has("epigraph") || matches!(name, "blockquote" | "p") {
+                    return Some("epigraph".into());
+                }
+                None
+            }
+            SectionKind::Chapter => {
+                // A small kicker above the title (epub:type label/ordinal, or a
+                // label-ish class) → chapter-label; it does NOT consume the title.
+                if !self.saw_chapter_title
+                    && (has("label") || has("ordinal") || class_l.contains("chapter-label"))
+                {
+                    return Some("chapter-label".into());
+                }
+                if is_heading && !self.saw_chapter_title {
+                    // First heading of the chapter is its title.
+                    self.saw_chapter_title = true;
+                    return Some("chapter-title".into());
+                }
+                // Interior headings stay legacy h2–h6 (None → legacy path).
+                None
+            }
+            SectionKind::Plain => None,
+        }
+    }
+    fn handle_tag(
+        &mut self,
+        name: &str,
+        class: &str,
+        etype: &str,
+        is_close: bool,
+        is_selfclose: bool,
+    ) {
         if let Some(sk) = &self.skip {
             if is_close && name == sk.as_str() {
                 self.skip = None;
@@ -805,12 +1065,48 @@ impl Extractor {
                 if is_close {
                     self.close_block(true)
                 } else {
-                    self.open_block(name, true)
+                    self.open_heading_or_quote(name, etype, class)
                 }
             }
-            "p" | "div" | "li" | "ul" | "ol" | "dd" | "dt" | "section" | "article" | "header"
-            | "footer" | "nav" | "aside" | "main" | "figure" | "figcaption" | "table" | "tr"
-            | "td" | "th" | "caption" => {
+            "p" | "li" => {
+                if is_close {
+                    // Pop the matching open frame; emit a range iff that open took a
+                    // NEW book-typography role (title/byline/contents-item/…).
+                    let roled = self.roled_pl_stack.pop().unwrap_or(false);
+                    self.close_block(roled);
+                } else {
+                    let role = if self.kind == SectionKind::Plain {
+                        None
+                    } else {
+                        self.decide_block_role(name, etype, class)
+                    };
+                    match role {
+                        Some(r) => {
+                            self.roled_pl_stack.push(true);
+                            self.open_roled_block(&r, false);
+                        }
+                        None => {
+                            // First plain prose paragraph after a chapter heading →
+                            // body-first (once). Otherwise an untracked block.
+                            if name == "p"
+                                && self.kind == SectionKind::Chapter
+                                && self.saw_chapter_heading
+                                && !self.body_first_done
+                            {
+                                self.body_first_done = true;
+                                self.roled_pl_stack.push(true);
+                                self.open_roled_block("body-first", false);
+                            } else {
+                                self.roled_pl_stack.push(false);
+                                self.open_block(name, false);
+                            }
+                        }
+                    }
+                }
+            }
+            "div" | "ul" | "ol" | "dd" | "dt" | "section" | "article" | "header" | "footer"
+            | "nav" | "aside" | "main" | "figure" | "figcaption" | "table" | "tr" | "td" | "th"
+            | "caption" => {
                 if is_close {
                     self.close_block(false)
                 } else {
@@ -840,6 +1136,24 @@ impl Extractor {
         let trimmed = self.out.trim_end();
         let len_u16 = trimmed.encode_utf16().count() as u32;
         self.out.truncate(trimmed.len());
+        // On a title page, a lone connective "and" line between two titles rides the
+        // `subtitle` role (the frontend renders it as the italic connector). It is
+        // decided here, by text, because its content is unknown when the block opens.
+        if self.kind == SectionKind::TitlePage {
+            let units: Vec<u16> = self.out.encode_utf16().collect();
+            for r in self.ranges.iter_mut() {
+                if r.kind == "byline" || r.kind == "title" {
+                    let (s, e) = (r.start as usize, (r.end as usize).min(units.len()));
+                    if s < e {
+                        if let Ok(text) = String::from_utf16(&units[s..e]) {
+                            if text.trim().eq_ignore_ascii_case("and") {
+                                r.kind = "subtitle".into();
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let ranges: Vec<StyleRange> = self
             .ranges
             .into_iter()
@@ -859,16 +1173,66 @@ impl Extractor {
     }
 }
 
+/// If the XHTML's structural root (`<body>`/`<section>`) carries an authoritative
+/// EPUB3 `epub:type` landmark, return the section kind it implies. Only the
+/// page-defining landmarks promote a section here; finer inline `epub:type`s
+/// (`title`, `subtitle`, …) are handled per-block during extraction. Scans only
+/// the document prefix (the body tag appears early), so it stays cheap.
+fn promote_kind_from_epubtype(html: &str) -> Option<SectionKind> {
+    let lower = html.to_ascii_lowercase();
+    // Limit to a prefix: the <body>/landmark tag is near the top; this also avoids
+    // matching an `epub:type="title"` on some inline element deep in the prose.
+    let scan = &lower[..lower.len().min(4096)];
+    if !scan.contains("epub:type=") {
+        return None;
+    }
+    // Order matters: titlepage before a generic "title".
+    if scan.contains("\"titlepage\"")
+        || scan.contains("'titlepage'")
+        || scan.contains("titlepage ")
+    {
+        return Some(SectionKind::TitlePage);
+    }
+    if scan.contains("\"toc\"") || scan.contains("'toc'") || scan.contains(">toc<") {
+        return Some(SectionKind::Toc);
+    }
+    if scan.contains("epigraph") {
+        return Some(SectionKind::Epigraph);
+    }
+    None
+}
+
+/// Convert one spine item's XHTML into clean plain text plus offset-safe style
+/// ranges, treating the document as plain prose (legacy h1–h6/blockquote/pre/em/
+/// strong ranges only). Thin wrapper over [`extract_section_with_kind`] so all
+/// existing callers/tests keep their exact behaviour.
+pub fn extract_section(html: &str) -> ExtractedSection {
+    extract_section_with_kind(html, SectionKind::Plain)
+}
+
 /// Convert one spine item's XHTML into clean plain text plus offset-safe style
 /// ranges. A hand-rolled scanner (no XML parser) so it never errors on the HTML
 /// named entities (`&nbsp;`, `&mdash;`, …) that strict XML parsers reject, and so
 /// UTF-16 offsets can be tracked exactly as characters are emitted. Block
 /// elements become blank-line-separated paragraphs (what `splitParagraphs` +
 /// `sectionize` expect); script/style/head are skipped; images are dropped.
-pub fn extract_section(html: &str) -> ExtractedSection {
+///
+/// `kind` is the document's book-typesetting role (decided by the caller from the
+/// EPUB's own semantics). It selects which NEW block roles may be emitted. A
+/// body-level `epub:type` (`titlepage`/`toc`/`epigraph`) inside the XHTML can
+/// PROMOTE a `Plain` document to the matching kind — the authoritative EPUB3
+/// signal wins when the heuristic was silent.
+pub fn extract_section_with_kind(html: &str, kind: SectionKind) -> ExtractedSection {
     let chars: Vec<char> = html.chars().collect();
     let n = chars.len();
-    let mut ex = Extractor::new();
+    // Promote a Plain document if its body/root carries an authoritative
+    // `epub:type` landmark. Cheap, case-insensitive substring scan of the prefix.
+    let kind = if kind == SectionKind::Plain {
+        promote_kind_from_epubtype(html).unwrap_or(kind)
+    } else {
+        kind
+    };
+    let mut ex = Extractor::new(kind);
     let starts_with = |i: usize, pat: &str| -> bool {
         let p: Vec<char> = pat.chars().collect();
         i + p.len() <= n && chars[i..i + p.len()] == p[..]
@@ -935,12 +1299,21 @@ pub fn extract_section(html: &str) -> ExtractedSection {
                 continue;
             }
             if !name.is_empty() {
-                let class = if raw.to_ascii_lowercase().contains("class=") {
+                let raw_lower = raw.to_ascii_lowercase();
+                let class = if raw_lower.contains("class=") {
                     class_of(&raw)
                 } else {
                     String::new()
                 };
-                ex.handle_tag(&name, &class, is_close, is_selfclose);
+                // `epub:type` is only consulted for roled sections (the kind is
+                // anything but Plain) and only on opening tags — skip the parse
+                // otherwise so legacy extraction stays exactly as fast.
+                let etype = if !is_close && raw_lower.contains("epub:type=") {
+                    epubtype_of(&raw)
+                } else {
+                    String::new()
+                };
+                ex.handle_tag(&name, &class, &etype, is_close, is_selfclose);
             }
             i = after;
         } else {
@@ -1175,5 +1548,303 @@ mod tests {
                 .count()
         );
         assert_eq!(crate::import::estimate_minutes_for_chars(n), 1);
+    }
+
+    // ---- book-typography role emission (the new vocabulary) ----
+
+    /// Slice the exact substring a range spans, in UTF-16 units (what the reader
+    /// measures in). Asserts the range really covers that text and nothing else.
+    fn role_slice(s: &ExtractedSection, kind: &str) -> (String, u32, u32) {
+        let r = s
+            .ranges
+            .iter()
+            .find(|r| r.kind == kind)
+            .unwrap_or_else(|| panic!("expected a {kind} range; got {:?}", s.ranges));
+        let units: Vec<u16> = s.text.encode_utf16().collect();
+        let text = String::from_utf16(&units[r.start as usize..r.end as usize]).unwrap();
+        (text, r.start, r.end)
+    }
+
+    #[test]
+    fn title_page_emits_title_subtitle_byline_slicing_exactly() {
+        // A Walden-style title page: main title, the italic "and" connector, a
+        // secondary title, then the author line — front matter (kind = TitlePage).
+        let html = "<section epub:type=\"titlepage\">\
+            <h1 epub:type=\"title\">WALDEN</h1>\
+            <p class=\"and\">and</p>\
+            <h2 epub:type=\"subtitle\">ON THE DUTY OF CIVIL DISOBEDIENCE</h2>\
+            <p epub:type=\"author\">by Henry David Thoreau</p>\
+            </section>";
+        let s = extract_section_with_kind(html, SectionKind::TitlePage);
+        assert_eq!(
+            s.text,
+            "WALDEN\n\nand\n\nON THE DUTY OF CIVIL DISOBEDIENCE\n\nby Henry David Thoreau"
+        );
+        assert_eq!(role_slice(&s, "title").0, "WALDEN");
+        assert_eq!(role_slice(&s, "byline").0, "by Henry David Thoreau");
+        // Both the explicit secondary title AND the lone "and" connector ride
+        // `subtitle`; assert the connector specifically is present.
+        let units: Vec<u16> = s.text.encode_utf16().collect();
+        let subtitles: Vec<String> = s
+            .ranges
+            .iter()
+            .filter(|r| r.kind == "subtitle")
+            .map(|r| String::from_utf16(&units[r.start as usize..r.end as usize]).unwrap())
+            .collect();
+        assert!(
+            subtitles.iter().any(|t| t == "and"),
+            "the connector rides subtitle"
+        );
+        assert!(
+            subtitles
+                .iter()
+                .any(|t| t == "ON THE DUTY OF CIVIL DISOBEDIENCE"),
+            "the secondary title rides subtitle"
+        );
+    }
+
+    #[test]
+    fn title_page_without_epubtype_uses_heading_and_class_hints() {
+        // EPUB2 / no epub:type: the first heading is the title, a class-tagged
+        // subtitle is the subtitle, a bare <p> after the title is the byline.
+        let html = "<div><h1>Walden</h1><h2 class=\"subtitle\">Life in the Woods</h2>\
+            <p>by Henry David Thoreau</p></div>";
+        let s = extract_section_with_kind(html, SectionKind::TitlePage);
+        assert_eq!(role_slice(&s, "title").0, "Walden");
+        assert_eq!(role_slice(&s, "subtitle").0, "Life in the Woods");
+        assert_eq!(role_slice(&s, "byline").0, "by Henry David Thoreau");
+    }
+
+    #[test]
+    fn toc_emits_contents_label_and_one_item_per_entry() {
+        // A nav document: the "Contents" heading + a list of chapter entries.
+        let html = "<nav epub:type=\"toc\"><h1>Contents</h1>\
+            <ol><li><a href=\"c1.xhtml\">Economy</a></li>\
+            <li><a href=\"c2.xhtml\">Where I Lived</a></li>\
+            <li><a href=\"c3.xhtml\">Reading</a></li></ol></nav>";
+        let s = extract_section_with_kind(html, SectionKind::Toc);
+        assert_eq!(role_slice(&s, "contents-label").0, "Contents");
+        let items: Vec<&StyleRange> =
+            s.ranges.iter().filter(|r| r.kind == "contents-item").collect();
+        assert_eq!(items.len(), 3, "one contents-item per entry; got {:?}", s.ranges);
+        let units: Vec<u16> = s.text.encode_utf16().collect();
+        let texts: Vec<String> = items
+            .iter()
+            .map(|r| String::from_utf16(&units[r.start as usize..r.end as usize]).unwrap())
+            .collect();
+        assert_eq!(texts, vec!["Economy", "Where I Lived", "Reading"]);
+    }
+
+    #[test]
+    fn toc_emits_contents_part_groupings() {
+        let html = "<nav epub:type=\"toc\"><h1>Contents</h1>\
+            <p epub:type=\"part\">Walden</p>\
+            <ul><li>Economy</li><li>Reading</li></ul>\
+            <p class=\"toc-part\">On the Duty of Civil Disobedience</p>\
+            <ul><li>Resistance to Civil Government</li></ul></nav>";
+        let s = extract_section_with_kind(html, SectionKind::Toc);
+        let parts: Vec<String> = {
+            let units: Vec<u16> = s.text.encode_utf16().collect();
+            s.ranges
+                .iter()
+                .filter(|r| r.kind == "contents-part")
+                .map(|r| String::from_utf16(&units[r.start as usize..r.end as usize]).unwrap())
+                .collect()
+        };
+        assert_eq!(
+            parts,
+            vec!["Walden", "On the Duty of Civil Disobedience"]
+        );
+        assert_eq!(
+            s.ranges.iter().filter(|r| r.kind == "contents-item").count(),
+            3
+        );
+    }
+
+    #[test]
+    fn epigraph_page_emits_epigraph_range() {
+        let html = "<section epub:type=\"epigraph\"><blockquote>\
+            I went to the woods because I wished to live deliberately.\
+            </blockquote></section>";
+        let s = extract_section_with_kind(html, SectionKind::Epigraph);
+        assert_eq!(
+            role_slice(&s, "epigraph").0,
+            "I went to the woods because I wished to live deliberately."
+        );
+        // Must NOT also carry a legacy blockquote range for the same text.
+        assert!(
+            !s.ranges.iter().any(|r| r.kind == "blockquote"),
+            "epigraph supersedes the legacy blockquote role"
+        );
+    }
+
+    #[test]
+    fn chapter_emits_chapter_title_and_body_first_offsets_exact() {
+        // The handoff's canonical example: <h1>Economy</h1><p>first…</p><p>second…</p>.
+        let html = "<h1>Economy</h1>\
+            <p>When I wrote the following pages, I lived alone.</p>\
+            <p>The second paragraph continues the thought.</p>";
+        let s = extract_section_with_kind(html, SectionKind::Chapter);
+        assert_eq!(
+            s.text,
+            "Economy\n\nWhen I wrote the following pages, I lived alone.\n\n\
+             The second paragraph continues the thought."
+        );
+        // chapter-title spans exactly "Economy", from offset 0.
+        let (title, ts, te) = role_slice(&s, "chapter-title");
+        assert_eq!(title, "Economy");
+        assert_eq!((ts, te), (0, "Economy".encode_utf16().count() as u32));
+        // body-first spans exactly the FIRST prose paragraph, in UTF-16 units.
+        let (first, bs, be) = role_slice(&s, "body-first");
+        assert_eq!(first, "When I wrote the following pages, I lived alone.");
+        let expect_start =
+            "Economy\n\n".encode_utf16().count() as u32;
+        assert_eq!(bs, expect_start);
+        assert_eq!(
+            be - bs,
+            "When I wrote the following pages, I lived alone."
+                .encode_utf16()
+                .count() as u32
+        );
+        // Only the FIRST paragraph is body-first; the second stays plain.
+        assert_eq!(s.ranges.iter().filter(|r| r.kind == "body-first").count(), 1);
+    }
+
+    #[test]
+    fn chapter_emits_chapter_label_above_title() {
+        let html = "<p epub:type=\"label\">BOOK I</p>\
+            <h1>Economy</h1>\
+            <p>First prose paragraph here.</p>";
+        let s = extract_section_with_kind(html, SectionKind::Chapter);
+        assert_eq!(role_slice(&s, "chapter-label").0, "BOOK I");
+        assert_eq!(role_slice(&s, "chapter-title").0, "Economy");
+        assert_eq!(role_slice(&s, "body-first").0, "First prose paragraph here.");
+    }
+
+    #[test]
+    fn chapter_interior_headings_stay_legacy() {
+        // Only the opening heading is chapter-title; a deeper heading stays h2.
+        let html = "<h1>Economy</h1><p>First.</p><h2>A subsection</h2><p>More.</p>";
+        let s = extract_section_with_kind(html, SectionKind::Chapter);
+        assert_eq!(role_slice(&s, "chapter-title").0, "Economy");
+        assert_eq!(role_slice(&s, "h2").0, "A subsection");
+        // body-first is the first paragraph, not the one after the interior heading.
+        assert_eq!(role_slice(&s, "body-first").0, "First.");
+        assert_eq!(s.ranges.iter().filter(|r| r.kind == "body-first").count(), 1);
+    }
+
+    #[test]
+    fn body_level_epubtype_promotes_a_plain_section() {
+        // A document handed to us as Plain (heuristic was silent) but whose body
+        // declares the authoritative landmark must still typeset correctly.
+        let html = "<html><body epub:type=\"titlepage\">\
+            <h1 epub:type=\"title\">WALDEN</h1>\
+            <p epub:type=\"author\">by Henry David Thoreau</p></body></html>";
+        let s = extract_section_with_kind(html, SectionKind::Plain);
+        assert_eq!(role_slice(&s, "title").0, "WALDEN");
+        assert_eq!(role_slice(&s, "byline").0, "by Henry David Thoreau");
+    }
+
+    #[test]
+    fn plain_section_emits_only_legacy_ranges() {
+        // Backward-compat spine: a Plain document with a heading + emphasis yields
+        // the SAME ranges as before (no new roles leak in).
+        let html = "<h1>Copyright</h1><p>All rights <em>reserved</em>.</p>";
+        let plain = extract_section_with_kind(html, SectionKind::Plain);
+        let legacy = extract_section(html); // public wrapper, must match
+        assert_eq!(plain.text, legacy.text);
+        assert_eq!(plain.ranges, legacy.ranges);
+        assert!(plain.ranges.iter().any(|r| r.kind == "h1"));
+        assert!(plain.ranges.iter().any(|r| r.kind == "em"));
+        assert!(
+            !plain
+                .ranges
+                .iter()
+                .any(|r| matches!(r.kind.as_str(), "title" | "chapter-title" | "body-first")),
+            "no new roles in a Plain section"
+        );
+    }
+
+    #[test]
+    fn roles_preserve_text_and_offsets_with_multibyte() {
+        // A role must never mutate the section text or its byte length — the body
+        // slicer and note anchoring depend on it. Multibyte title proves offsets
+        // are UTF-16 units, not byte or char counts.
+        let html = "<h1>Économie</h1><p>Première phrase « ici ».</p>";
+        let s = extract_section_with_kind(html, SectionKind::Chapter);
+        assert_eq!(s.text, "Économie\n\nPremière phrase « ici ».");
+        let (title, ts, te) = role_slice(&s, "chapter-title");
+        assert_eq!(title, "Économie");
+        assert_eq!((ts, te), (0, "Économie".encode_utf16().count() as u32));
+        let (first, _, _) = role_slice(&s, "body-first");
+        assert_eq!(first, "Première phrase « ici ».");
+    }
+
+    #[test]
+    fn section_kind_for_classifies_by_signals() {
+        let chapter = SpineEntry {
+            idref: "chapter_1".into(),
+            label: "Economy".into(),
+            href: "ch1.xhtml".into(),
+            assignable: true,
+        };
+        assert_eq!(section_kind_for(&chapter, None), SectionKind::Chapter);
+
+        let title = SpineEntry {
+            idref: "titlepage".into(),
+            label: "Title Page".into(),
+            href: "title.xhtml".into(),
+            assignable: false,
+        };
+        assert_eq!(section_kind_for(&title, None), SectionKind::TitlePage);
+
+        let toc_label = SpineEntry {
+            idref: "toc".into(),
+            label: "Contents".into(),
+            href: "contents.xhtml".into(),
+            assignable: false,
+        };
+        assert_eq!(section_kind_for(&toc_label, None), SectionKind::Toc);
+
+        // The nav document is recognised by href even with no "contents" label.
+        let nav = SpineEntry {
+            idref: "nav".into(),
+            label: "Navigation".into(),
+            href: "nav.xhtml".into(),
+            assignable: false,
+        };
+        assert_eq!(
+            section_kind_for(&nav, Some("nav.xhtml")),
+            SectionKind::Toc
+        );
+
+        let epi = SpineEntry {
+            idref: "epigraph".into(),
+            label: "Epigraph".into(),
+            href: "epi.xhtml".into(),
+            assignable: false,
+        };
+        assert_eq!(section_kind_for(&epi, None), SectionKind::Epigraph);
+
+        // Unrecognised front matter stays Plain (legacy ranges only).
+        let copyright = SpineEntry {
+            idref: "copyright".into(),
+            label: "Copyright".into(),
+            href: "copy.xhtml".into(),
+            assignable: false,
+        };
+        assert_eq!(section_kind_for(&copyright, None), SectionKind::Plain);
+    }
+
+    #[test]
+    fn attr_of_respects_token_boundaries() {
+        // `epub:type=` must be found, but `someclass=` must NOT match `class=`.
+        assert_eq!(attr_of("<p someclass=\"x\" class=\"real\">", "class="), "real");
+        assert_eq!(
+            epubtype_of("<h1 epub:type=\"title\" class=\"t\">"),
+            "title"
+        );
+        // Absent → empty, never a panic.
+        assert_eq!(epubtype_of("<p>"), "");
     }
 }
