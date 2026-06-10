@@ -50,20 +50,36 @@ pub fn cmd_set_export_path(
 
 /// Preflight the effective export root: can Throughline actually write notes
 /// there right now? Catches a misconfigured custom path or an unmounted drive
-/// BEFORE a session's notes are silently lost. Pure check — creates the folder if
-/// missing, writes + removes a probe file, never touches real notes.
+/// BEFORE a session's notes are silently lost. Runs on every launch (App.tsx),
+/// so it must never create anything — see `check_export_root`.
 #[tauri::command]
 pub fn cmd_check_export_path(state: State<DbState>) -> Result<serde_json::Value, AppError> {
     let root = {
         let conn = state.0.lock()?;
         crate::export::root_for(&conn)
     };
-    let message = export_write_probe(&root).err();
-    Ok(serde_json::json!({
+    Ok(check_export_root(&root))
+}
+
+/// The launch-time check behind `cmd_check_export_path`. On an unconfigured
+/// install the effective root is the DEFAULT `~/GBrain/Reading`, and this runs
+/// on every launch — so it must never create the folder (CORE-1019: a
+/// stranger's first launch must not plant ~/GBrain). Only a root that already
+/// exists gets the real write probe. Reader-initiated setup keeps its
+/// create-and-verify UX in `cmd_set_export_path` (`settings::set_export_path`).
+fn check_export_root(root: &std::path::Path) -> serde_json::Value {
+    let message = if root.exists() {
+        export_write_probe(root).err()
+    } else {
+        // Fine: the folder will be created on the first export. Creating it
+        // here, on launch, is exactly the ~/GBrain-planting bug.
+        None
+    };
+    serde_json::json!({
         "path": root.to_string_lossy(),
         "writable": message.is_none(),
         "message": message,
-    }))
+    })
 }
 
 /// Returns Ok(()) if `root` can be created and written to, else a human message.
@@ -181,4 +197,71 @@ pub fn cmd_clear_ai_key(
     let conn = state.0.lock()?;
     settings::mark_key_present(&conn, &provider, false);
     settings::build_dto(&conn).map_err(AppError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CORE-1019: the no-arg launch preflight must NEVER create the export
+    /// root. On an unconfigured install the effective root is the default
+    /// ~/GBrain/Reading — creating it here plants an unexplained folder in a
+    /// stranger's home on the very first launch. A missing root reads as fine
+    /// (it will be created on the first export); only an existing root gets
+    /// the real write probe.
+    #[test]
+    fn launch_check_does_not_create_a_missing_export_root() {
+        let _g = crate::paths::lock_env_for_test();
+        let missing = std::env::temp_dir()
+            .join(format!("tl-launch-check-{}-{}", std::process::id(), line!()))
+            .join("not-created-yet");
+        unsafe {
+            std::env::set_var("THROUGHLINE_EXPORT_DIR", &missing);
+        }
+        let root = crate::paths::default_export_root().expect("export root");
+        unsafe {
+            std::env::remove_var("THROUGHLINE_EXPORT_DIR");
+        }
+        assert_eq!(root, missing, "env override must resolve to the temp path");
+        assert!(!root.exists(), "precondition: the root must not exist yet");
+
+        let v = check_export_root(&root);
+
+        assert!(
+            !root.exists(),
+            "the launch check must not plant the export root (CORE-1019)"
+        );
+        assert_eq!(
+            v["writable"], true,
+            "a missing root is fine — it will be created on first export"
+        );
+        std::fs::remove_dir_all(missing.parent().unwrap()).ok();
+    }
+
+    /// An EXISTING root still gets the real write probe — the launch check's
+    /// whole point is catching an unwritable configured folder before notes
+    /// are silently lost — and the probe leaves no litter behind.
+    #[test]
+    fn launch_check_probes_an_existing_root_and_cleans_up() {
+        let dir = std::env::temp_dir().join(format!(
+            "tl-launch-probe-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let v = check_export_root(&dir);
+
+        assert_eq!(v["writable"], true);
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "the probe must remove its test file, found {:?}",
+            leftovers.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
