@@ -99,7 +99,7 @@ pub fn atomic_write_string(dest: &std::path::Path, content: &str) -> Result<()> 
 
     // Unique per-process temp path that lives next to the destination so the
     // rename is guaranteed to be same-filesystem (and therefore atomic on Unix).
-    let base_name = dest.file_name().and_then(|s| s.to_str()).unwrap_or("rg");
+    let base_name = dest.file_name().and_then(|s| s.to_str()).unwrap_or("tl");
     let tmp = parent.join(format!(
         ".{}.tmp.{}.{}",
         base_name,
