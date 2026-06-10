@@ -94,7 +94,7 @@ fn open_db_resilient() -> rusqlite::Connection {
             if !looks_corrupt {
                 panic!("Throughline could not open its database (usually a permissions or disk problem, not data loss): {e:#}");
             }
-            eprintln!("[tl] database appears corrupt; preserving it and starting fresh: {e:#}");
+            tracing::error!("database appears corrupt; preserving it and starting fresh: {e:#}");
             if let Ok(dbp) = paths::db_path() {
                 let bak = dbp.with_file_name(format!("reading.corrupt-{}.db", std::process::id()));
                 let _ = std::fs::rename(&dbp, &bak);
@@ -134,19 +134,20 @@ pub fn run() {
     {
         let days = settings::get_ai_retention_days(&conn);
         match ai_retention::sweep(&conn, days) {
-            Ok(n) if n > 0 => eprintln!(
-                "[tl] ai_retention: swept {} ai_requests row(s) older than {} days",
-                n, days
+            Ok(n) if n > 0 => tracing::info!(
+                "ai_retention: swept {} ai_requests row(s) older than {} days",
+                n,
+                days
             ),
             Ok(_) => {}
-            Err(e) => eprintln!("[tl] ai_retention: sweep failed: {}", e),
+            Err(e) => tracing::warn!("ai_retention: sweep failed: {}", e),
         }
     }
     // Purge plans "let go" longer than 30 days ago, with their sessions + notes.
     match commands::plans::sweep_deleted_plans(&conn, 30) {
-        Ok(n) if n > 0 => eprintln!("[tl] plan_retention: purged {} let-go plan(s)", n),
+        Ok(n) if n > 0 => tracing::info!("plan_retention: purged {} let-go plan(s)", n),
         Ok(_) => {}
-        Err(e) => eprintln!("[tl] plan_retention: sweep failed: {}", e),
+        Err(e) => tracing::warn!("plan_retention: sweep failed: {}", e),
     }
     let state = DbState(Mutex::new(conn));
 
@@ -744,6 +745,46 @@ mod tests {
         if !violations.is_empty() {
             panic!(
                 "UTC day-boundary math found (CORE-1014 / P3-16):\n  - {}",
+                violations.join("\n  - ")
+            );
+        }
+    }
+
+    /// **HARD GUARDRAIL — CORE-1017 / P3-19.** A GUI app's stderr lands in the
+    /// macOS unified log (sysdiagnose-collectable), and book paths/titles are
+    /// content-adjacent metadata — invariant 1 is "usage, never content". So no
+    /// command may `eprintln!` anything that references a reader's `path`, a
+    /// book `title`, or an import `result.book`. Diagnostics belong in
+    /// `tracing` (the local app.log), with ids and counts, not paths/titles.
+    #[test]
+    fn commands_do_not_eprintln_reader_content() {
+        let needles = ["path", "title", "result.book"];
+        let mut violations: Vec<String> = Vec::new();
+        for (path, code) in backend_sources_without_comments() {
+            if !path.components().any(|c| c.as_os_str() == "commands") {
+                continue;
+            }
+            let mut rest = code.as_str();
+            while let Some(pos) = rest.find("eprintln!") {
+                let call = &rest[pos..];
+                let end = call.find(");").map(|i| i + 2).unwrap_or(call.len());
+                let call = call[..end].split_whitespace().collect::<Vec<_>>().join(" ");
+                for n in needles {
+                    if call.contains(n) {
+                        violations.push(format!(
+                            "{}: `{}` references `{}` — route through tracing and drop the reader content",
+                            path.display(),
+                            call,
+                            n
+                        ));
+                    }
+                }
+                rest = &rest[pos + "eprintln!".len()..];
+            }
+        }
+        if !violations.is_empty() {
+            panic!(
+                "stderr writes referencing reader content (CORE-1017 / P3-19):\n  - {}",
                 violations.join("\n  - ")
             );
         }
