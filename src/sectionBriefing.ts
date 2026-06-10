@@ -1,15 +1,20 @@
 // Deep Study "Section briefing" — cache + parser.
 //
 // The briefing is AI-derived study scaffolding for a whole section, generated
-// once on session start (Deep Study mode only) and cached LOCALLY so revisiting
-// a section is instant and never re-spams the model. It is regenerable and
-// dismissable; it is never exported (AGENTS.md: raw source + AI output stay
-// local; exports carry only the reader's own words). The cache lives in
-// localStorage — a reversible, on-this-Mac cache, not operational DB state.
+// once on session start (Deep Study mode only) and cached so revisiting a
+// section within the SAME sitting is instant and never re-spams the model. It
+// is regenerable and dismissable; it is never exported (exports carry only the
+// reader's own words).
 //
-// Cache key = bookId | sectionId | source_sha256 | mode, exactly as specced: a
-// new section, a re-imported source (new sha), or a different margin-help mode
-// all miss the cache and re-prepare; the same trio hits instantly.
+// **The cache is session-only, by policy** (CLAUDE.md §3, counsel-reviewed):
+// briefings stay "non-persistent unless saved", so AI output derived from book
+// text lives in process memory and dies with the app. Earlier builds persisted
+// it in localStorage; `purgeLegacyBriefings()` (called once at startup) removes
+// those leftover keys.
+//
+// Cache key = bookId | sectionId | source_sha256 | mode: a new section, a
+// re-imported source (new sha), or a different margin-help mode all miss the
+// cache and re-prepare; the same trio hits instantly within the sitting.
 
 export type MarginHelp = "quiet" | "guided" | "deep_study";
 
@@ -57,33 +62,48 @@ export function briefingTextReady(
   return !!loadedText && loadedText.trim().length > 0;
 }
 
-const PREFIX = "rg.briefing.";
+/** The pre-v0.3.x persistent cache's localStorage prefix — used only by
+ *  `purgeLegacyBriefings` to clean older installs. New code never writes it. */
+const LEGACY_PREFIX = "rg.briefing.";
+
+/** Session-only store. Process memory by design — see the module header. */
+const cache = new Map<string, string>();
 
 function cacheKey(bookId: string, sectionId: string, sha: string, mode: string): string {
-  return `${PREFIX}${bookId}|${sectionId}|${sha}|${mode}`;
+  return `${bookId}|${sectionId}|${sha}|${mode}`;
 }
 
 export function getCachedBriefing(bookId: string, sectionId: string, sha: string, mode: string): string | null {
-  try {
-    return localStorage.getItem(cacheKey(bookId, sectionId, sha, mode));
-  } catch {
-    return null;
-  }
+  return cache.get(cacheKey(bookId, sectionId, sha, mode)) ?? null;
 }
 
 export function setCachedBriefing(bookId: string, sectionId: string, sha: string, mode: string, text: string): void {
-  try {
-    localStorage.setItem(cacheKey(bookId, sectionId, sha, mode), text);
-  } catch {
-    /* quota / unavailable — caching is best-effort, the briefing still shows */
-  }
+  cache.set(cacheKey(bookId, sectionId, sha, mode), text);
 }
 
 export function clearCachedBriefing(bookId: string, sectionId: string, sha: string, mode: string): void {
+  cache.delete(cacheKey(bookId, sectionId, sha, mode));
+}
+
+/** Drop everything cached this session. Test hook (the cache is module-level,
+ *  so suites reset it between cases). */
+export function resetBriefingCache(): void {
+  cache.clear();
+}
+
+/** One-time startup cleanup (App.tsx): earlier builds persisted briefings in
+ *  localStorage under `rg.briefing.*`, which the counsel posture forbids —
+ *  remove any leftovers so no unsaved AI output survives on disk. */
+export function purgeLegacyBriefings(): void {
   try {
-    localStorage.removeItem(cacheKey(bookId, sectionId, sha, mode));
+    const doomed: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(LEGACY_PREFIX)) doomed.push(k);
+    }
+    doomed.forEach((k) => localStorage.removeItem(k));
   } catch {
-    /* ignore */
+    /* storage unavailable — then nothing persisted to purge */
   }
 }
 

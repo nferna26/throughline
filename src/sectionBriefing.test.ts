@@ -4,10 +4,15 @@ import {
   getCachedBriefing,
   setCachedBriefing,
   clearCachedBriefing,
+  resetBriefingCache,
+  purgeLegacyBriefings,
   briefingTextReady,
 } from "./sectionBriefing";
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  resetBriefingCache();
+});
 
 const SAMPLE = `BEFORE YOU READ
 This section establishes the central tension between humanity and God.
@@ -77,6 +82,34 @@ describe("section briefing cache", () => {
     setCachedBriefing("bk", "s1", "sha1", "deep_study", "BRIEF");
     clearCachedBriefing("bk", "s1", "sha1", "deep_study");
     expect(getCachedBriefing("bk", "s1", "sha1", "deep_study")).toBeNull();
+  });
+
+  // COUNSEL POSTURE (CLAUDE.md §3, review P1-3 / CORE-1001): briefings are
+  // "non-persistent unless saved". The cache may live only in process memory —
+  // a round-trip must work within the session WITHOUT ever touching
+  // localStorage, so nothing AI-derived survives an app restart unsaved.
+  it("persists nothing to localStorage (session-only cache)", () => {
+    setCachedBriefing("bk", "s9", "sha9", "deep_study", "TEXT");
+    expect(getCachedBriefing("bk", "s9", "sha9", "deep_study")).toBe("TEXT");
+    // The round-trip above must be served from process memory: scan ALL of
+    // localStorage and assert no briefing key (legacy `rg.briefing.*` or any
+    // future spelling) was written.
+    const persisted: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.toLowerCase().includes("briefing")) persisted.push(k);
+    }
+    expect(persisted).toEqual([]);
+  });
+
+  it("purges legacy persisted briefings from older installs, leaving other keys", () => {
+    localStorage.setItem("rg.briefing.bk|s1|sha1|deep_study", "OLD AI TEXT");
+    localStorage.setItem("rg.briefing.bk2|s2|sha2|deep_study", "MORE OLD");
+    localStorage.setItem("rg.fontSize", "18"); // unrelated reader prefs survive
+    purgeLegacyBriefings();
+    expect(localStorage.getItem("rg.briefing.bk|s1|sha1|deep_study")).toBeNull();
+    expect(localStorage.getItem("rg.briefing.bk2|s2|sha2|deep_study")).toBeNull();
+    expect(localStorage.getItem("rg.fontSize")).toBe("18");
   });
 });
 

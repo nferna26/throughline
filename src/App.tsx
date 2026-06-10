@@ -13,6 +13,7 @@ import "./App.css";
 import "./tl-theme.css";
 import type { TodayCard, ReaderMode, Book, ImportOutcome, ExportPathStatus } from "./types";
 import { errorMessage } from "./types";
+import { purgeLegacyBriefings } from "./sectionBriefing";
 
 type BookTab = "today" | "notes";
 
@@ -66,6 +67,10 @@ export default function App() {
 
   useEffect(() => {
     refreshToday();
+    // One-time cleanup: builds before v0.3.x persisted Deep Study briefings in
+    // localStorage. The counsel posture (CLAUDE.md §3) is "non-persistent
+    // unless saved", so remove any leftovers — the live cache is in-memory.
+    purgeLegacyBriefings();
   }, []);
 
   // Company-mode activation deep link (CM5). throughline://activate?token=… →
