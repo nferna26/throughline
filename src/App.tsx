@@ -117,6 +117,8 @@ export default function App() {
             setTab("today");
             await refreshToday();
             setActivation({ ok: true, message: "Throughline AI is active — ask the tutor anything." });
+            // If Settings is already open, CompanyPanel must catch up without a remount.
+            window.dispatchEvent(new Event("tl-company-activated"));
           } catch (err) {
             setActivation({ ok: false, message: errorMessage(err) });
           }

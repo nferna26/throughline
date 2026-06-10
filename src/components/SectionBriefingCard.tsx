@@ -17,15 +17,17 @@ import "../tl-tutor.css";
  * Deep Study "Section briefing" — prepared marginalia for today's section.
  *
  * On session start (the parent only mounts this once `session != null`), this
- * either loads a cached briefing instantly or, with the reader's consent,
- * streams a fresh one from the local model and caches it. It is spoiler-safe,
- * local-only, regenerable, and dismissable — and it never auto-fires without
- * tutor consent (the same opt-in gate the lenses use), so nothing leaves the
- * machine and nothing runs autonomously.
+ * either replays the session's in-memory briefing instantly or, with the
+ * reader's tutor consent, streams a fresh one from the reader's chosen
+ * provider — local by default, cloud only through the same explicit consent
+ * gate the lenses use. It is spoiler-safe, regenerable, and dismissable, and
+ * it never auto-fires without that consent.
  *
- * Privacy (AGENTS.md): the prompt + injection hardening live server-side; this
- * UI renders only the streamed briefing. The section text is sent only to the
- * local model. The briefing is cached in localStorage and is NEVER exported.
+ * Privacy (CLAUDE.md): prompts + injection hardening live server-side; this
+ * UI renders only the streamed briefing. Only the current section's text is
+ * sent — never the whole book. The briefing is cached in memory for this
+ * session only (counsel posture: non-persistent unless saved) and becomes
+ * durable only when the reader saves it as a note.
  */
 type Phase = "consent" | "thinking" | "streaming" | "done" | "error" | "blocked";
 

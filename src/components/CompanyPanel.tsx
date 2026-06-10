@@ -61,6 +61,14 @@ export default function CompanyPanel({ onActivated }: { onActivated: () => void 
     void load();
   }, [load]);
 
+  // The activation deep link lands in App; if Settings is already open this
+  // panel would keep showing the buy/paste state until remounted.
+  useEffect(() => {
+    const onActivated = () => void load();
+    window.addEventListener("tl-company-activated", onActivated);
+    return () => window.removeEventListener("tl-company-activated", onActivated);
+  }, [load]);
+
   const activate = useCallback(async () => {
     const token = code.trim();
     if (!token) {

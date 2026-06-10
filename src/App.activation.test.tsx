@@ -66,12 +66,17 @@ beforeEach(() => {
 describe("App — company activation deep link feedback (CORE-1009)", () => {
   it("shows a visible, dismissable confirmation when activation succeeds", async () => {
     wire(() => Promise.resolve(undefined));
+    // CompanyPanel listens for this so an already-open Settings catches up.
+    const activated = vi.fn();
+    window.addEventListener("tl-company-activated", activated);
     render(<App />);
     await fireActivate();
 
     // A calm, visible confirmation — not a silent Today refresh.
     const banner = await screen.findByRole("status");
     expect(banner).toHaveTextContent("Throughline AI is active — ask the tutor anything.");
+    expect(activated).toHaveBeenCalled();
+    window.removeEventListener("tl-company-activated", activated);
 
     // The reader can put it away.
     await userEvent.click(screen.getByRole("button", { name: /dismiss/i }));

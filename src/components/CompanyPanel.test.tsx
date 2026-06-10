@@ -50,3 +50,26 @@ describe("CompanyPanel (activated, credits unreachable)", () => {
     expect(screen.queryByText(/almost out/i)).toBeNull();
   });
 });
+
+describe("CompanyPanel (deep-link activation while Settings is open)", () => {
+  it("reloads status when the tl-company-activated event fires", async () => {
+    mocks.invoke.mockImplementation((cmd: string) => {
+      if (cmd === "cmd_company_status") {
+        return Promise.resolve({ provider_active: false, has_license: false });
+      }
+      return Promise.resolve(null);
+    });
+
+    render(<CompanyPanel onActivated={() => {}} />);
+    await screen.findByText(/\$20 once/);
+    const callsBefore = mocks.invoke.mock.calls.filter(([cmd]) => cmd === "cmd_company_status").length;
+    expect(callsBefore).toBeGreaterThan(0);
+
+    window.dispatchEvent(new Event("tl-company-activated"));
+
+    await vi.waitFor(() => {
+      const callsAfter = mocks.invoke.mock.calls.filter(([cmd]) => cmd === "cmd_company_status").length;
+      expect(callsAfter).toBeGreaterThan(callsBefore);
+    });
+  });
+});

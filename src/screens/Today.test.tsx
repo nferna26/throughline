@@ -217,6 +217,9 @@ describe("Today", () => {
     expect(screen.queryByText(/day 3 of 30/i)).toBeNull();
     expect(screen.queryByText(/Behind ·/)).toBeNull();
     expect(screen.queryByText(/A little behind/)).toBeNull();
+    // The pace chip must agree with the kicker: "Paused", not "Not started".
+    expect(screen.getByLabelText("Pace: Paused")).toBeInTheDocument();
+    expect(screen.queryByText(/Not started/)).toBeNull();
   });
 
   // REGRESSION: "Restart current chapter" was removed as a recovery option —

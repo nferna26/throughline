@@ -201,6 +201,10 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
               <span className="tl-pace on" aria-label="Plan ready — you are not behind">
                 <TLIcon name="flag" size={15} /> Plan ready
               </span>
+            ) : paused ? (
+              <span className="tl-pace on" aria-label="Pace: Paused">
+                <TLIcon name="clock" size={15} /> Paused
+              </span>
             ) : (
               <span className={`tl-pace ${pm.cls}`} aria-label={`Pace: ${pm.word}`}>
                 <TLIcon name={pm.icon} size={15} /> {pm.word}
