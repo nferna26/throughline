@@ -31,28 +31,49 @@ pub fn sweep(conn: &Connection, days: i64) -> rusqlite::Result<usize> {
         return Ok(0);
     }
     let cutoff = format!("-{} days", days);
-    let removed = conn.execute(
+    // One transaction for child + parent deletes: `ai_request_usage` references
+    // `ai_requests` with no cascade and `foreign_keys = ON`, so the children of
+    // every about-to-be-swept row must go first — otherwise the parent DELETE
+    // aborts wholesale and the retention promise silently stops holding.
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "DELETE FROM ai_request_usage
+         WHERE request_id IN (
+            SELECT id FROM ai_requests
+            WHERE wrote_to_memory = 0
+              AND datetime(created_at) < datetime('now', ?1))",
+        params![cutoff],
+    )?;
+    let removed = tx.execute(
         "DELETE FROM ai_requests
          WHERE wrote_to_memory = 0
            AND datetime(created_at) < datetime('now', ?1)",
         params![cutoff],
     )?;
+    tx.commit()?;
     Ok(removed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai_providers::TokenUsage;
 
-    fn schema(conn: &Connection) {
-        conn.execute_batch(
-            "CREATE TABLE ai_requests (
-                id TEXT PRIMARY KEY, book_id TEXT NOT NULL, mode TEXT NOT NULL,
-                locator TEXT, context_char_count INTEGER, provider TEXT,
-                created_at TEXT NOT NULL, wrote_to_memory INTEGER DEFAULT 0
-             );",
+    /// The REAL schema with FK enforcement, exactly as production opens the DB.
+    /// An earlier hand-rolled schema here had no ai_request_usage table and no
+    /// foreign_keys pragma — which is how the usage-FK sweep abort stayed
+    /// invisible to the suite.
+    fn conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, source_type, source_path, source_sha256, created_at)
+             VALUES ('b', 'T', 'txt', '/p', 'h', '2026-01-01')",
+            [],
         )
         .unwrap();
+        conn
     }
 
     fn insert(conn: &Connection, id: &str, created_at: &str, wrote: i64) {
@@ -72,8 +93,7 @@ mod tests {
     /// (wrote_to_memory=1) rows are kept; recent rows are kept regardless.
     #[test]
     fn sweep_deletes_old_unsaved_keeps_saved_and_recent() {
-        let conn = Connection::open_in_memory().unwrap();
-        schema(&conn);
+        let conn = conn();
         insert(&conn, "old_unsaved", "2020-01-01T00:00:00+00:00", 0); // → deleted
         insert(&conn, "old_saved", "2020-01-01T00:00:00+00:00", 1); // → kept (mirrors a note)
         let recent = chrono::Utc::now().to_rfc3339();
@@ -99,11 +119,58 @@ mod tests {
     /// `days <= 0` is an explicit opt-out: keep the full audit trail.
     #[test]
     fn sweep_disabled_when_days_non_positive() {
-        let conn = Connection::open_in_memory().unwrap();
-        schema(&conn);
+        let conn = conn();
         insert(&conn, "old", "2000-01-01T00:00:00+00:00", 0);
         assert_eq!(sweep(&conn, 0).unwrap(), 0);
         assert_eq!(sweep(&conn, -5).unwrap(), 0);
         assert_eq!(count(&conn), 1, "nothing swept when retention is disabled");
+    }
+
+    /// REGRESSION (review P1-2 / CORE-1000): every cloud Ask writes an
+    /// `ai_request_usage` child row, and the FK to `ai_requests` has no cascade.
+    /// The sweep must remove those children first — otherwise the parent DELETE
+    /// aborts wholesale (one usage-bearing old row blocks sweeping EVERYTHING,
+    /// forever, and the reader-facing "Forget now" button errors).
+    #[test]
+    fn sweep_succeeds_when_old_rows_have_usage_children() {
+        let conn = conn();
+        insert(&conn, "req_old_usage", "2020-01-01T00:00:00+00:00", 0);
+        crate::commands::ai::write_usage_row(
+            &conn,
+            "req_old_usage",
+            "anthropic",
+            "claude-sonnet-4-6",
+            &TokenUsage {
+                input_tokens: 100,
+                output_tokens: 50,
+                ..Default::default()
+            },
+        )
+        .expect("usage child row");
+        insert(&conn, "req_old_plain", "2020-01-01T00:00:00+00:00", 0);
+        insert(&conn, "req_old_saved", "2020-01-01T00:00:00+00:00", 1);
+        let recent = chrono::Utc::now().to_rfc3339();
+        insert(&conn, "req_recent", &recent, 0);
+
+        let removed = sweep(&conn, 90).expect("sweep must not abort on the usage FK");
+        assert_eq!(removed, 2, "both old unsaved rows are swept");
+
+        let usage_left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ai_request_usage", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(usage_left, 0, "the swept request's usage child goes with it");
+
+        let kept: Vec<String> = conn
+            .prepare("SELECT id FROM ai_requests ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(
+            kept,
+            vec!["req_old_saved".to_string(), "req_recent".to_string()],
+            "saved-old and recent rows survive"
+        );
     }
 }
