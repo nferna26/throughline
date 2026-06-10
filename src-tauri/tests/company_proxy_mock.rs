@@ -23,6 +23,7 @@ use throughline_lib::ai_client::{breaker_for, StreamEvent};
 use throughline_lib::ai_providers::{
     run_provider_call, test_provider, ProviderAuth, ProviderCall, CAP_EXHAUSTED_SENTINEL,
 };
+use throughline_lib::commands::ai::{clamp_to_company_relay, COMPANY_RELAY_MAX_OUTPUT_TOKENS};
 use throughline_lib::settings::AiProvider;
 
 /// The Company breaker is process-global, so the tests in this binary serialize
@@ -69,6 +70,79 @@ fn mock_proxy(response: &'static str) -> (String, std::sync::Arc<std::sync::Mute
             }
         }
         *captured_c.lock().unwrap() = total.clone();
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+    (base_url, captured)
+}
+
+/// A one-shot mock that enforces the relay's shape gate exactly like the
+/// proxy's `shape.ts`: read the request, and if its `max_tokens` exceeds
+/// `gate`, reply HTTP 400 "max_tokens too large"; otherwise relay a tiny
+/// Anthropic-shape SSE stream. Returns (base_url, captured-request).
+fn mock_shape_gate_proxy(gate: u32) -> (String, std::sync::Arc<std::sync::Mutex<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let base_url = format!("http://127.0.0.1:{port}");
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let captured_c = captured.clone();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut buf = [0u8; 8192];
+        let mut total = String::new();
+        loop {
+            let n = stream.read(&mut buf).expect("read");
+            if n == 0 {
+                break;
+            }
+            total.push_str(&String::from_utf8_lossy(&buf[..n]));
+            if total.contains("\r\n\r\n") {
+                let cl = total
+                    .lines()
+                    .find_map(|l| {
+                        l.strip_prefix("Content-Length:")
+                            .or_else(|| l.strip_prefix("content-length:"))
+                    })
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let body = total.split("\r\n\r\n").nth(1).unwrap_or("").len();
+                if body >= cl {
+                    break;
+                }
+            }
+        }
+        *captured_c.lock().unwrap() = total.clone();
+        let requested = total
+            .split("\"max_tokens\":")
+            .nth(1)
+            .and_then(|s| {
+                s.chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .parse::<u32>()
+                    .ok()
+            })
+            .unwrap_or(0);
+        let response = if requested > gate {
+            let body = "{\"error\":\"max_tokens too large\"}";
+            format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+        } else {
+            concat!(
+                "HTTP/1.1 200 OK\r\n",
+                "Content-Type: text/event-stream\r\n",
+                "Connection: close\r\n",
+                "\r\n",
+                "event: content_block_delta\r\n",
+                "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n",
+                "event: message_stop\r\n",
+                "data: {\"type\":\"message_stop\"}\n\n",
+            )
+            .to_string()
+        };
         stream.write_all(response.as_bytes()).unwrap();
         stream.flush().unwrap();
     });
@@ -169,6 +243,53 @@ async fn company_arm_fails_fast_when_breaker_open_without_touching_the_wire() {
         "no HTTP request may be issued while the breaker is Open"
     );
     breaker.on_success(); // restore Closed for the rest of the binary
+}
+
+/// CORE-1035: a ceiling above the relay's shape gate must reach the wire
+/// clamped to the gate — never as a deterministic 400. The mock enforces the
+/// gate exactly like the proxy's shape.ts; the clamp under test is the same
+/// `clamp_to_company_relay` that `cmd_ai_ask` applies at the call boundary,
+/// driven with a synthetic over-limit ceiling so the test still bites after
+/// all real mode ceilings fit under the gate.
+#[tokio::test]
+async fn company_call_with_an_over_limit_ceiling_is_clamped_to_the_relay_gate() {
+    let _g = company_breaker_test_guard();
+    let over_limit = COMPANY_RELAY_MAX_OUTPUT_TOKENS + 200;
+
+    // Unclamped (what the call boundary sent before the clamp existed): the
+    // shape gate rejects the request before any model is reached.
+    let (base_url, _) = mock_shape_gate_proxy(COMPANY_RELAY_MAX_OUTPUT_TOKENS);
+    let mut call = company_call(base_url);
+    call.max_tokens = Some(over_limit);
+    let err = run_provider_call(call)
+        .await
+        .expect_err("the shape gate must reject an over-limit max_tokens");
+    assert!(
+        err.to_string().contains("400"),
+        "gate rejection surfaces as the 400 it is: {err}"
+    );
+    breaker_for(AiProvider::Company).on_success(); // keep this test self-contained
+
+    // Clamped as cmd_ai_ask does: the same gate passes and the stream answers.
+    let (base_url, captured) = mock_shape_gate_proxy(COMPANY_RELAY_MAX_OUTPUT_TOKENS);
+    let mut call = company_call(base_url);
+    call.max_tokens = Some(clamp_to_company_relay(AiProvider::Company, over_limit));
+    let mut rx = run_provider_call(call)
+        .await
+        .expect("a clamped call passes the shape gate");
+    let mut text = String::new();
+    while let Some(ev) = rx.recv().await {
+        if let StreamEvent::Delta { text: t } = ev {
+            text.push_str(&t);
+        }
+    }
+    assert_eq!(text, "Hello", "the clamped call streams normally");
+
+    let req = captured.lock().unwrap().clone();
+    assert!(
+        req.contains(&format!("\"max_tokens\":{COMPANY_RELAY_MAX_OUTPUT_TOKENS}")),
+        "the wire body must carry the clamped gate value: {req}"
+    );
 }
 
 #[tokio::test]
