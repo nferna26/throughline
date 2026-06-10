@@ -71,7 +71,7 @@ describe("AiSetupSheet — NOT CONNECTED", () => {
 });
 
 describe("AiSetupSheet — PASTE-KEY wizard", () => {
-  it("offers OpenAI / Anthropic / Codex and marks Codex experimental — unofficial endpoint", async () => {
+  it("offers OpenAI / Anthropic / Codex and marks Codex experimental — unofficial connection", async () => {
     render(sheet("not_connected"));
     fireEvent.click(await screen.findByText(/Paste API key & ask/i));
     expect(await screen.findByText(/Paste an API key/i)).toBeInTheDocument();
@@ -79,7 +79,9 @@ describe("AiSetupSheet — PASTE-KEY wizard", () => {
     expect(screen.getByText("Anthropic")).toBeInTheDocument();
     // Codex is KEPT as an option, with the experimental marker.
     expect(screen.getByText(/Codex/)).toBeInTheDocument();
-    expect(screen.getByText(/Experimental — unofficial endpoint/i)).toBeInTheDocument();
+    // "connection", not "endpoint" — plumbing words stay out of reader-visible
+    // copy even here (CORE-1024); BYO key-entry copy may name providers, not jargon.
+    expect(screen.getByText(/Experimental — unofficial connection/i)).toBeInTheDocument();
     // The Keychain disclosure is present.
     expect(screen.getByText(/Stored in macOS Keychain/i)).toBeInTheDocument();
   });

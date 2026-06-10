@@ -36,7 +36,7 @@ import "../tl-tutor.css";
  */
 
 /** Which provider the paste-key wizard is configuring. Codex is kept but marked
- *  experimental (unofficial endpoint); Local has its own detect flow below. */
+ *  experimental (unofficial connection); Local has its own detect flow below. */
 type KeyProvider = "openai" | "anthropic" | "codex";
 
 /** The sheet's top-level state machine. `not_connected` is the first-run entry;
@@ -389,7 +389,7 @@ export default function AiSetupSheet(props: {
                 <span>
                   {aiProviderLabel(p)}
                   {p === "codex" && (
-                    <span style={sx.tag}>Experimental — unofficial endpoint</span>
+                    <span style={sx.tag}>Experimental — unofficial connection</span>
                   )}
                 </span>
               </label>

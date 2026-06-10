@@ -59,7 +59,7 @@ export default function ModelSelect({
       {sel && (
         <span
           className="tl-price-chip"
-          aria-label={`Costs ${sel.input_per_mtok} dollars per million input tokens and ${sel.output_per_mtok} per million output`}
+          aria-label={`Costs ${sel.input_per_mtok} dollars per million for what you send and ${sel.output_per_mtok} per million for what it writes back`}
         >
           ${sel.input_per_mtok} / ${sel.output_per_mtok} <span className="unit">per Mtok</span>
         </span>
