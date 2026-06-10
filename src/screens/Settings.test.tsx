@@ -76,6 +76,24 @@ describe("Settings — Your data trust summary", () => {
     expect(screen.getByText(/choose OpenAI or Anthropic with your own API key/i)).toBeInTheDocument();
   });
 
+  it("hides spend figures and the cap input from company-mode readers", async () => {
+    wire({ ai_provider: "company", ai_remote_allowed: true });
+    render(<Settings />);
+    // The paid build's promise: explanations, never dollars — the usage card
+    // reframes to the included purchase, with no meters to manage.
+    expect(await screen.findByText(/Included in your one-time purchase/i)).toBeInTheDocument();
+    expect(screen.queryByText("Spend so far")).toBeNull();
+    expect(screen.queryByLabelText(/Monthly AI spend cap/i)).toBeNull();
+  });
+
+  it("keeps the spend figures and cap input for a reader on their own key", async () => {
+    wire({ ai_provider: "anthropic", ai_remote_allowed: true });
+    render(<Settings />);
+    expect(await screen.findByText("Spend so far")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Monthly AI spend cap/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Included in your one-time purchase/i)).toBeNull();
+  });
+
   it("renders no shell command fragments anywhere a reader can see", async () => {
     wire({});
     const { container } = render(<Settings />);

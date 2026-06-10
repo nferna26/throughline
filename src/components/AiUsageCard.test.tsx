@@ -26,7 +26,7 @@ beforeEach(() => {
 
 describe("AiUsageCard — BYO (own key) mode", () => {
   it("shows spend figures and the monthly cap input, in plain words (no 'token')", async () => {
-    const { container } = render(<AiUsageCard />);
+    const { container } = render(<AiUsageCard provider="anthropic" />);
     await waitFor(() => expect(screen.getByText("Spend so far")).toBeInTheDocument());
     // Real dollar figures + the per-provider breakdown chip.
     expect(screen.getByText("$0.1234")).toBeInTheDocument();
@@ -36,5 +36,17 @@ describe("AiUsageCard — BYO (own key) mode", () => {
     // Plain language: the estimate is described without plumbing words.
     expect(screen.getByText(/Estimated from your recorded usage at catalogued prices/i)).toBeInTheDocument();
     expect(container.textContent).not.toMatch(/token/i);
+  });
+});
+
+describe("AiUsageCard — company mode (one-time purchase)", () => {
+  it("reframes to 'Included in your one-time purchase' — no dollars, no cap input", async () => {
+    const { container } = render(<AiUsageCard provider="company" />);
+    expect(await screen.findByText(/Included in your one-time purchase/i)).toBeInTheDocument();
+    // The paid promise: explanations, never tokens or dollars.
+    expect(container.textContent).not.toMatch(/\$/);
+    expect(container.textContent).not.toMatch(/token/i);
+    expect(screen.queryByText("Spend so far")).toBeNull();
+    expect(screen.queryByLabelText(/Monthly AI spend cap/i)).toBeNull();
   });
 });

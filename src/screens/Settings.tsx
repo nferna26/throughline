@@ -339,8 +339,8 @@ export default function Settings() {
           </div>
         </div>
 
-        {/* ── AI usage + spend cap (B4) ── */}
-        <AiUsageCard />
+        {/* ── AI usage + spend cap (B4) — reframed in company mode ── */}
+        <AiUsageCard provider={dto?.ai_provider} />
 
         {/* ── Request history (audit) ── */}
         {dto && <AiHistory retentionDays={dto.ai_requests_retention_days} onSettingsChanged={refresh} />}
