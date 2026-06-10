@@ -308,7 +308,10 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     if (sec) {
       // The viewport's bottom reaching the end of the text is what finishes
       // the section — sticky for the rest of the sitting once it happens.
-      if (endReached(container)) markEndReached(sec.id);
+      // Guard against the section-switch window (same as the paint effect):
+      // a scroll event measured against the OLD text's geometry must not mark
+      // the newly current section.
+      if (textSectionId === sec.id && endReached(container)) markEndReached(sec.id);
       const baseOffset = parseInt(sec.start_locator || "0", 10);
       const total = (sec.estimated_units || text.length) || 1;
       const pct = Math.min(100, Math.max(0, (off / total) * 100));
