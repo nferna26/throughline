@@ -89,6 +89,9 @@ const sx: Record<string, CSSProperties> = {
   disclosure: { margin: "var(--tl-2) 0", fontFamily: "var(--tl-sans)", fontSize: 11.5, lineHeight: 1.5, color: "var(--tl-muted)" },
   err: { margin: "var(--tl-2) 0", fontFamily: "var(--tl-sans)", fontSize: 12, lineHeight: 1.5, color: "var(--tl-warn, var(--tl-ink))" },
   link: { background: "none", border: "none", padding: 0, fontFamily: "var(--tl-sans)", fontSize: 12.5, color: "var(--tl-muted)", textDecoration: "underline", cursor: "pointer" },
+  activateDoor: { marginTop: "var(--tl-3)" },
+  activateLbl: { display: "block", fontFamily: "var(--tl-sans)", fontSize: 12, color: "var(--tl-muted)", marginBottom: 4 },
+  activateRow: { display: "flex", gap: "var(--tl-2)" },
   prompt: { margin: "0 0 var(--tl-3)", padding: "10px 12px", borderRadius: "var(--tl-r-md, 8px)", border: "1px solid var(--tl-line)", background: "var(--tl-paper)", fontFamily: "var(--tl-sans)", fontSize: 12.5, lineHeight: 1.55, color: "var(--tl-ink)", whiteSpace: "pre-wrap", maxHeight: 220, overflowY: "auto" },
   copied: { margin: "var(--tl-2) 0 0", fontFamily: "var(--tl-sans)", fontSize: 11.5, color: "var(--tl-accent)" },
 };
@@ -126,6 +129,15 @@ export default function AiSetupSheet(props: {
   const [fallbackCard, setFallbackCard] = useState<ReaderPromptCard | null>(null);
   const [fallbackErr, setFallbackErr] = useState("");
   const [copied, setCopied] = useState(false);
+
+  // "Already bought Throughline AI" door (CORE-1008). For a buyer who missed
+  // the activation deep link: type the code here, the sheet activates with the
+  // same command Settings uses, and the original lens request re-fires — no
+  // Settings detour. Kept visually tertiary; the free paths stay primary.
+  const [activateOpen, setActivateOpen] = useState(false);
+  const [activationCode, setActivationCode] = useState("");
+  const [activating, setActivating] = useState(false);
+  const [activateErr, setActivateErr] = useState("");
 
   // Codex login presence (mirrors Settings)
   const [codexPresent, setCodexPresent] = useState(false);
@@ -174,6 +186,30 @@ export default function AiSetupSheet(props: {
       setVerifying(false);
     }
   }, [keyProvider, key, modelDraft, props]);
+
+  // ── Redeem a typed activation code (same command CompanyPanel uses), then
+  //    hand control back so the caller fires the original lens request.
+  const activateCompany = useCallback(async () => {
+    const token = activationCode.trim();
+    if (!token) {
+      setActivateErr("Enter your activation code.");
+      return;
+    }
+    setActivating(true);
+    setActivateErr("");
+    try {
+      await invoke("cmd_activate_company", { activationToken: token });
+      setActivationCode("");
+      props.onConnected("company");
+    } catch (e: unknown) {
+      setActivateErr(
+        (e as { message?: string })?.message ??
+          "That code didn't work. Check it and try again.",
+      );
+    } finally {
+      setActivating(false);
+    }
+  }, [activationCode, props]);
 
   // ── Probe localhost:1234 (reusing the connection-test command, same as the
   //    Settings local-detect/refresh path). reachable + a model id ⇒ found;
@@ -275,6 +311,40 @@ export default function AiSetupSheet(props: {
             <button style={sx.link} onClick={openFallback}>
               Copy prompt
             </button>
+          </div>
+
+          {/* Quiet activation door for buyers who missed the deep link. */}
+          <div style={sx.activateDoor}>
+            {activateOpen ? (
+              <>
+                <label style={sx.activateLbl} htmlFor="tl-aiset-activate-code">
+                  Already bought Throughline AI? Enter your activation code
+                </label>
+                <div style={sx.activateRow}>
+                  <input
+                    id="tl-aiset-activate-code"
+                    className="tl-input"
+                    value={activationCode}
+                    onChange={(e) => setActivationCode(e.target.value)}
+                    placeholder="XXXX-XXXX-XXXX"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    className="tl-btn tl-btn-ghost"
+                    disabled={activating}
+                    onClick={activateCompany}
+                  >
+                    {activating ? "Activating…" : "Activate"}
+                  </button>
+                </div>
+                {activateErr && <p style={sx.err} role="alert">{activateErr}</p>}
+              </>
+            ) : (
+              <button style={sx.link} onClick={() => setActivateOpen(true)}>
+                Already bought Throughline AI? Enter your activation code
+              </button>
+            )}
           </div>
         </div>
       )}
