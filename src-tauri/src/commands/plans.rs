@@ -135,11 +135,16 @@ pub fn cmd_get_active_plan(
 }
 
 /// Pause an active plan (its pace clock stops; resume extends the finish date).
+/// CORE-1003: pace/forecast gating keys on `status` (plan::compute), so the
+/// pause must write status='paused' too — otherwise Today keeps counting
+/// "Behind · N days" through the pause. A never-started plan keeps its
+/// `plan_ready` status (the never-behind guarantee survives a pause round-trip).
 #[tauri::command]
 pub fn cmd_pause_plan(plan_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
     conn.execute(
-        "UPDATE reading_plans SET lifecycle = 'paused', paused_at = date('now')
+        "UPDATE reading_plans SET lifecycle = 'paused', paused_at = date('now'),
+           status = CASE WHEN status IN ('active','rebalanced') THEN 'paused' ELSE status END
          WHERE id = ?1 AND lifecycle = 'active'",
         [&plan_id],
     )
@@ -160,6 +165,7 @@ pub fn cmd_resume_plan(plan_id: String, state: State<DbState>) -> Result<(), App
            paused_days_total = paused_days_total +
              CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER),
            lifecycle = 'active',
+           status = CASE WHEN status = 'paused' THEN 'active' ELSE status END,
            paused_at = NULL
          WHERE id = ?1 AND lifecycle = 'paused' AND paused_at IS NOT NULL",
         [&plan_id],
@@ -278,6 +284,92 @@ mod tests {
         assert_eq!(finish, "2026-02-06", "finish extended by the 5 paused days");
         assert_eq!(total, 5);
         assert_eq!(lifecycle, "active");
+    }
+
+    fn status_of(conn: &Connection, id: &str) -> String {
+        conn.query_row(
+            "SELECT status FROM reading_plans WHERE id = ?1",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// CORE-1003: pace/forecast gating keys on `status` (plan::compute), so the
+    /// pause UPDATE must write status='paused' — not just lifecycle — and the
+    /// resume UPDATE must set it back to 'active'. Otherwise a reader who pauses
+    /// their only plan watches "Behind · N days" keep growing during the pause.
+    #[test]
+    fn pause_writes_status_paused_and_resume_restores_active() {
+        let conn = db();
+        // The cmd_pause_plan SQL (backdated 5 days so resume has days to add).
+        let pause = |conn: &Connection, id: &str| {
+            conn.execute(
+                "UPDATE reading_plans SET lifecycle = 'paused', paused_at = date('now','-5 days'),
+                   status = CASE WHEN status IN ('active','rebalanced') THEN 'paused' ELSE status END
+                 WHERE id = ?1 AND lifecycle = 'active'",
+                [id],
+            )
+            .unwrap();
+        };
+        // The cmd_resume_plan SQL.
+        let resume = |conn: &Connection, id: &str| {
+            conn.execute(
+                "UPDATE reading_plans SET
+                   target_finish_date = date(target_finish_date,
+                     '+' || CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER) || ' days'),
+                   paused_days_total = paused_days_total +
+                     CAST(julianday(date('now')) - julianday(paused_at) AS INTEGER),
+                   lifecycle = 'active',
+                   status = CASE WHEN status = 'paused' THEN 'active' ELSE status END,
+                   paused_at = NULL
+                 WHERE id = ?1 AND lifecycle = 'paused' AND paused_at IS NOT NULL",
+                [id],
+            )
+            .unwrap();
+        };
+
+        pause(&conn, "p1");
+        assert_eq!(
+            status_of(&conn, "p1"),
+            "paused",
+            "pausing must stop the pace clock via status"
+        );
+
+        resume(&conn, "p1");
+        assert_eq!(
+            status_of(&conn, "p1"),
+            "active",
+            "resume must restart the pace clock"
+        );
+        // The finish-date math still holds alongside the status writes.
+        let (finish, total): (String, i64) = conn
+            .query_row(
+                "SELECT target_finish_date, paused_days_total FROM reading_plans WHERE id='p1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(finish, "2026-02-06", "finish extended by the 5 paused days");
+        assert_eq!(total, 5);
+
+        // PRIORITY 0 guard: a never-started (plan_ready) plan keeps plan_ready
+        // through a pause/resume round-trip — pausing must never be the thing
+        // that starts a pace clock.
+        conn.execute(
+            "INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle)
+               VALUES ('p_ready','b1','2026-01-01','2026-02-01','plan_ready','active')",
+            [],
+        )
+        .unwrap();
+        pause(&conn, "p_ready");
+        assert_eq!(status_of(&conn, "p_ready"), "plan_ready");
+        resume(&conn, "p_ready");
+        assert_eq!(
+            status_of(&conn, "p_ready"),
+            "plan_ready",
+            "plan_ready must survive pause → resume"
+        );
     }
 
     fn count(conn: &Connection, where_clause: &str) -> i64 {

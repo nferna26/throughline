@@ -376,6 +376,28 @@ mod tests {
         assert_eq!(c.plan_status, "plan_ready");
     }
 
+    /// CORE-1003: a PAUSED plan's pace clock is stopped. No matter how long ago
+    /// it was activated or how stale the dates, compute must yield the calm
+    /// NotStarted state and no forecast — never "Behind · N days".
+    #[test]
+    fn paused_plan_is_never_behind_and_has_no_forecast() {
+        let plan = plan_with(
+            "paused",
+            "2020-01-01",
+            "2020-01-30",
+            Some(2),
+            Some("2020-01-01"),
+        );
+        let c = compute(&plan, &secs(43), &[]).unwrap();
+        assert!(
+            matches!(c.pace, PaceState::NotStarted),
+            "a paused plan must not count behind days, got {:?}",
+            c.pace
+        );
+        assert!(c.forecast.is_none(), "no forecast while paused");
+        assert_eq!(c.plan_status, "paused");
+    }
+
     /// A just-activated plan (start == activation, full window) reads on track.
     #[test]
     fn forecast_on_track_when_just_activated() {

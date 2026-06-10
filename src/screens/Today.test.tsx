@@ -175,6 +175,22 @@ describe("Today", () => {
     expect(screen.queryByText(/Recovery/)).toBeNull();
   });
 
+  // CORE-1003: a PAUSED plan must read calmly — never the day-counter kicker
+  // (whose clock keeps running) and never a "Behind" chip.
+  it("reads calmly when the plan is paused — no day counter, no behind chip", () => {
+    const c = card();
+    c.plan_status = "paused";
+    c.plan.status = "paused";
+    c.pace = { kind: "not_started" };
+    c.forecast = null;
+    c.recovery = null;
+    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(screen.getByText(/Paused — resume whenever you're ready/i)).toBeInTheDocument();
+    expect(screen.queryByText(/day 3 of 30/i)).toBeNull();
+    expect(screen.queryByText(/Behind ·/)).toBeNull();
+    expect(screen.queryByText(/A little behind/)).toBeNull();
+  });
+
   // REGRESSION: "Restart current chapter" was removed as a recovery option —
   // throwing away read progress is a punishment, not a recovery. It must never
   // render, even when the recovery panel IS shown for a genuinely-behind book.

@@ -126,6 +126,9 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
   // A freshly imported book's plan hasn't started its pace clock yet. It is, by
   // design, NEVER behind — the copy here must say so plainly and calmly.
   const planReady = plan_status === "plan_ready";
+  // A paused plan's clock is stopped (CORE-1003): the kicker must read calmly,
+  // never keep counting "day N of M" through the pause.
+  const paused = plan_status === "paused";
   const fcNote = forecastNote(forecast, planReady);
   // "Continue where you left off": a saved mid-section position from a prior
   // sitting (not a fresh plan, not a completed section). The reader resumes at
@@ -148,7 +151,7 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
     <div className="tl-col tl-today">
       <div className="tl-kicker">
         <span className="dot" />
-        {planReady ? "Today — plan ready" : `Today — day ${day_index} of ${total_days}`}
+        {planReady ? "Today — plan ready" : paused ? "Paused — resume whenever you're ready" : `Today — day ${day_index} of ${total_days}`}
         {plansCount > 1 && (
           <button className="tl-plans-link" onClick={() => setShowPlans(true)} aria-label="See plans for this book">
             <TLIcon name="swap" size={14} /> Plans <span className="cnt">· {plansCount - 1} earlier</span>
