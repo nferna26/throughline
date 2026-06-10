@@ -69,6 +69,14 @@ use crate::db::DbState;
 ///   new imports) — a return-shape change.
 /// - 2 → 3: cloud AI command surface (provider keys, model listing, Codex device
 ///   login, request history) reshaped the AI args/returns.
+/// - 3 → 4: plan lifecycle (Epic A1/A2) — migration v008 added the `lifecycle`
+///   axis (active | paused | completed | archived | superseded) to the plan
+///   rows JS receives, and the plan-management command family landed against it
+///   (`cmd_list_plans_for_book`, `cmd_get_active_plan`, pause / resume /
+///   archive / delete).
+/// - 4 → 5: plans frontispiece (P2.1) — migration v009 added `name`,
+///   `deleted_at` (soft-delete window), and `reached_percent` to reading_plans;
+///   plan rows and the plans list reshaped around naming + let-go semantics.
 pub const COMMAND_API_VERSION: u32 = 5;
 
 /// Open the database, recovering from a CORRUPT file rather than crash-looping on
@@ -786,6 +794,34 @@ mod tests {
             panic!(
                 "stderr writes referencing reader content (CORE-1017 / P3-19):\n  - {}",
                 violations.join("\n  - ")
+            );
+        }
+    }
+
+    /// **GUARDRAIL — CORE-1032 / P3-35.** The doc comment on
+    /// `COMMAND_API_VERSION` promises a per-major history; this pins it
+    /// complete. Every major up to the current constant must have its
+    /// `- {n-1} → {n}:` line, so a future bump fails this test until its
+    /// history line is written — that's the point: the archaeology is recorded
+    /// while it is still remembered.
+    #[test]
+    fn command_api_version_history_is_complete() {
+        let lib_src = std::fs::read_to_string("src/lib.rs")
+            .or_else(|_| std::fs::read_to_string("src-tauri/src/lib.rs"))
+            .expect("src/lib.rs not found");
+        let mut missing: Vec<String> = Vec::new();
+        for n in 2..=crate::COMMAND_API_VERSION {
+            let marker = format!("- {} → {}:", n - 1, n);
+            if !lib_src.contains(&marker) {
+                missing.push(marker);
+            }
+        }
+        if !missing.is_empty() {
+            panic!(
+                "COMMAND_API_VERSION is {} but its doc history is missing: {} \
+                 (CORE-1032 / P3-35 — record why each major bumped before it's forgotten)",
+                crate::COMMAND_API_VERSION,
+                missing.join(", ")
             );
         }
     }
