@@ -1,14 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import Settings from "./Settings";
-import type { SettingsDto } from "../types";
+import type { SettingsDto, CompanyCredits, AiRequest } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
 const mockInvoke = vi.mocked(invoke);
 
-// AiHistory (rendered by Settings) also calls invoke; default it to safe values.
-function wire(dto: Partial<SettingsDto>) {
+// UpdateChecker calls getVersion via @tauri-apps/api/app — keep it inert.
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.4.2") }));
+
+function wire(
+  dto: Partial<SettingsDto>,
+  opts: { credits?: CompanyCredits | null; requests?: AiRequest[] } = {},
+) {
   const full: SettingsDto = {
     export_path: "/Users/x/GBrain/Reading",
     export_path_is_default: true,
@@ -20,9 +25,9 @@ function wire(dto: Partial<SettingsDto>) {
     quote_warn_chars: 300,
     ai_requests_retention_days: 90,
     margin_help: "guided",
-    ai_provider: "local",
+    ai_provider: "company",
     ai_provider_chosen: true,
-    ai_remote_allowed: false,
+    ai_remote_allowed: true,
     ai_model_openai: "gpt-5.5",
     ai_model_anthropic: "claude-opus-4-8",
     ai_model_codex: "gpt-5.5",
@@ -31,11 +36,18 @@ function wire(dto: Partial<SettingsDto>) {
     ai_codex_creds_present: false,
     ...dto,
   };
+  const credits: CompanyCredits | null =
+    opts.credits === undefined
+      ? { status: "active", remaining_fraction: 0.74, approx_questions_left: 220 }
+      : opts.credits;
+  const requests = opts.requests ?? [];
   mockInvoke.mockImplementation((cmd: string) => {
     switch (cmd) {
       case "cmd_get_settings": return Promise.resolve(full);
+      case "cmd_company_credits": return Promise.resolve(credits);
       case "cmd_list_ai_models": return Promise.resolve(["m"]);
-      case "cmd_list_ai_requests": return Promise.resolve([]);
+      case "cmd_list_ai_requests": return Promise.resolve(requests);
+      case "cmd_model_catalog": return Promise.resolve([]);
       case "cmd_test_ai_connection": return Promise.resolve({ reachable: true, first_model_id: "m", message: "Connected." });
       default: return Promise.resolve(undefined);
     }
@@ -44,154 +56,225 @@ function wire(dto: Partial<SettingsDto>) {
 
 beforeEach(() => mockInvoke.mockReset());
 
-describe("Settings — Your data trust summary", () => {
-  it("states the privacy contract plainly with the local provider", async () => {
-    wire({ ai_provider: "local", ai_remote_allowed: false });
+describe("Settings — 4-section redesign", () => {
+  it("opens to the calm paid-primary statement (no setup), not a config dump", async () => {
+    wire({ ai_provider: "company" });
     render(<Settings />);
-    await waitFor(() => expect(screen.getByText(/Your book files stay on this Mac/i)).toBeInTheDocument());
-    expect(screen.getByText(/raw book text is never written out/i)).toBeInTheDocument();
-    expect(screen.getByText(/based only on the passage or section you choose/i)).toBeInTheDocument();
-    expect(screen.getByText(/becomes a saved note only when you choose to keep it/i)).toBeInTheDocument();
-    // Local provider → "local model" and no off-device warning.
-    expect(screen.getByText(/run on a local model/i)).toBeInTheDocument();
-    expect(screen.queryByText(/is sent to/i)).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByText(/Answers come from Throughline's included assistant/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/No setup — it just works/i)).toBeInTheDocument();
+    // The four section eyebrows, in order.
+    expect(screen.getByText("Reading assistant")).toBeInTheDocument();
+    expect(screen.getByText("Privacy")).toBeInTheDocument();
+    expect(screen.getByText("Files")).toBeInTheDocument();
+    expect(screen.getByText("About")).toBeInTheDocument();
   });
 
-  it("discloses honestly (never claims local) when a cloud provider is chosen — and does NOT call it disabled", async () => {
-    wire({ ai_provider: "openai", ai_remote_allowed: true });
+  // FT-11: the allowance meter must read the REAL remaining_fraction, not a constant.
+  it("renders the allowance meter from cmd_company_credits (real fraction, not hardcoded)", async () => {
+    wire({ ai_provider: "company" }, { credits: { status: "active", remaining_fraction: 0.42, approx_questions_left: 120 } });
     render(<Settings />);
-    // The scope line flips to "remote" — never a false on-device claim.
-    await waitFor(() => expect(screen.getByText(/the only thing sent to the cloud provider/i)).toBeInTheDocument());
-    // A cloud provider is ENABLED (not disabled); the warning names the provider + what's sent.
-    expect(screen.getByText(/Only that selection leaves this Mac/i)).toBeInTheDocument();
-    expect(screen.queryByText(/disabled until you re-enable/i)).toBeNull();
+    const meter = await screen.findByRole("progressbar", { name: /Reading help remaining/i });
+    expect(meter).toHaveAttribute("aria-valuenow", "42");
+    const fill = meter.querySelector(".meter-fill") as HTMLElement;
+    expect(fill.style.width).toBe("42%");
+    // Calm state word + accent (not warn) while there is plenty.
+    expect(screen.getByText("Plenty left")).toBeInTheDocument();
+    expect(screen.queryByText("Running low")).toBeNull();
   });
 
-  it("flags Codex as experimental and unofficial", async () => {
-    wire({ ai_provider: "codex", ai_remote_allowed: true });
+  it("switches the meter to a warn 'Running low' state only when genuinely low", async () => {
+    wire({ ai_provider: "company" }, { credits: { status: "active", remaining_fraction: 0.08, approx_questions_left: 12 } });
     render(<Settings />);
-    // The Codex option carries a clear experimental marker steering toward OpenAI/Anthropic.
-    await waitFor(() => expect(screen.getByText(/^Experimental\.$/i)).toBeInTheDocument());
-    expect(screen.getByText(/unofficial ChatGPT connection that can change or break/i)).toBeInTheDocument();
-    expect(screen.getByText(/choose OpenAI or Anthropic with your own API key/i)).toBeInTheDocument();
+    expect(await screen.findByText("Running low")).toBeInTheDocument();
+    expect(screen.queryByText("Plenty left")).toBeNull();
+    // The low state pairs the warn color with a word + recolors via the `.low` class.
+    const meter = screen.getByRole("progressbar", { name: /Reading help remaining/i });
+    expect(meter.closest(".allowance")).toHaveClass("low");
   });
 
-  it("hides spend figures and the cap input from company-mode readers", async () => {
-    wire({ ai_provider: "company", ai_remote_allowed: true });
-    render(<Settings />);
-    // The paid build's promise: explanations, never dollars — the usage card
-    // reframes to the included purchase, with no meters to manage.
-    expect(await screen.findByText(/Included in your one-time purchase/i)).toBeInTheDocument();
-    expect(screen.queryByText("Spend so far")).toBeNull();
-    expect(screen.queryByLabelText(/Monthly AI spend cap/i)).toBeNull();
-  });
-
-  it("keeps the spend figures and cap input for a reader on their own key", async () => {
-    wire({ ai_provider: "anthropic", ai_remote_allowed: true });
-    render(<Settings />);
-    expect(await screen.findByText("Spend so far")).toBeInTheDocument();
-    expect(screen.getByLabelText(/Monthly AI spend cap/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Included in your one-time purchase/i)).toBeNull();
-  });
-
-  it("renders no shell command fragments anywhere a reader can see", async () => {
-    wire({});
+  it("shows no meter and no dollars/tokens/percent-jargon in company mode copy", async () => {
+    wire({ ai_provider: "company" });
     const { container } = render(<Settings />);
-    await waitFor(() => expect(screen.getByText(/Local storage path/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/No setup — it just works/i)).toBeInTheDocument());
     const text = container.textContent ?? "";
-    expect(text).not.toMatch(/rm\s+-rf/);
-    // No standalone "rm " shell fragment at all (word-boundary so prose like "Confirm " stays legal).
-    expect(text).not.toMatch(/\brm\s/);
+    expect(text).not.toMatch(/token/i);
+    expect(text).not.toMatch(/\$\d/);
+    expect(text).not.toMatch(/endpoint/i);
   });
 
-  it("speaks plainly in the BYO model row — no 'token' anywhere on the screen", async () => {
-    wire({ ai_provider: "anthropic", ai_remote_allowed: true, ai_key_present_anthropic: true });
+  // FT-24: in company mode the key/local controls are hidden until the reader
+  // opens "Use your own AI instead".
+  it("hides the key and local controls until the fallback expander is opened", async () => {
+    wire({ ai_provider: "company" });
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Use your own AI instead/i)).toBeInTheDocument());
+    // Collapsed: the segmented fallback modes are not interactive-visible yet.
+    expect(screen.queryByRole("group", { name: /Use your own AI/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Your own key/i })).toBeNull();
+    // Open the expander…
+    fireEvent.click(screen.getByText(/Use your own AI instead/i));
+    expect(await screen.findByRole("group", { name: /Use your own AI/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Your own key/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /On this Mac only/i })).toBeInTheDocument();
+  });
+
+  it("starts the fallback expander open and shows the key field when already on a BYO provider", async () => {
+    wire({ ai_provider: "anthropic", ai_key_present_anthropic: true });
+    render(<Settings />);
+    // No meter for BYO mode.
+    await waitFor(() => expect(screen.queryByRole("progressbar")).toBeNull());
+    // Key field visible (the one place "key" is allowed).
+    expect(await screen.findByLabelText(/Anthropic key/i)).toBeInTheDocument();
+    // The model row explains pricing in plain words.
+    expect(screen.getByText(/the going rate for heavier vs\. lighter models/i)).toBeInTheDocument();
+  });
+
+  it("warns (warn color) when on your own key but none is set — a genuine warning", async () => {
+    wire({ ai_provider: "openai", ai_key_present_openai: false });
+    render(<Settings />);
+    expect(await screen.findByText(/Add a key to start answering/i)).toBeInTheDocument();
+  });
+
+  // FT-12: the audit shows plain lens names, grouped, with no hostname / no raw
+  // internal id / no alarm-orange, collapsed by default, retention + Forget kept.
+  it("reframes the audit: plain lens label, no hostname, no raw 'section_briefing' id", async () => {
+    const requests: AiRequest[] = [
+      { id: "1", book_id: "b1", book_title: "The Yellow Wallpaper", mode: "section_briefing", locator: null, context_char_count: null, provider: "ai.readthroughline.com", created_at: "2026-06-10T09:48:00Z", wrote_to_memory: false },
+      { id: "2", book_id: "b1", book_title: "The Yellow Wallpaper", mode: "explain", locator: null, context_char_count: null, provider: "ai.readthroughline.com", created_at: "2026-06-09T10:13:00Z", wrote_to_memory: true },
+    ];
+    wire({ ai_provider: "company" }, { requests });
     const { container } = render(<Settings />);
-    await waitFor(() => expect(screen.getByText(/Anthropic API key/i)).toBeInTheDocument());
-    // The model row explains pricing in plain words…
-    expect(screen.getByText(/the chip shows the going rate/i)).toBeInTheDocument();
-    // …and no reader-visible copy says "token" (the experience bar bans plumbing words).
-    expect(container.textContent).not.toMatch(/token/i);
+    await waitFor(() => expect(screen.getByText(/What's left this Mac/i)).toBeInTheDocument());
+    // Collapsed by default: a real <details> whose body isn't open.
+    const details = container.querySelector("details.audit") as HTMLDetailsElement;
+    expect(details).toBeTruthy();
+    expect(details.open).toBe(false);
+    // Expand it.
+    fireEvent.click(screen.getByText(/Show what was sent/i));
+    // Plain lens labels — NEVER the raw id.
+    expect(screen.getByText("Section briefing")).toBeInTheDocument();
+    expect(screen.getByText("Explain")).toBeInTheDocument();
+    const text = container.textContent ?? "";
+    expect(text).not.toMatch(/section_briefing/);
+    // No hostname / upstream service name anywhere.
+    expect(text).not.toMatch(/ai\.readthroughline\.com/);
+    expect(text).not.toMatch(/readthroughline/i);
+    // Grouped by book with a calm "Sent to assistant", never an alarm host arrow.
+    expect(screen.getByText(/The Yellow Wallpaper/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Sent to assistant/).length).toBeGreaterThan(0);
+    // No row carries the alarm/warn color class on a normal "sent" state (FT-23).
+    expect(container.querySelector(".log-row .tl-audit-tag.sent")).toBeNull();
   });
 
-  it("describes the Local base URL without 'endpoint'", async () => {
+  it("keeps retention + Forget now in the audit, collapsed and calm", async () => {
+    const requests: AiRequest[] = [
+      { id: "1", book_id: "b1", book_title: "Meditations", mode: "explain", locator: null, context_char_count: null, provider: "x", created_at: "2026-06-10T09:48:00Z", wrote_to_memory: false },
+    ];
+    wire({ ai_provider: "company", ai_requests_retention_days: 90 }, { requests });
+    render(<Settings />);
+    fireEvent.click(await screen.findByText(/Show what was sent/i));
+    expect(screen.getByText(/Keep this list for/i)).toBeInTheDocument();
+    expect(screen.getByText("90")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Forget now/i })).toBeInTheDocument();
+  });
+
+  it("shows a calm empty audit state when nothing has been sent", async () => {
+    wire({ ai_provider: "company" }, { requests: [] });
+    const { container } = render(<Settings />);
+    fireEvent.click(await screen.findByText(/Show what was sent/i));
+    const empty = container.querySelector(".audit-empty") as HTMLElement;
+    expect(empty).toBeTruthy();
+    expect(empty.textContent).toMatch(/Nothing has been sent\./i);
+  });
+
+  // FT-21: one coherent calm trust statement, per mode, never an alarm.
+  it("keeps the privacy trust statement and an active-mode note", async () => {
+    wire({ ai_provider: "company" });
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Everything stays on this Mac/i)).toBeInTheDocument());
+    expect(screen.getByText(/Book files stay here — never uploaded\./i)).toBeInTheDocument();
+    expect(screen.getByText(/An answer becomes a note only when you save it\./i)).toBeInTheDocument();
+    // Active-mode note names the included assistant calmly.
+    expect(screen.getByText(/you're using the/i)).toBeInTheDocument();
+  });
+
+  it("the active-mode note affirms nothing is sent in On this Mac only", async () => {
     wire({ ai_provider: "local" });
     const { container } = render(<Settings />);
-    await waitFor(() => expect(screen.getByText("Base URL")).toBeInTheDocument());
-    expect(screen.getByText(/Where your local model listens/i)).toBeInTheDocument();
-    expect(container.textContent).not.toMatch(/endpoint/i);
+    await waitFor(() => expect(screen.getByText(/Everything stays on this Mac/i)).toBeInTheDocument());
+    const note = container.querySelector(".trust-mode") as HTMLElement;
+    expect(note.textContent).toMatch(/nothing is sent/i);
+    expect(note.textContent).toMatch(/On this Mac only/i);
   });
 
-  it("keeps the Codex warning free of 'endpoint' too", async () => {
-    wire({ ai_provider: "codex", ai_remote_allowed: true });
+  // FT-35: the read-only filesystem path is gone; replaced by a calm action /
+  // plain line that the library stays on this Mac — without printing the path.
+  it("does not print the library filesystem path, and shows the export folder by name", async () => {
+    wire({ ai_provider: "company", export_path: "/Users/x/GBrain/Reading", app_data_path: "/Users/x/Library/Application Support/Throughline" });
     const { container } = render(<Settings />);
-    await waitFor(() => expect(screen.getByText(/^Experimental\.$/i)).toBeInTheDocument());
-    expect(container.textContent).not.toMatch(/endpoint/i);
+    await waitFor(() => expect(screen.getByText("Files")).toBeInTheDocument());
+    const text = container.textContent ?? "";
+    // No raw application-support path anywhere on screen.
+    expect(text).not.toMatch(/Library\/Application Support/);
+    expect(text).not.toMatch(/Local storage path/i);
+    // The export chip shows the folder's display name, not the full path.
+    expect(screen.getByText("Reading")).toBeInTheDocument();
+    expect(text).not.toMatch(/\/Users\/x\/GBrain/);
+    // The library line stays reassuring without a path.
+    expect(screen.getByText(/Your books live on this Mac and stay here\./i)).toBeInTheDocument();
   });
 
-  it("tests the connection against the Base-URL draft on screen, not the saved one", async () => {
-    wire({ ai_provider: "local", ai_base_url: "http://localhost:1234/v1" });
+  // FT-36: the fair-use legalese card → one plain line + the quote toggle.
+  it("reduces quoting to one plain line with a short-quote note", async () => {
+    wire({ ai_provider: "company", quote_warn_chars: 300 });
     render(<Settings />);
-    await waitFor(() => expect(screen.getByText("Base URL")).toBeInTheDocument());
-    // The reader edits the Base URL but hasn't saved yet…
-    fireEvent.change(screen.getByPlaceholderText("http://localhost:1234/v1"), {
-      target: { value: "http://127.0.0.1:5555/v1" },
-    });
-    // …so Test connection must probe the DRAFT (refreshModels already does);
-    // probing the saved URL silently validates a different address.
-    fireEvent.click(screen.getByText("Test connection"));
-    await waitFor(() =>
-      expect(mockInvoke).toHaveBeenCalledWith(
-        "cmd_test_ai_connection",
-        expect.objectContaining({ provider: "local", baseUrl: "http://127.0.0.1:5555/v1" }),
-      ),
-    );
+    await waitFor(() => expect(screen.getByText("Quoting")).toBeInTheDocument());
+    expect(screen.getByText(/keeps quotes short, for private study/i)).toBeInTheDocument();
+    expect(screen.getByText(/about 300 characters — never a block/i)).toBeInTheDocument();
   });
 
-  // FT-06 (CORE-1039): the tutor toggle gates ALL providers, so its copy must
-  // tell the truth per provider. In the paid build the company provider sends
-  // the reader's selection to the cloud — "local answer" / "local model call"
-  // are privacy-material misstatements, and "before the next call" is plumbing.
-  it("never claims a local answer while a cloud provider is live (toggle on)", async () => {
-    localStorage.setItem("tl.tutorEnabled", "true");
-    wire({ ai_provider: "company", ai_remote_allowed: true });
+  // FT: no reader-visible plumbing words / hostnames on the screen.
+  it("uses plain words only — no tokens / endpoint / API / hostnames on screen", async () => {
+    const requests: AiRequest[] = [
+      { id: "1", book_id: "b1", book_title: "The Odyssey", mode: "section_briefing", locator: null, context_char_count: null, provider: "ai.readthroughline.com", created_at: "2026-06-10T07:48:00Z", wrote_to_memory: false },
+    ];
+    wire({ ai_provider: "company" }, { requests });
     const { container } = render(<Settings />);
-    await waitFor(() => expect(screen.getByText(/Your book files stay on this Mac/i)).toBeInTheDocument());
-    expect(screen.queryByText(/local answer/i)).toBeNull();
-    expect(screen.queryByText(/local model call/i)).toBeNull();
-    expect(container.textContent).not.toMatch(/Local AI tutor/);
-    expect(container.textContent).not.toMatch(/before the next call/i);
-    // The row says, honestly, where the answer comes from…
-    expect(screen.getByText(/answer in the margin from Throughline AI/i)).toBeInTheDocument();
-    // …and is named for what it controls: the tutor, not a "local" one.
-    expect(screen.getByRole("switch", { name: "AI tutor" })).toBeInTheDocument();
-    localStorage.clear();
+    await waitFor(() => expect(screen.getByText(/No setup — it just works/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByText(/Use your own AI instead/i));
+    fireEvent.click(screen.getByText(/Show what was sent/i));
+    const text = container.textContent ?? "";
+    expect(text).not.toMatch(/token/i);
+    expect(text).not.toMatch(/endpoint/i);
+    // "API" must not appear (the lone allowed word is "key", which we use).
+    expect(text).not.toMatch(/\bAPI\b/);
+    expect(text).not.toMatch(/readthroughline/i);
+    expect(text).not.toMatch(/localhost(?!:\d)/); // a typed default placeholder is fine; no bare host prose
   });
 
-  it("off copy never speaks of a 'local model call' with a cloud provider", async () => {
-    localStorage.clear();
-    wire({ ai_provider: "company", ai_remote_allowed: true });
+  // FT-06 honest-copy carryover: the tutor toggle never claims a local answer
+  // while a cloud assistant is live, and the active-mode note tells the truth.
+  it("never claims everything stays local while the included (cloud) assistant is live", async () => {
+    wire({ ai_provider: "company" });
     const { container } = render(<Settings />);
-    await waitFor(() => expect(screen.getByText(/Your book files stay on this Mac/i)).toBeInTheDocument());
-    expect(screen.queryByText(/local model call/i)).toBeNull();
-    expect(screen.getByText(/Throughline asks before anything is sent/i)).toBeInTheDocument();
-    expect(container.textContent).not.toMatch(/before the next call/i);
+    await waitFor(() => expect(screen.getByText(/Everything stays on this Mac/i)).toBeInTheDocument());
+    const text = container.textContent ?? "";
+    // The trust statement is precise: books stay; only the selected passage is sent.
+    expect(screen.getByText(/only that one passage is sent to get an answer/i)).toBeInTheDocument();
+    // It does NOT falsely say answers are computed locally in company mode.
+    expect(text).not.toMatch(/run on a local model/i);
   });
 
-  it("still truthfully says the answer stays on this Mac with the local provider", async () => {
-    localStorage.setItem("tl.tutorEnabled", "true");
-    wire({ ai_provider: "local", ai_remote_allowed: false });
-    render(<Settings />);
-    await waitFor(() => expect(screen.getByText(/Your book files stay on this Mac/i)).toBeInTheDocument());
-    expect(screen.getByText(/answer in the margin from the model on this Mac/i)).toBeInTheDocument();
-    localStorage.clear();
-  });
-
-  it("does not flag OpenAI as experimental", async () => {
-    wire({ ai_provider: "openai", ai_remote_allowed: true });
-    render(<Settings />);
-    await waitFor(() => expect(screen.getByText(/the only thing sent to the cloud provider/i)).toBeInTheDocument());
-    // The experimental marker is specific to Codex's unofficial endpoint.
-    expect(screen.queryByText(/^Experimental\.$/i)).toBeNull();
+  it("the included-assistant active note steers to On this Mac only, calmly (no orange)", async () => {
+    wire({ ai_provider: "company" });
+    const { container } = render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Everything stays on this Mac/i)).toBeInTheDocument());
+    const note = container.querySelector(".trust-mode") as HTMLElement;
+    expect(note).toBeTruthy();
+    expect(within(note).getByText(/included assistant/i)).toBeInTheDocument();
+    // It is the calm muted note, not a warn card.
+    expect(note.className).not.toMatch(/warn|alert/);
   });
 });

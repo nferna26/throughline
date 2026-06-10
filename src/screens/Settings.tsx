@@ -1,15 +1,89 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import TLIcon from "../components/TLIcon";
 import ModelSelect from "../components/ModelSelect";
-import AiUsageCard from "../components/AiUsageCard";
-import CompanyPanel from "../components/CompanyPanel";
 import CodexLogin from "../components/CodexLogin";
-import AiHistory from "./AiHistory";
 import UpdateChecker from "../components/UpdateChecker";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
-import { AI_PROVIDERS, aiProviderLabel, type ConnTestResult, type SettingsDto } from "../types";
+import {
+  AI_PROVIDERS,
+  aiProviderLabel,
+  type AiRequest,
+  type CompanyCredits,
+  type ConnTestResult,
+  type SettingsDto,
+} from "../types";
+import "../tl-settings.css";
+
+/* ── Icons (Lucide-style, 20-grid, currentColor) — authored inline so the
+   redesign carries the handoff's exact glyphs without a new dependency. */
+function Icon({ d, size = 16, className }: { d: string; size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d={d} />
+    </svg>
+  );
+}
+const ICON = {
+  sparkle: "M10 2.5l1.7 4.6 4.6 1.7-4.6 1.7L10 15.1 8.3 10.5 3.7 8.8l4.6-1.7z",
+  key: "M8.5 8.5a3 3 0 1 0-3 3 3 3 0 0 0 3-3zM8.5 8.5l4 4 1.5-1.5 1.5 1.5 1.5-1.5-3-3z",
+  monitor: "M3 4.5h14v9.5H3zM7 17h6M10 14v3",
+  info: "M10 2.4a7.6 7.6 0 1 0 0 15.2A7.6 7.6 0 0 0 10 2.4zM10 9.2v4M10 6.6v.1",
+  shield: "M10 2.2l6 2.3v4.2c0 3.7-2.5 6.6-6 8-3.5-1.4-6-4.3-6-8V4.5zM7.3 9.8l1.9 1.9 3.5-3.7",
+  check: "M3.5 10.5 8 15l8.5-9.5",
+  clock: "M10 2.6a7.4 7.4 0 1 0 0 14.8 7.4 7.4 0 0 0 0-14.8zM10 6.4v4.2l2.6 1.6",
+  gauge: "M3 12a7 7 0 0 1 14 0M10 12l3.4-3",
+  disk: "M3 6.5C3 5 6.1 4 10 4s7 1 7 2.5M3 6.5v7C3 15 6.1 16 10 16s7-1 7-2.5v-7M3 10c0 1.5 3.1 2.5 7 2.5s7-1 7-2.5",
+  chevron: "M7 5l5 5-5 5",
+  up: "M10 15V5M6 9l4-4 4 4",
+  trash: "M4 6h12M8 6V4.5h4V6M6 6l.6 9.5h6.8L15 6",
+  folder:
+    "M3 6.5C3 5.7 3.7 5 4.5 5H8l1.5 1.5h6c.8 0 1.5.7 1.5 1.5v6c0 .8-.7 1.5-1.5 1.5h-11C3.7 15.5 3 14.8 3 14z",
+  warn: "M10 17a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM10 6.5v4.5M10 13.4v.1",
+  caretUp: "M5 12l5-5 5 5",
+  caretDown: "M5 8l5 5 5-5",
+} as const;
+
+/* ── Plain lens labels (FT-12): never show an internal id like
+   "section_briefing". Maps every backend lens/mode value to a short,
+   sentence-case reader word. Falls back to the raw value only if a new mode
+   is added before this map is updated (still no hostname/ids leak). */
+const LENS_LABEL: Record<string, string> = {
+  explain: "Explain",
+  historical: "Historical context",
+  vocabulary: "Define",
+  socratic: "Ask questions",
+  durable_note: "Saved note",
+  prepare_next: "Prepare next reading",
+  section_briefing: "Section briefing",
+  define: "Define",
+  context: "Context",
+};
+function lensLabel(mode: string): string {
+  return LENS_LABEL[mode] ?? mode.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+}
+
+function fmtWhen(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 /** The stored model id for a provider, from a settings DTO. */
 function modelForProvider(s: SettingsDto, prov: string): string {
@@ -21,62 +95,119 @@ function modelForProvider(s: SettingsDto, prov: string): string {
   }
 }
 
+/** The three conceptual modes the reader sees, mapped to the real provider enum. */
+type Mode = "included" | "own_key" | "local";
+function modeForProvider(prov: string): Mode {
+  if (prov === "company") return "included";
+  if (prov === "local") return "local";
+  return "own_key"; // anthropic | openai | codex
+}
+
+const KEY_PROVIDERS = AI_PROVIDERS.filter((p) => p.id === "anthropic" || p.id === "openai" || p.id === "codex");
+
 export default function Settings() {
   const [dto, setDto] = useState<SettingsDto | null>(null);
+
+  // Files
   const [savingExport, setSavingExport] = useState(false);
   const [exportMsg, setExportMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
+  // Allowance meter (real, from cmd_company_credits)
+  const [credits, setCredits] = useState<CompanyCredits | null>(null);
+
+  // BYO / on-this-Mac controls (draft, mirrors current Settings flow)
   const [baseUrlDraft, setBaseUrlDraft] = useState("");
   const [modelDraft, setModelDraft] = useState("");
   const [savingAi, setSavingAi] = useState(false);
   const [aiMsg, setAiMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [conn, setConn] = useState<ConnTestResult | null>(null);
   const [testing, setTesting] = useState(false);
-  const [providerDraft, setProviderDraft] = useState<string>("local");
+  // providerDraft is the FALLBACK provider chosen inside the expander
+  // (anthropic | openai | codex | local). Defaults to anthropic for "own key".
+  const [providerDraft, setProviderDraft] = useState<string>("anthropic");
   const [keyDraft, setKeyDraft] = useState("");
   const [models, setModels] = useState<string[] | null>(null);
-  const [modelsErr, setModelsErr] = useState<string | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
-  // AI tutor consent (opt-in, revocable). A UI preference in localStorage,
-  // shared with the in-margin consent card via tutorConsent.
+
+  // Tutor consent (localStorage, shared with the in-margin card)
   const [tutorOn, setTutorOn] = useState(isTutorEnabled);
 
-  // Detect models for the CURRENTLY SELECTED (draft) provider + local base URL,
-  // not the saved one — otherwise switching back to Local lists the previously
-  // saved provider's models (or nothing) and never re-detects.
-  async function refreshModels(prov: string, baseUrl: string) {
-    setLoadingModels(true);
-    setModelsErr(null);
-    try {
-      setModels(await invoke<string[]>("cmd_list_ai_models", { provider: prov, baseUrl }));
-    } catch (e: any) {
-      setModels(null);
-      setModelsErr(String(e?.message ?? e));
-    } finally {
-      setLoadingModels(false);
-    }
-  }
+  // The fallback expander is open when the saved provider isn't the included one.
+  const [byoOpen, setByoOpen] = useState(false);
+
+  // Audit (reframed history) — loaded inline
+  const [requests, setRequests] = useState<AiRequest[] | null>(null);
+  const [retentionDraft, setRetentionDraft] = useState<number>(90);
+  const [forgetMsg, setForgetMsg] = useState<string | null>(null);
+  const [forgetting, setForgetting] = useState(false);
+
+  const provider = dto?.ai_provider ?? "";
+  const mode: Mode = modeForProvider(provider);
+  const needsKey = providerDraft === "openai" || providerDraft === "anthropic";
 
   async function refresh() {
     const s = await invoke<SettingsDto>("cmd_get_settings");
     setDto(s);
     setBaseUrlDraft(s.ai_base_url);
-    const prov = s.ai_provider && s.ai_provider !== "none" ? s.ai_provider : "local";
-    setProviderDraft(prov);
-    setModelDraft(modelForProvider(s, prov));
+    setRetentionDraft(s.ai_requests_retention_days);
+    // Seed the fallback draft from the saved provider when it's a fallback one;
+    // otherwise leave the reader's last in-expander choice intact.
+    if (s.ai_provider && s.ai_provider !== "company" && s.ai_provider !== "none") {
+      setProviderDraft(s.ai_provider);
+      setModelDraft(modelForProvider(s, s.ai_provider));
+      setByoOpen(true);
+    } else {
+      setModelDraft(modelForProvider(s, providerDraft));
+    }
   }
 
   useEffect(() => {
     refresh();
   }, []);
 
-  // Re-detect models whenever the chosen provider or the local base URL changes,
-  // so switching back to Local (or editing the endpoint) repopulates the dropdown
-  // instead of going stale. Debounced so typing a URL doesn't spam the endpoint.
+  // Real allowance, only meaningful in the included (company) mode.
   useEffect(() => {
-    const h = setTimeout(() => refreshModels(providerDraft, baseUrlDraft), 250);
+    if (provider !== "company") {
+      setCredits(null);
+      return;
+    }
+    let alive = true;
+    invoke<CompanyCredits>("cmd_company_credits")
+      .then((c) => alive && setCredits(c))
+      .catch(() => alive && setCredits(null));
+    return () => {
+      alive = false;
+    };
+  }, [provider]);
+
+  // Audit list.
+  useEffect(() => {
+    let alive = true;
+    invoke<AiRequest[]>("cmd_list_ai_requests")
+      .then((r) => alive && setRequests(r))
+      .catch(() => alive && setRequests([]));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Detect local models when the local mode + its base URL change (debounced).
+  useEffect(() => {
+    if (providerDraft !== "local") return;
+    const h = setTimeout(() => refreshModels(baseUrlDraft), 250);
     return () => clearTimeout(h);
   }, [providerDraft, baseUrlDraft]);
+
+  async function refreshModels(baseUrl: string) {
+    setLoadingModels(true);
+    try {
+      setModels(await invoke<string[]>("cmd_list_ai_models", { provider: "local", baseUrl }));
+    } catch {
+      setModels(null);
+    } finally {
+      setLoadingModels(false);
+    }
+  }
 
   async function pickAndSaveFolder() {
     const picked = await openDialog({ directory: true, multiple: false });
@@ -86,7 +217,7 @@ export default function Settings() {
     try {
       const s = await invoke<SettingsDto>("cmd_set_export_path", { path: picked });
       setDto(s);
-      setExportMsg({ kind: "ok", text: `Export folder set to ${s.export_path}` });
+      setExportMsg({ kind: "ok", text: "Export folder updated." });
     } catch (e: any) {
       setExportMsg({ kind: "err", text: String(e?.message ?? e) });
     } finally {
@@ -94,21 +225,48 @@ export default function Settings() {
     }
   }
 
-  const needsKey = providerDraft === "openai" || providerDraft === "anthropic";
+  function toggleTutor() {
+    const next = !tutorOn;
+    setTutorEnabled(next);
+    setTutorOn(next);
+  }
 
-  async function saveAi() {
+  // ── "Where answers come from" mode switching ──────────────────────
+  async function selectIncluded() {
+    setAiMsg(null);
+    setConn(null);
+    try {
+      const s = await invoke<SettingsDto>("cmd_set_ai_settings", {
+        provider: "company",
+        model: modelForProvider(dto!, "company"),
+      });
+      setDto(s);
+    } catch (e: any) {
+      setAiMsg({ kind: "err", text: String(e?.message ?? e) });
+    }
+  }
+
+  function onFallbackProvider(prov: string) {
+    setProviderDraft(prov);
+    setConn(null);
+    setKeyDraft("");
+    if (dto) setModelDraft(modelForProvider(dto, prov));
+  }
+
+  async function saveFallback(targetProvider: string) {
     setSavingAi(true);
     setAiMsg(null);
     try {
-      if (needsKey && keyDraft.trim()) {
-        await invoke<SettingsDto>("cmd_set_ai_key", { provider: providerDraft, key: keyDraft.trim() });
+      const needs = targetProvider === "openai" || targetProvider === "anthropic";
+      if (needs && keyDraft.trim()) {
+        await invoke<SettingsDto>("cmd_set_ai_key", { provider: targetProvider, key: keyDraft.trim() });
         setKeyDraft("");
       }
-      const args: Record<string, unknown> = { provider: providerDraft, model: modelDraft };
-      if (providerDraft === "local") args.baseUrl = baseUrlDraft;
+      const args: Record<string, unknown> = { provider: targetProvider, model: modelDraft };
+      if (targetProvider === "local") args.baseUrl = baseUrlDraft;
       const s = await invoke<SettingsDto>("cmd_set_ai_settings", args);
       setDto(s);
-      setAiMsg({ kind: "ok", text: "AI settings saved." });
+      setAiMsg({ kind: "ok", text: "Saved." });
     } catch (e: any) {
       setAiMsg({ kind: "err", text: String(e?.message ?? e) });
     } finally {
@@ -120,17 +278,10 @@ export default function Settings() {
     try {
       const s = await invoke<SettingsDto>("cmd_clear_ai_key", { provider: providerDraft });
       setDto(s);
-      setAiMsg({ kind: "ok", text: "API key removed." });
+      setAiMsg({ kind: "ok", text: "Key removed." });
     } catch (e: any) {
       setAiMsg({ kind: "err", text: String(e?.message ?? e) });
     }
-  }
-
-  function onProviderChange(prov: string) {
-    setProviderDraft(prov);
-    setConn(null);
-    setKeyDraft("");
-    if (dto) setModelDraft(modelForProvider(dto, prov));
   }
 
   async function testConnection() {
@@ -140,13 +291,10 @@ export default function Settings() {
       const r = await invoke<ConnTestResult>("cmd_test_ai_connection", {
         provider: providerDraft,
         key: needsKey && keyDraft.trim() ? keyDraft.trim() : undefined,
-        // Probe the Base-URL draft on screen, the same way refreshModels does —
-        // otherwise testing validates the SAVED local address while a different
-        // one sits in the field. The backend only honors it for Local.
         baseUrl: baseUrlDraft,
       });
       setConn(r);
-      if (r.reachable && providerDraft === "local") refreshModels(providerDraft, baseUrlDraft);
+      if (r.reachable && providerDraft === "local") refreshModels(baseUrlDraft);
     } catch (e: any) {
       setConn({ reachable: false, first_model_id: null, message: String(e?.message ?? e) });
     } finally {
@@ -154,232 +302,540 @@ export default function Settings() {
     }
   }
 
+  // ── Audit (retention + forget) ────────────────────────────────────
+  async function saveRetention(next: number) {
+    const n = Math.max(0, next);
+    setRetentionDraft(n);
+    try {
+      await invoke<SettingsDto>("cmd_set_ai_settings", { retentionDays: n });
+      await refresh();
+    } catch {
+      /* keep the optimistic value; refresh restores truth */
+    }
+  }
+
+  async function forgetNow() {
+    setForgetting(true);
+    setForgetMsg(null);
+    try {
+      const removed = await invoke<number>("cmd_forget_ai_history");
+      setRequests(await invoke<AiRequest[]>("cmd_list_ai_requests"));
+      setForgetMsg(
+        removed === 0
+          ? "Nothing to forget — nothing is past the window."
+          : `Forgot ${removed} entr${removed === 1 ? "y" : "ies"} past the window. Anything saved as a note was kept.`,
+      );
+    } catch (e: any) {
+      setForgetMsg(String(e?.message ?? e));
+    } finally {
+      setForgetting(false);
+    }
+  }
+
+  // ── Allowance derivation (FT-11): real fraction → bar + state word ──
+  const allowance = useMemo(() => {
+    if (!credits || credits.status !== "active") return null;
+    const frac = Math.max(0, Math.min(1, credits.remaining_fraction));
+    // "Running low" once genuinely low; otherwise calm "Plenty left". The
+    // boundary mirrors the in-margin fuel gauge (CompanyPanel.fuel: >0.33 =
+    // plenty) so the two surfaces never disagree about how much is left.
+    const low = frac <= 0.33;
+    return { pct: Math.round(frac * 100), low, state: low ? "Running low" : "Plenty left" };
+  }, [credits]);
+
+  // ── Audit grouping (by book) for the expanded list ─────────────────
+  const grouped = useMemo(() => {
+    const sent = (requests ?? []).filter((r) => r.provider != null);
+    const groups = new Map<string, AiRequest[]>();
+    for (const r of sent) {
+      const title = r.book_title ?? "A removed book";
+      if (!groups.has(title)) groups.set(title, []);
+      groups.get(title)!.push(r);
+    }
+    const sentCount = sent.length;
+    const localOnly = (requests ?? []).length - sentCount;
+    return { groups: Array.from(groups.entries()), sentCount, localOnly };
+  }, [requests]);
+
+  // Display name for the export folder (FT: a chip shows the folder's name,
+  // not a full path).
+  const exportFolderName = useMemo(() => {
+    const p = dto?.export_path ?? "";
+    const trimmed = p.replace(/[/\\]+$/, "");
+    const name = trimmed.split(/[/\\]/).pop();
+    return name && name.length ? name : "Reading";
+  }, [dto?.export_path]);
+
   return (
-    <div className="tl-body">
-      <div className="tl-col tl-settings">
-        <h2>Settings</h2>
+    <div className="tl-body tl-settings2">
+      <div className="col2">
+        <h2 className="page-title">Settings</h2>
+        <p className="page-sub">Throughline · a calm place to read</p>
 
-        {/* ── Your data (at-a-glance trust summary) ── A plain, accurate
-            statement of the privacy contract so the reader never has to infer
-            it from scattered toggles. Every line is literally true of the
-            current build (see AGENTS.md "Copyright & privacy posture"). */}
-        <div className="tl-set-group">
-          <span className="glabel">Your data</span>
-          <div className="tl-set-card tl-trust-card">
-            <ul className="tl-trust-list">
-              <li><TLIcon name="shield" size={15} /> Your book files stay on this Mac. They are never uploaded or exported.</li>
-              <li><TLIcon name="shield" size={15} /> Exports contain your own words — paraphrases, reflections, short quotes, and locators. The raw book text is never written out.</li>
-              <li><TLIcon name="shield" size={15} /> AI answers are based only on the passage or section you choose{dto?.ai_remote_allowed ? " — which is the only thing sent to the cloud provider, never the whole book" : ", and run on a local model on this Mac. Nothing is sent until you act"}.</li>
-              <li><TLIcon name="shield" size={15} /> AI output becomes a saved note only when you choose to keep it.</li>
-            </ul>
-            {dto?.ai_remote_allowed && (
-              <p className="tl-trust-warn"><TLIcon name="behind" size={14} /> AI is set to <strong>{aiProviderLabel(dto.ai_provider)}</strong> — {dto.ai_posture}. Only that selection leaves this Mac; your book file never does. Switch to Local below to keep everything on-device.</p>
-            )}
-            {dto?.ai_provider === "none" && (
-              <p className="tl-trust-warn"><TLIcon name="behind" size={14} /> AI is turned off. Choose a provider below to enable the tutor and Deep Study.</p>
-            )}
-          </div>
-        </div>
-
-        {/* ── Storage ── */}
-        <div className="tl-set-group">
-          <span className="glabel">Storage</span>
-          <div className="tl-set-card">
-            <div className="tl-set-row">
-              <div className="lhs">
-                <div className="name">Export folder</div>
-                <div className="desc">Where Markdown notes, sessions, and books are written.{dto?.export_path_is_default ? " Currently the default." : ""}</div>
-              </div>
-              <button className="tl-btn tl-btn-ghost" style={{ padding: "8px 14px", fontSize: 13, maxWidth: 280 }} disabled={savingExport} onClick={pickAndSaveFolder}>
-                <TLIcon name="folder" size={16} />
-                <span className="ttl" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dto?.export_path ?? "…"}</span>
-              </button>
-            </div>
-            {exportMsg && (
-              <div className="tl-set-row"><p className={`tl-set-msg ${exportMsg.kind}`}>{exportMsg.text}</p></div>
-            )}
-            <div className="tl-set-row">
-              <div className="lhs">
-                <div className="name">Local storage path</div>
-                <div className="desc">Read-only. Your library never leaves this folder.</div>
-              </div>
-              <span className="tl-path" title={dto?.app_data_path}>{dto?.app_data_path}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Assistance (AI) ── */}
-        <div className="tl-set-group">
-          <span className="glabel">Assistance</span>
-          <div className="tl-set-card">
-            <div className="tl-set-row">
-              <div className="lhs">
-                <div className="name">AI tutor</div>
-                {/* The toggle gates EVERY provider, so its words follow the
-                    saved provider — never a "local" claim while a cloud
-                    provider answers (the trust card above says where the
-                    selection goes; this row must agree with it). */}
-                <div className="desc">
-                  {tutorOn
-                    ? `On. Select a passage and choose a lens (Explain · Context · Define) to get an answer in the margin${dto?.ai_remote_allowed ? ` from ${aiProviderLabel(dto.ai_provider)}` : " from the model on this Mac"}. Turn off and the tutor asks for your okay before answering again.`
-                    : "Off. The first time you open a tutor lens, Throughline asks before anything is sent."}
-                </div>
-              </div>
-              <button
-                className="tl-switch"
-                role="switch"
-                aria-checked={tutorOn}
-                aria-label="AI tutor"
-                onClick={() => { const next = !tutorOn; setTutorEnabled(next); setTutorOn(next); }}
-              />
-            </div>
-
-            <div className="tl-set-row col">
-              <div className="lhs">
-                <div className="name">AI provider</div>
-                <div className="desc">Where the tutor and Deep Study run. Local stays on this Mac; cloud providers use your own key or login.</div>
-              </div>
-              <select
-                className="tl-select"
-                value={providerDraft}
-                aria-label="AI provider"
-                onChange={(e) => onProviderChange(e.target.value)}
-              >
-                {AI_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-                <option value="none">Off (no AI)</option>
-              </select>
-              <p className="tl-posture-off" style={{ marginTop: 0 }}>
-                {providerDraft === "none"
-                  ? "AI is turned off."
-                  : AI_PROVIDERS.find((p) => p.id === providerDraft)?.disclosure}
-              </p>
-              {providerDraft === "codex" && (
-                <p className="tl-trust-warn" style={{ marginTop: "var(--tl-3)", paddingTop: 0, borderTop: "none" }}>
-                  <TLIcon name="behind" size={14} /> <span><strong>Experimental.</strong> Codex talks to an unofficial ChatGPT connection that can change or break without warning. For a reliable tutor, choose OpenAI or Anthropic with your own API key.</span>
+        {/* ═══════════════ 1 · READING ASSISTANT ═══════════════ */}
+        <section className="section">
+          <h3 className="section-h">Reading assistant</h3>
+          <div className="card">
+            {/* Tutor on/off */}
+            <div className="row row-flex">
+              <div className="row-main">
+                <p className="row-title">Tutor in the margin</p>
+                <p className="row-desc">
+                  Select a passage and choose Explain, Context, or Define to get a short answer
+                  beside what you're reading.
                 </p>
-              )}
+              </div>
+              <div className="row-control">
+                <button
+                  className="toggle"
+                  role="switch"
+                  aria-checked={tutorOn}
+                  aria-label="Tutor in the margin"
+                  onClick={toggleTutor}
+                />
+              </div>
             </div>
 
-            {providerDraft === "company" && <CompanyPanel onActivated={refresh} />}
+            {/* Where answers come from — paid-primary + quiet fallback expander */}
+            <div className="row">
+              <p className="row-title">Where answers come from</p>
+              <p className="row-desc">Choose who answers your questions. You can change this anytime.</p>
 
-            {providerDraft === "local" && (
-              <>
-                <div className="tl-set-row col">
-                  <div className="lhs">
-                    <div className="name">Base URL</div>
-                    <div className="desc">Where your local model listens (LM Studio's default address works as-is). It must be an address on this Mac.</div>
-                  </div>
-                  <input className="tl-input" type="text" value={baseUrlDraft} onChange={(e) => setBaseUrlDraft(e.target.value)} spellCheck={false} placeholder="http://localhost:1234/v1" />
-                </div>
-                <div className="tl-set-row col">
-                  <div className="lhs">
-                    <div className="name">Model</div>
-                    <div className="desc">The model id loaded in your server. Pick a detected one or type it.</div>
-                  </div>
-                  <div style={{ display: "flex", gap: "var(--tl-2)" }}>
-                    <select className="tl-select" aria-label="AI model" value={models?.includes(modelDraft) ? modelDraft : ""} onChange={(e) => { if (e.target.value) setModelDraft(e.target.value); }} disabled={!models || models.length === 0}>
-                      <option value="">{loadingModels ? "Loading…" : models && models.length > 0 ? "Pick a detected model…" : "No models detected"}</option>
-                      {(models ?? []).map((m) => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                    <button className="tl-btn tl-btn-ghost" style={{ padding: "8px 12px", fontSize: 13 }} disabled={loadingModels} onClick={() => refreshModels(providerDraft, baseUrlDraft)}>{loadingModels ? "…" : "Refresh"}</button>
-                  </div>
-                  <input className="tl-input" type="text" value={modelDraft} onChange={(e) => setModelDraft(e.target.value)} spellCheck={false} placeholder="e.g. qwen2.5-7b-instruct" />
-                </div>
-              </>
-            )}
+              {/* The included assistant is the calm default. */}
+              <p className="primary-note">
+                <Icon d={ICON.sparkle} size={15} />
+                <span>
+                  Answers come from Throughline's included assistant. No setup — it just works.
+                  Only the passage you select is sent to get an answer.
+                </span>
+              </p>
 
-            {needsKey && (
-              <>
-                <div className="tl-set-row col">
-                  <div className="lhs">
-                    <div className="name">{aiProviderLabel(providerDraft)} API key</div>
-                    <div className="desc">
-                      {(providerDraft === "openai" ? dto?.ai_key_present_openai : dto?.ai_key_present_anthropic)
-                        ? "A key is saved in your Keychain. Enter a new one to replace it, or remove it."
-                        : "Stored in your macOS Keychain — never written to disk, the database, or exports."}
-                    </div>
+              {/* Allowance meter — shown only in the included mode, real data. */}
+              {mode === "included" && allowance && (
+                <div className={`allowance${allowance.low ? " low" : ""}`}>
+                  <div className="allowance-top">
+                    <span className="allowance-label">
+                      <Icon d={ICON.gauge} size={16} />
+                      Reading help remaining
+                    </span>
+                    <span className="allowance-state">{allowance.state}</span>
                   </div>
-                  <div style={{ display: "flex", gap: "var(--tl-2)", alignItems: "center" }}>
-                    <input className="tl-input" type="password" value={keyDraft} onChange={(e) => setKeyDraft(e.target.value)} autoComplete="off" spellCheck={false} placeholder={providerDraft === "openai" ? "sk-…" : "sk-ant-…"} />
-                    {(providerDraft === "openai" ? dto?.ai_key_present_openai : dto?.ai_key_present_anthropic) && (
-                      <button className="tl-btn tl-btn-ghost" style={{ padding: "8px 12px", fontSize: 13 }} onClick={clearKey}>Remove</button>
+                  <div
+                    className="meter"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={allowance.pct}
+                    aria-label={`Reading help remaining: ${allowance.state}`}
+                  >
+                    <div className="meter-fill" style={{ width: `${allowance.pct}%` }} />
+                  </div>
+                  <p className="allowance-foot">
+                    {allowance.low
+                      ? "Included with your one-time purchase, and running low. When it's gone you can keep going with your own AI below — your own key or a model on this Mac."
+                      : "Included with your one-time purchase — enough for weeks of normal reading. The margin lets you know if it ever runs low."}
+                  </p>
+                </div>
+              )}
+
+              {/* Quiet fallback expander */}
+              <details className="byo" open={byoOpen} onToggle={(e) => setByoOpen((e.target as HTMLDetailsElement).open)}>
+                <summary>
+                  <Icon d={ICON.chevron} size={15} className="chev" />
+                  Use your own AI instead
+                </summary>
+
+                {/* Body is rendered only when the disclosure is open, so the
+                    key/local controls are genuinely absent (not just hidden)
+                    until the reader asks for them. */}
+                {byoOpen && (
+                <div className="byo-body">
+                  {/* Two fallback modes: own key · on this Mac only */}
+                  <div className="segmented" role="group" aria-label="Use your own AI">
+                    <button
+                      type="button"
+                      className="seg"
+                      aria-pressed={mode === "own_key"}
+                      onClick={() => {
+                        const next = providerDraft === "local" ? "anthropic" : providerDraft;
+                        onFallbackProvider(next);
+                        saveFallback(next);
+                      }}
+                    >
+                      <Icon d={ICON.key} size={18} />
+                      Your own key
+                    </button>
+                    <button
+                      type="button"
+                      className="seg"
+                      aria-pressed={mode === "local"}
+                      onClick={() => {
+                        onFallbackProvider("local");
+                        saveFallback("local");
+                      }}
+                    >
+                      <Icon d={ICON.monitor} size={18} />
+                      On this Mac only
+                    </button>
+                  </div>
+
+                  {providerDraft !== "local" && (
+                    <>
+                      <div className="field">
+                        <span className="field-label">Which service</span>
+                        <select
+                          className="select"
+                          aria-label="Which service"
+                          value={providerDraft}
+                          onChange={(e) => onFallbackProvider(e.target.value)}
+                        >
+                          {KEY_PROVIDERS.map((p) => (
+                            <option key={p.id} value={p.id}>{p.label}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {needsKey && (
+                        <>
+                          <div className="field">
+                            <span className="field-label">{aiProviderLabel(providerDraft)} key</span>
+                            <p className="field-desc">
+                              {(providerDraft === "openai" ? dto?.ai_key_present_openai : dto?.ai_key_present_anthropic)
+                                ? "A key is saved in your Keychain. Enter a new one to replace it, or remove it."
+                                : "Stored in your macOS Keychain — never written to disk or exports."}
+                            </p>
+                            <div className="field-row">
+                              <input
+                                className="input"
+                                type="password"
+                                value={keyDraft}
+                                onChange={(e) => setKeyDraft(e.target.value)}
+                                autoComplete="off"
+                                spellCheck={false}
+                                placeholder={providerDraft === "openai" ? "sk-…" : "sk-ant-…"}
+                                aria-label={`${aiProviderLabel(providerDraft)} key`}
+                              />
+                              {(providerDraft === "openai" ? dto?.ai_key_present_openai : dto?.ai_key_present_anthropic) ? (
+                                <button type="button" className="btn" onClick={clearKey}>Remove</button>
+                              ) : null}
+                            </div>
+                            {!(providerDraft === "openai" ? dto?.ai_key_present_openai : dto?.ai_key_present_anthropic) && (
+                              <p className="byo-warn">
+                                <Icon d={ICON.warn} size={15} />
+                                <span>Add a key to start answering. Until then, the included assistant keeps working.</span>
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="field">
+                            <span className="field-label">Model</span>
+                            <p className="field-desc">The chip shows the going rate for heavier vs. lighter models.</p>
+                            <ModelSelect provider={providerDraft} value={modelDraft} onChange={setModelDraft} />
+                          </div>
+                        </>
+                      )}
+
+                      {providerDraft === "codex" && (
+                        <div className="field">
+                          <span className="field-label">ChatGPT sign-in</span>
+                          <p className="field-desc">
+                            Sign in once with your ChatGPT account — no key needed. Stored in your Keychain.
+                          </p>
+                          <CodexLogin
+                            present={!!dto?.ai_codex_creds_present}
+                            onComplete={refresh}
+                            onSignedOut={refresh}
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {providerDraft === "local" && (
+                    <>
+                      <div className="field">
+                        <span className="field-label">Server address</span>
+                        <p className="field-desc">
+                          Where your local model listens on this Mac (LM Studio's default works as-is).
+                        </p>
+                        <input
+                          className="input"
+                          type="text"
+                          value={baseUrlDraft}
+                          onChange={(e) => setBaseUrlDraft(e.target.value)}
+                          spellCheck={false}
+                          placeholder="http://localhost:1234/v1"
+                          aria-label="Server address"
+                        />
+                      </div>
+                      <div className="field">
+                        <span className="field-label">Model</span>
+                        <p className="field-desc">Pick a detected one or type it.</p>
+                        <div className="field-row">
+                          <select
+                            className="select"
+                            aria-label="Local model"
+                            value={models?.includes(modelDraft) ? modelDraft : ""}
+                            onChange={(e) => { if (e.target.value) setModelDraft(e.target.value); }}
+                            disabled={!models || models.length === 0}
+                          >
+                            <option value="">
+                              {loadingModels ? "Loading…" : models && models.length > 0 ? "Pick a detected model…" : "No models detected"}
+                            </option>
+                            {(models ?? []).map((m) => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                          <input
+                            className="input"
+                            type="text"
+                            value={modelDraft}
+                            onChange={(e) => setModelDraft(e.target.value)}
+                            spellCheck={false}
+                            placeholder="e.g. qwen2.5-7b-instruct"
+                            aria-label="Local model name"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Test + save for the chosen fallback */}
+                  <div className="field-row">
+                    <button type="button" className="btn" disabled={testing} onClick={testConnection}>
+                      {testing ? "Testing…" : "Test"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-accent"
+                      disabled={savingAi}
+                      onClick={() => saveFallback(providerDraft)}
+                    >
+                      {savingAi ? "Saving…" : "Use this"}
+                    </button>
+                    {/* Return to the included assistant */}
+                    {mode !== "included" && (
+                      <button type="button" className="btn" onClick={selectIncluded}>
+                        Back to included assistant
+                      </button>
                     )}
                   </div>
+                  {(aiMsg || conn) && (
+                    <p className={`set-msg ${conn ? (conn.reachable ? "ok" : "err") : aiMsg?.kind}`}>
+                      {conn ? conn.message : aiMsg?.text}
+                    </p>
+                  )}
                 </div>
-                <div className="tl-set-row col">
-                  <div className="lhs">
-                    <div className="name">Model</div>
-                    <div className="desc">Defaults to the best-value model; the chip shows the going rate for heavy vs. light models.</div>
+                )}
+              </details>
+            </div>
+          </div>
+        </section>
+
+        {/* ═══════════════ 2 · PRIVACY ═══════════════ */}
+        <section className="section">
+          <h3 className="section-h">Privacy</h3>
+
+          {/* Trust card — one calm statement (FT-21) */}
+          <div className="card">
+            <div className="trust">
+              <div className="trust-head">
+                <span className="shield">
+                  <Icon d={ICON.shield} size={17} />
+                </span>
+                <h3>Everything stays on this Mac</h3>
+              </div>
+              <p className="trust-body">
+                Your books never leave this computer. When you ask about a passage, only that one
+                passage is sent to get an answer — never the whole book. Nothing is saved unless you
+                choose to keep it as a note.
+              </p>
+              <ul className="trust-points">
+                <li><Icon d={ICON.check} size={16} /> Book files stay here — never uploaded.</li>
+                <li><Icon d={ICON.check} size={16} /> Exports hold your own words — notes, reflections, and short quotes.</li>
+                <li><Icon d={ICON.check} size={16} /> An answer becomes a note only when you save it.</li>
+              </ul>
+              <p className="trust-mode">
+                <Icon d={ICON.clock} size={15} />
+                {mode === "local" ? (
+                  <span>
+                    You're using <b>On this Mac only</b>, so nothing is sent — every answer is worked
+                    out here and stays on this Mac.
+                  </span>
+                ) : mode === "own_key" ? (
+                  <span>
+                    You're using <b>your own {aiProviderLabel(provider)}</b>, so the passages you ask
+                    about are sent there to be answered. To keep everything on this Mac, switch to{" "}
+                    <b>On this Mac only</b> above.
+                  </span>
+                ) : (
+                  <span>
+                    You're using the <b>included assistant</b>, so the passages you ask about are sent
+                    to be answered. To keep everything on this Mac, switch to <b>On this Mac only</b>{" "}
+                    above.
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          {/* What's left this Mac — reframed audit (FT-12) */}
+          <div className="card">
+            <div className="audit-summary">
+              <div className="audit-lead">
+                <span className="ico"><Icon d={ICON.disk} size={16} /></span>
+                <div>
+                  <h3>What's left this Mac</h3>
+                  <p>
+                    {grouped.sentCount === 0
+                      ? "Nothing has been sent. When you ask about a passage, the single passage you selected is recorded here."
+                      : `${grouped.sentCount} passage${grouped.sentCount === 1 ? " was" : "s were"} sent to answer your questions. Each was a single passage you selected — never a whole book.`}
+                  </p>
+                </div>
+              </div>
+
+              <details className="audit">
+                <summary>
+                  <Icon d={ICON.chevron} size={15} className="chev" />
+                  Show what was sent
+                </summary>
+
+                {grouped.sentCount === 0 ? (
+                  <p className="audit-empty">Nothing has been sent.</p>
+                ) : (
+                  <div className="log">
+                    <div className="log-head">
+                      <span>What you asked</span>
+                      <span>Left this Mac</span>
+                    </div>
+                    {grouped.groups.map(([title, rows]) => (
+                      <div key={title}>
+                        <div className="log-group">
+                          {title} <span className="ct">· {rows.length}</span>
+                        </div>
+                        {rows.map((r) => (
+                          <div className="log-row" key={r.id}>
+                            <span className="log-what">
+                              {lensLabel(r.mode)} <span className="when">· {fmtWhen(r.created_at)}</span>
+                              {r.wrote_to_memory ? <span className="saved"> · saved as note</span> : null}
+                            </span>
+                            <span className="log-sent">
+                              <Icon d={ICON.up} size={14} /> Sent to assistant
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    {grouped.localOnly > 0 && (
+                      <p className="log-more">
+                        {grouped.localOnly} more never left this Mac — previews you didn't send.
+                      </p>
+                    )}
                   </div>
-                  <ModelSelect provider={providerDraft} value={modelDraft} onChange={setModelDraft} />
+                )}
+
+                <div className="audit-controls">
+                  <span className="retain">
+                    Keep this list for
+                    <span className="stepper">
+                      <span className="num">{retentionDraft}</span>
+                      <span className="arrows">
+                        <button type="button" aria-label="Keep longer" onClick={() => saveRetention(retentionDraft + 30)}>
+                          <Icon d={ICON.caretUp} size={11} />
+                        </button>
+                        <button type="button" aria-label="Keep shorter" onClick={() => saveRetention(Math.max(0, retentionDraft - 30))}>
+                          <Icon d={ICON.caretDown} size={11} />
+                        </button>
+                      </span>
+                    </span>
+                    days
+                  </span>
+                  <button type="button" className="btn" disabled={forgetting} onClick={forgetNow}>
+                    <Icon d={ICON.trash} size={15} /> {forgetting ? "Forgetting…" : "Forget now"}
+                  </button>
                 </div>
-              </>
-            )}
-
-            {providerDraft === "codex" && (
-              <div className="tl-set-row col">
-                <div className="lhs">
-                  <div className="name">ChatGPT sign-in</div>
-                  <div className="desc">Sign in once with your ChatGPT account — no API key needed. Stored in your Keychain, independent of the Codex CLI.</div>
-                </div>
-                <CodexLogin present={!!dto?.ai_codex_creds_present} onComplete={refresh} onSignedOut={refresh} />
-              </div>
-            )}
-
-            {/* Company mode activates via CompanyPanel, not the key/model Save flow. */}
-            {providerDraft !== "company" && (
-              <div className="tl-set-row">
-                <button className="tl-btn tl-btn-ghost" style={{ padding: "8px 14px", fontSize: 13 }} disabled={testing} onClick={testConnection}>
-                  {testing ? "Testing…" : "Test connection"}
-                </button>
-                <button className="tl-btn tl-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} disabled={savingAi} onClick={() => saveAi()}>
-                  {savingAi ? "Saving…" : "Save AI settings"}
-                </button>
-              </div>
-            )}
-            {(aiMsg || conn || modelsErr) && (
-              <div className="tl-set-row col">
-                {aiMsg && <p className={`tl-set-msg ${aiMsg.kind}`}>{aiMsg.text}</p>}
-                {conn && <p className={`tl-set-msg ${conn.reachable ? "ok" : "err"}`}>{conn.message}</p>}
-                {modelsErr && !conn && <p className="tl-set-msg" style={{ color: "var(--tl-muted)" }}>Couldn't list models: {modelsErr}</p>}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* ── AI usage + spend cap (B4) — reframed in company mode ── */}
-        <AiUsageCard provider={dto?.ai_provider} />
-
-        {/* ── Request history (audit) ── */}
-        {dto && <AiHistory retentionDays={dto.ai_requests_retention_days} onSettingsChanged={refresh} />}
-
-        {/* ── Quote safety ── */}
-        <div className="tl-set-group">
-          <span className="glabel">Quote safety</span>
-          <div className="tl-set-card">
-            <div className="tl-set-row col">
-              <div className="lhs">
-                <div className="name">Short quotes only</div>
-                <div className="desc">{dto?.quote_policy}</div>
-              </div>
-              <span className="val">Warns above {dto?.quote_warn_chars} characters.</span>
+                {forgetMsg && <p className="set-msg ok" style={{ padding: "0 20px 16px" }}>{forgetMsg}</p>}
+              </details>
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* ── Software updates (reader-initiated; never checks in the background) ── */}
-        <div className="tl-set-group">
-          <span className="glabel">Software</span>
-          <div className="tl-set-card">
-            <div className="tl-set-row col">
-              <div className="lhs">
-                <div className="name">Updates</div>
-                <div className="desc">Throughline only checks when you ask — never on its own. Updates are signed; an install downloads the new version and restarts the app.</div>
+        {/* ═══════════════ 3 · FILES ═══════════════ */}
+        <section className="section">
+          <h3 className="section-h">Files</h3>
+          <div className="card">
+            <div className="row row-flex">
+              <div className="row-main">
+                <p className="row-title">Export folder</p>
+                <p className="row-desc">Where your notes and exported books are saved.</p>
+                {exportMsg && <p className={`set-msg ${exportMsg.kind}`}>{exportMsg.text}</p>}
               </div>
-              <UpdateChecker />
+              <div className="row-control">
+                <button
+                  type="button"
+                  className="path-chip"
+                  disabled={savingExport}
+                  onClick={pickAndSaveFolder}
+                  aria-label="Change export folder"
+                >
+                  <Icon d={ICON.folder} size={15} />
+                  <span className="name">{exportFolderName}</span>
+                </button>
+              </div>
+            </div>
+            <div className="row row-flex">
+              <div className="row-main">
+                <p className="row-title">Your library</p>
+                <p className="row-desc">Your books live on this Mac and stay here.</p>
+              </div>
+              <div className="row-control">
+                <span className="quiet-line">
+                  <Icon d={ICON.shield} size={15} /> Kept on this Mac
+                </span>
+              </div>
             </div>
           </div>
-        </div>
+        </section>
+
+        {/* ═══════════════ 4 · ABOUT ═══════════════ */}
+        <section className="section">
+          <h3 className="section-h">About</h3>
+          <div className="card">
+            <div className="row row-flex">
+              <div className="row-main">
+                <p className="row-title">Quoting</p>
+                <p className="row-desc">
+                  Throughline keeps quotes short, for private study. You'll see a gentle note above
+                  about {dto?.quote_warn_chars ?? 300} characters — never a block.
+                </p>
+              </div>
+              <div className="row-control">
+                {/* The short-quote note is a fixed protection in this build
+                    (counsel-reviewed copyright posture), so it shows as on and
+                    isn't switchable off — honest, not a dead no-op control. */}
+                <button
+                  className="toggle"
+                  role="switch"
+                  aria-checked={true}
+                  aria-disabled={true}
+                  disabled
+                  aria-label="Note on long quotes (always on)"
+                />
+              </div>
+            </div>
+            <div className="row">
+              <div className="about-row">
+                <div className="row-main">
+                  <p className="row-title">Updates</p>
+                  <p className="row-desc">Throughline checks only when you ask — never on its own.</p>
+                </div>
+                <div className="about-control">
+                  <UpdateChecker />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <p className="meta footer-meta">No accounts. No tracking. Your reading is yours.</p>
       </div>
     </div>
   );
