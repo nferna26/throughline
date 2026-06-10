@@ -5,6 +5,19 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.4.2] - 2026-06-10
+
+### Changed
+
+- **Search is the whole library, instantly, offline.** Discover now searches
+  the entire public-domain catalogue — about 77,000 books — from a copy bundled
+  inside the app. Results appear as you type with no network round-trip, and
+  search keeps working even with no connection. This replaces the old live
+  search, which depended on an outside service that could (and did) go down,
+  leaving you with only a small built-in shelf. Downloading a book you've found
+  still fetches it on demand, as before. The search field now shows the true
+  size of the library you're searching.
+
 ## [0.4.1] - 2026-06-10
 
 The field-test patch: the first hour with v0.4.0 on a real Mac found nine
