@@ -2,30 +2,64 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import Discover from "./Discover";
-import type { DiscoverPage } from "../types";
+import type { DiscoverBook, DiscoverPage, ImportOutcome } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 const noop = () => {};
 
-// FT-07 (CORE-1040): when the live catalogue is unreachable, every search runs
-// against the bundled seed — 200 popular titles out of ~78,000. A zero-hit
-// there says nothing about the library, so the empty state must say what was
-// actually searched and invite a retry — never assert the book doesn't exist.
-function wire(page: DiscoverPage) {
-  vi.mocked(invoke).mockImplementation((cmd: string) => {
+// Search now runs entirely on-device against the FULL bundled catalogue:
+// cmd_discover_search is synchronous, network-free, and can never fail to reach
+// the library, so `offline` is always false and a zero-result is truthful
+// absence. The shelves come from the bundled seed (cmd_discover_seed).
+
+function book(id: number, title: string, author = "Someone"): DiscoverBook {
+  return {
+    id,
+    title,
+    author,
+    language: "en",
+    download_count: 1000 + id,
+    has_txt: true,
+    has_epub: true,
+    txt_url: `pg${id}.txt`,
+    epub_url: `pg${id}.epub`,
+  };
+}
+
+// Wire the two commands the screen calls. `search` answers cmd_discover_search
+// (mounted empty query + every typed query); `seed` answers cmd_discover_seed
+// (the idle shelves). By default the empty/mounted search reports the whole-
+// catalogue scale and the seed is empty (no shelves needed for these tests).
+function wire(opts: {
+  search: (query: string | null, page: number) => DiscoverPage;
+  seed?: (query: string | null, page: number) => DiscoverPage;
+  onImport?: () => ImportOutcome;
+}) {
+  const emptyPage: DiscoverPage = { count: 0, results: [], next_page: null, offline: false };
+  vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
+    const a = (args ?? {}) as Record<string, unknown>;
+    const query = (a.query ?? null) as string | null;
+    const page = (a.page ?? 1) as number;
     switch (cmd) {
-      case "cmd_discover_seed":
       case "cmd_discover_search":
-        return Promise.resolve(page);
+        return Promise.resolve(opts.search(query, page));
+      case "cmd_discover_seed":
+        return Promise.resolve(opts.seed ? opts.seed(query, page) : emptyPage);
+      case "cmd_import_from_gutendex":
+        return Promise.resolve(
+          opts.onImport
+            ? opts.onImport()
+            : ({ book: { id: "b1" }, created: true } as unknown as ImportOutcome),
+        );
       default:
         return Promise.resolve(undefined);
     }
   });
 }
 
-const EMPTY_OFFLINE: DiscoverPage = { count: 0, results: [], next_page: null, offline: true };
-const EMPTY_LIVE: DiscoverPage = { count: 0, results: [], next_page: null, offline: false };
+// The whole-catalogue size the mounted empty search reports (FT-37).
+const CATALOGUE_SIZE = 77386;
 
 async function searchFor(q: string) {
   render(<Discover onBack={noop} onPicked={noop} />);
@@ -34,44 +68,90 @@ async function searchFor(q: string) {
 
 beforeEach(() => vi.mocked(invoke).mockReset());
 
-describe("Discover — zero hits while the live catalogue is unreachable", () => {
-  it("says it only searched a starter shelf and never asserts absence", async () => {
-    wire(EMPTY_OFFLINE);
-    await searchFor("middlemarch");
-
-    // Wait out the 300ms debounce until the offline empty state lands.
-    await waitFor(() =>
-      expect(screen.getByText(/only searched a built-in shelf of popular titles/i)).toBeInTheDocument(),
-    );
-    // Never claim the book isn't in the public-domain library — we didn't look there.
-    expect(screen.queryByText(/isn['’]t in the public-domain library/i)).toBeNull();
-    // And a visible way to try the full library again.
-    expect(screen.getByRole("button", { name: /Try again/i })).toBeInTheDocument();
-  });
-
-  it("Try again re-runs the same search against the catalogue", async () => {
-    wire(EMPTY_OFFLINE);
-    await searchFor("middlemarch");
-    await waitFor(() => expect(screen.getByRole("button", { name: /Try again/i })).toBeInTheDocument());
-
-    const before = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "cmd_discover_search").length;
-    fireEvent.click(screen.getByRole("button", { name: /Try again/i }));
-    await waitFor(() => {
-      const calls = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "cmd_discover_search");
-      expect(calls.length).toBe(before + 1);
-      expect(calls[calls.length - 1][1]).toMatchObject({ query: "middlemarch" });
+describe("Discover — full on-device catalogue search", () => {
+  it("a zero-result search states truthful absence, never an offline excuse", async () => {
+    wire({
+      search: (query) =>
+        query == null
+          ? { count: CATALOGUE_SIZE, results: [], next_page: null, offline: false }
+          : { count: 0, results: [], next_page: null, offline: false },
     });
+    await searchFor("zzz-not-a-real-book");
+
+    // Wait out the 300ms debounce until the no-match state lands.
+    await waitFor(() =>
+      expect(screen.getByText(/No match in the public-domain library/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/try another title or author/i)).toBeInTheDocument();
+
+    // The whole library was searched — never claim offline or that we couldn't
+    // search the full library, and never hedge about a starter shelf.
+    expect(screen.queryByText(/offline/i)).toBeNull();
+    expect(screen.queryByText(/couldn.t search the full library/i)).toBeNull();
+    expect(screen.queryByText(/built-in shelf/i)).toBeNull();
+    expect(screen.queryByText(/only searched/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Try again/i })).toBeNull();
   });
 
-  it("a genuine live zero-hit still says the title isn't in the library", async () => {
-    wire(EMPTY_LIVE);
-    await searchFor("zzz-not-a-book");
+  it("shows the live catalogue scale from the mounted empty search (FT-37)", async () => {
+    wire({
+      search: (query) =>
+        query == null
+          ? { count: CATALOGUE_SIZE, results: [], next_page: null, offline: false }
+          : { count: 0, results: [], next_page: null, offline: false },
+      // Even if the seed had a different size, the scale must come from search.
+      seed: () => ({ count: 200, results: [], next_page: null, offline: false }),
+    });
+    render(<Discover onBack={noop} onPicked={noop} />);
 
+    // The search affordance surfaces the whole-catalogue count (77,386), read
+    // from the mounted empty search — formatted with thousands separators and
+    // never the 200-book seed number.
+    const input = await screen.findByLabelText(/Search all titles and authors/i);
     await waitFor(() =>
-      expect(screen.getByText(/isn['’]t in the public-domain library/i)).toBeInTheDocument(),
+      expect(input).toHaveAttribute("placeholder", "Search all 77,386 titles…"),
     );
-    // The full library WAS searched — no starter-shelf hedging, no retry nudge.
-    expect(screen.queryByText(/only searched a built-in shelf/i)).toBeNull();
-    expect(screen.queryByRole("button", { name: /Try again/i })).toBeNull();
+    expect(input).not.toHaveAttribute("placeholder", expect.stringContaining("200"));
+  });
+
+  it("renders real results for a matching query", async () => {
+    wire({
+      search: (query) =>
+        query == null
+          ? { count: CATALOGUE_SIZE, results: [], next_page: null, offline: false }
+          : {
+              count: 2,
+              results: [book(1342, "Pride and Prejudice", "Jane Austen"), book(11, "Alice in Wonderland", "Lewis Carroll")],
+              next_page: null,
+              offline: false,
+            },
+    });
+    await searchFor("austen");
+
+    await waitFor(() => expect(screen.getByText(/Pride and Prejudice/i)).toBeInTheDocument());
+    expect(screen.getByText(/Jane Austen/i)).toBeInTheDocument();
+    // The count line reflects the full-catalogue match total ("2 results for …").
+    expect(screen.getByText(/results for/i).textContent).toMatch(/2\s*results for/i);
+  });
+
+  it("Get imports a result and pauses on the saved confirmation", async () => {
+    const outcome = { book: { id: "b1", title: "Pride and Prejudice" }, created: true } as unknown as ImportOutcome;
+    wire({
+      search: (query) =>
+        query == null
+          ? { count: CATALOGUE_SIZE, results: [], next_page: null, offline: false }
+          : { count: 1, results: [book(1342, "Pride and Prejudice", "Jane Austen")], next_page: null, offline: false },
+      onImport: () => outcome,
+    });
+    await searchFor("austen");
+
+    await waitFor(() => expect(screen.getByText(/Pride and Prejudice/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /Get Pride and Prejudice/i }));
+
+    // A newly-created book pauses on the calm "Saved to your library" hand-off.
+    await waitFor(() => expect(screen.getByText(/Saved to your library/i)).toBeInTheDocument());
+    const importCalls = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "cmd_import_from_gutendex");
+    expect(importCalls.length).toBe(1);
+    expect(importCalls[0][1]).toMatchObject({ book: { txt_url: "pg1342.txt", epub_url: "pg1342.epub" } });
   });
 });
