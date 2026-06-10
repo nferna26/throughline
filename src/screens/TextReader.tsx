@@ -10,6 +10,7 @@ import { useDialog } from "../hooks/useDialog";
 import type { BookSection, Note, ReadingSession, TodayCard, ReaderMode, SettingsDto } from "../types";
 import { NOTE_TYPES, errorMessage, makeCharLocator, parseLocator } from "../types";
 import { locatorHint } from "../locatorHint";
+import { endReached } from "../sectionCompletion";
 import { reduceMargin, initialMarginState, marginVisible } from "../marginPanel";
 
 interface Props {
@@ -52,6 +53,11 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   );
   const [session, setSession] = useState<ReadingSession | null>(null);
   const [visited, setVisited] = useState<Set<string>>(new Set());
+  // Sections whose END the reader's viewport actually reached this sitting
+  // (endReached, ../sectionCompletion): updated on scroll, and measured once
+  // after a section's text paints so a section that fits one screen — which
+  // never fires a scroll event — can still be finished by reading it.
+  const [reachedEnd, setReachedEnd] = useState<Set<string>>(new Set());
   const [fontSize, setFontSize] = useState<number>(
     () => parseInt(localStorage.getItem("tl.fontSize") || "18", 10)
   );
@@ -244,6 +250,28 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const paragraphRefs = useRef<Map<number, HTMLParagraphElement>>(new Map());
 
+  const markEndReached = useCallback((sectionId: string) => {
+    setReachedEnd((prev) => {
+      if (prev.has(sectionId)) return prev;
+      const next = new Set(prev);
+      next.add(sectionId);
+      return next;
+    });
+  }, []);
+
+  // One measurement after the current section's text paints: a section shorter
+  // than the viewport never scrolls, so this is its only chance to count as
+  // read to the end. Gated on textSectionId so it never measures stale text,
+  // and on a laid-out viewport (clientHeight > 0) so a hidden container can
+  // never complete a section by accident.
+  useEffect(() => {
+    const el = containerRef.current;
+    const sec = assignableSections[currentIdx];
+    if (!el || !sec || textSectionId !== sec.id) return;
+    if (el.clientHeight > 0 && endReached(el)) markEndReached(sec.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [textSectionId, currentIdx, assignableSections, markEndReached]);
+
   function scrollToOffset(within: number) {
     if (!containerRef.current) return;
     let best: HTMLParagraphElement | null = null;
@@ -263,7 +291,8 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
 
   function handleScroll() {
     if (!containerRef.current) return;
-    const scrollTop = containerRef.current.scrollTop;
+    const container = containerRef.current;
+    const scrollTop = container.scrollTop;
     let best: { off: number; top: number } | null = null;
     for (const [off, el] of paragraphRefs.current.entries()) {
       const top = el.offsetTop;
@@ -277,6 +306,9 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     setTopOffset(off);
     const sec = assignableSections[currentIdx];
     if (sec) {
+      // The viewport's bottom reaching the end of the text is what finishes
+      // the section — sticky for the rest of the sitting once it happens.
+      if (endReached(container)) markEndReached(sec.id);
       const baseOffset = parseInt(sec.start_locator || "0", 10);
       const total = (sec.estimated_units || text.length) || 1;
       const pct = Math.min(100, Math.max(0, (off / total) * 100));
@@ -301,18 +333,16 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   }, []);
 
   // Sections "completed" this sitting: every visited section we've moved past,
-  // plus the current one if scroll reached its end. Shared by the recap preview
-  // and the actual finalize so the numbers the reader sees match what's saved.
+  // plus the current one if the viewport reached its end. Shared by the recap
+  // preview and the actual finalize so the numbers the reader sees match what's
+  // saved.
   function completedSectionIds(): string[] {
     const sec = assignableSections[currentIdx];
     const completed: string[] = [];
     for (const v of visited) {
       if (v !== sec?.id) completed.push(v);
     }
-    if (sec) {
-      const total = sec.estimated_units || text.length || 1;
-      if (topOffset / total >= 0.95) completed.push(sec.id);
-    }
+    if (sec && reachedEnd.has(sec.id)) completed.push(sec.id);
     return completed;
   }
 
