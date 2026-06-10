@@ -31,6 +31,17 @@
   --tl-alert-soft:  color-mix(in oklab, var(--tl-alert) 13%, transparent);
   --tl-paper:       color-mix(in oklab, var(--tl-panel) 60%, var(--tl-bg));
 
+  /* ── Reading page (the "sheet" on the desk) ──
+     --tl-desk  : the field the page floats in — a hair deeper than --tl-bg so the
+                  surrounding whitespace reads as intentional desk space.
+     --tl-sheet : the page itself — a whisper warmer/lighter than the desk, so it
+                  lifts off the field without becoming a loud card.
+     --tl-sheet-edge : the hairline that draws the page's left/right edge. */
+  --tl-desk:        color-mix(in oklab, var(--tl-bg) 92%, var(--tl-ink));
+  --tl-sheet:       color-mix(in oklab, var(--tl-panel) 78%, var(--tl-bg));
+  --tl-sheet-edge:  color-mix(in oklab, var(--tl-ink) 7%, transparent);
+  --tl-drop-cap:    color-mix(in oklab, var(--tl-ink) 88%, var(--tl-accent));
+
   /* ── Type families ── */
   --tl-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
              system-ui, sans-serif;
@@ -76,6 +87,13 @@
   --tl-warn-soft:   color-mix(in oklab, var(--tl-warn) 18%, transparent);
   --tl-alert-soft:  color-mix(in oklab, var(--tl-alert) 18%, transparent);
   --tl-paper:       color-mix(in oklab, var(--tl-panel) 70%, var(--tl-bg));
+
+  /* Dark desk + sheet: the page is a touch LIGHTER than the desk it sits on
+     (raised, never glaring); the edge hairline is a faint light line. */
+  --tl-desk:        color-mix(in oklab, var(--tl-bg) 94%, black);
+  --tl-sheet:       color-mix(in oklab, var(--tl-panel) 82%, var(--tl-bg));
+  --tl-sheet-edge:  color-mix(in oklab, var(--tl-ink) 10%, transparent);
+  --tl-drop-cap:    color-mix(in oklab, var(--tl-ink) 82%, var(--tl-accent));
 
   --tl-shadow-sm: 0 1px 2px rgba(0,0,0,0.30);
   --tl-shadow-md: 0 1px 2px rgba(0,0,0,0.30), 0 12px 28px -14px rgba(0,0,0,0.6);
@@ -663,26 +681,55 @@
 .tl-readscroll { flex: 1; min-height: 0; overflow-y: auto; background: var(--tl-paper); display: flex; flex-direction: column; }
 .tl-readscroll::-webkit-scrollbar { width: 11px; }
 .tl-readscroll::-webkit-scrollbar-thumb { background: var(--tl-ink-10); border-radius: 99px; border: 3px solid transparent; background-clip: padding-box; }
-.tl-readcol { margin: 0 auto; padding: var(--tl-10) var(--tl-7); font-family: var(--tl-serif); line-height: 1.66; color: var(--tl-ink); }
-.tl-readcol p { margin: 0 0 1.1em; text-wrap: pretty; white-space: pre-wrap; }
+/* The reading body: serif, a comfortable measure, generous leading and
+   paragraph rhythm. Inner padding gives the page its margins; the centered
+   max-width (set inline from the line-width control) keeps the measure ~60–72ch. */
+.tl-readcol {
+  margin: 0 auto; padding: var(--tl-10) var(--tl-8);
+  font-family: var(--tl-serif); line-height: 1.68; color: var(--tl-ink);
+}
+.tl-readcol p { margin: 0 0 1.15em; text-wrap: pretty; white-space: pre-wrap; }
+.tl-readcol p:last-child { margin-bottom: 0; }
+/* True serif italics for inline emphasis (em ranges from the structure sidecar). */
+.tl-readcol em { font-style: italic; font-synthesis: none; }
+.tl-readcol strong { font-weight: 650; }
 /* Structured (EPUB-derived) text: heading + blockquote roles are applied to the
    <p> itself — never a heading tag — so each block stays a `p[data-offset]` and
    the reader's selection anchoring keeps working. Offsets are never mutated. */
 .tl-readcol p.tl-h1, .tl-readcol p.tl-h2, .tl-readcol p.tl-h3,
 .tl-readcol p.tl-h4, .tl-readcol p.tl-h5, .tl-readcol p.tl-h6 {
-  font-weight: 700; line-height: 1.25; margin: 1.7em 0 0.55em;
-  color: var(--tl-ink); text-wrap: balance;
+  font-weight: 600; line-height: 1.22; color: var(--tl-ink); text-wrap: balance;
 }
-.tl-readcol p.tl-h1 { font-size: 1.6em; }
-.tl-readcol p.tl-h2 { font-size: 1.36em; }
-.tl-readcol p.tl-h3 { font-size: 1.18em; }
-.tl-readcol p.tl-h4 { font-size: 1.07em; }
+/* h1 / h2 read like real chapter openers: centered, small-caps, letter-spaced,
+   with generous air above and below. h1 also carries a hairline rule beneath. */
+.tl-readcol p.tl-h1 {
+  font-size: 1.5em; text-align: center; margin: 2.1em 0 1.1em;
+  font-variant-caps: small-caps; letter-spacing: 0.06em;
+  padding-bottom: 0.5em;
+  border-bottom: 1px solid var(--tl-sheet-edge);
+}
+.tl-readcol p.tl-h2 {
+  font-size: 1.26em; text-align: center; margin: 1.9em 0 0.9em;
+  font-variant-caps: small-caps; letter-spacing: 0.05em;
+}
+.tl-readcol p.tl-h3 { font-size: 1.16em; margin: 1.7em 0 0.5em; }
+.tl-readcol p.tl-h4 { font-size: 1.06em; margin: 1.5em 0 0.4em; }
 .tl-readcol p.tl-h5, .tl-readcol p.tl-h6 {
-  font-size: 0.92em; letter-spacing: 0.04em; text-transform: uppercase;
-  opacity: 0.8; font-weight: 600;
+  font-size: 0.9em; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--tl-muted); font-weight: 600; margin: 1.4em 0 0.4em;
 }
 .tl-readcol p.tl-h1:first-child, .tl-readcol p.tl-h2:first-child,
 .tl-readcol p.tl-h3:first-child { margin-top: 0; }
+/* Drop cap / raised initial on the first PROSE paragraph of a section. Done with
+   ::first-letter so NO text/DOM node is added — char offsets, selection, and
+   note anchoring stay exact. The paragraph is not indented (it opens the page). */
+.tl-readcol p.tl-dropcap { text-indent: 0; }
+.tl-readcol p.tl-dropcap::first-letter {
+  float: left; font-family: var(--tl-serif); font-weight: 500;
+  font-size: 3.1em; line-height: 0.82;
+  padding: 0.04em 0.08em 0 0; margin: 0.02em 0.02em 0 0;
+  color: var(--tl-drop-cap);
+}
 .tl-readcol p.tl-blockquote {
   margin: 1.1em 0; padding: 0.15em 0 0.15em 1em; font-style: italic;
   border-left: 3px solid color-mix(in oklab, var(--tl-accent) 45%, transparent);
@@ -701,18 +748,45 @@
 }
 
 /* ════════ Companion side panel (notes / highlights / tutor cards) ════════ */
-/* The reader body is a horizontal flex row: the scroll-region (with a centered,
-   window-responsive reading column) grows to fill, and the side panel is an
-   IN-FLOW sibling that only takes space when shown. No absolute rail, no
-   reserved gutter — so an empty book centers in the full window, and a spawned
-   tutor card is always visible because cards flow in document order. */
-.tl-reader-body { display: flex; align-items: stretch; flex: 1; min-height: 0; }
-.tl-reader-main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow-y: auto; background: var(--tl-paper); display: flex; flex-direction: column; }
+/* The reader body is a horizontal flex row: the scroll-region (the DESK) grows
+   to fill, and the side panel is an IN-FLOW sibling that only takes space when
+   shown. The reading column is a "sheet" that sits on the desk.
+
+   STABLE CENTER (no text-shift on open/close): the desk reserves the margin's
+   width on its right whenever the panel is CLOSED, mirroring the space the panel
+   + resizer occupy when OPEN. So the desk's CONTENT box — the box the centered
+   sheet is laid out in — is the same width in both states, and the sheet never
+   jumps. `--tl-margin-reserve` is set inline from the live panel width. */
+.tl-reader-body { display: flex; align-items: stretch; flex: 1; min-height: 0; background: var(--tl-desk); }
+.tl-reader-main {
+  position: relative; flex: 1; min-width: 0; min-height: 0; overflow-y: auto;
+  background: var(--tl-desk); display: flex; flex-direction: column;
+  transition: padding-right 160ms ease;
+}
+/* Closed: reserve the margin's width on the right so the sheet stays centered in
+   the same box it will sit in once the panel opens (resizer ~6px included). */
+.tl-reader-body.tl-margin-closed .tl-reader-main {
+  padding-right: var(--tl-margin-reserve, 0px);
+}
 .tl-reader-main::-webkit-scrollbar { width: 11px; }
 .tl-reader-main::-webkit-scrollbar-thumb { background: var(--tl-ink-10); border-radius: 99px; border: 3px solid transparent; background-clip: padding-box; }
-/* The reading column centers within the scroll-region's ACTUAL width (which
-   shrinks when the panel opens), capped at the reader's chosen line width. */
-.tl-reader-main .tl-readcol { margin: 0 auto; width: 100%; box-sizing: border-box; }
+/* The reading column — the page/sheet — centers within the desk's reserved box,
+   capped at the reader's chosen line width. A quiet surface (a hair warmer than
+   the desk), a hairline edge, and a whisper-soft shadow make the surrounding
+   whitespace read as intentional desk space, not a marooned column. Near-flat:
+   the shadow is barely-there, never a card. min-height fills the desk so a short
+   section's page still reaches the fold. */
+.tl-reader-main .tl-readcol {
+  margin: var(--tl-7) auto; width: 100%; box-sizing: border-box;
+  background: var(--tl-sheet);
+  border: 1px solid var(--tl-sheet-edge);
+  border-radius: var(--tl-r-md);
+  box-shadow: 0 1px 1px rgba(28,27,24,0.03), 0 14px 40px -28px rgba(28,27,24,0.28);
+  min-height: calc(100% - var(--tl-8));
+}
+[data-theme="dark"] .tl-reader-main .tl-readcol {
+  box-shadow: 0 1px 1px rgba(0,0,0,0.25), 0 16px 44px -28px rgba(0,0,0,0.6);
+}
 /* A failed section load is said out loud in the column, with a retry — never a
    silent blank page (FT-33). The container itself keeps a quiet focus ring from
    `.tl-root :focus-visible` (it is keyboard-focusable for paging, FT-31). */
@@ -727,10 +801,11 @@
 }
 .tl-panel-resizer:hover, .tl-panel-resizer.dragging { background: var(--tl-accent-soft); }
 
-/* Collapsed margin: a slim grab at the right edge to slide the panel back open. */
+/* Collapsed margin: a slim grab at the desk's right edge to slide the panel back
+   open. No hairline against the desk (it would split the reserved gutter) — it
+   only warms on hover. */
 .tl-margin-reopen {
   flex: 0 0 8px; cursor: col-resize; background: transparent;
-  border-left: 1px solid var(--tl-line);
   transition: background 150ms ease;
 }
 .tl-margin-reopen:hover { background: var(--tl-accent-soft); }
@@ -749,8 +824,10 @@
 }
 .tl-sidepanel-empty { font-size: 13px; color: var(--tl-muted); line-height: 1.5; font-family: var(--tl-sans); }
 @media (max-width: 880px) {
-  /* Too narrow for a side-by-side panel — stack it under the text. */
+  /* Too narrow for a side-by-side panel — stack it under the text. No reserved
+     gutter here: the sheet uses the full narrow desk so the measure isn't crushed. */
   .tl-reader-body { flex-direction: column; }
+  .tl-reader-body.tl-margin-closed .tl-reader-main { padding-right: 0; }
   .tl-panel-resizer, .tl-margin-reopen { display: none; }
   .tl-sidepanel { flex: none; width: auto !important; border-left: none; border-top: 1px solid var(--tl-line); }
 }
