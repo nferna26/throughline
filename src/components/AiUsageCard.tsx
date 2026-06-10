@@ -40,7 +40,7 @@ export default function AiUsageCard() {
           <div className="lhs">
             <div className="name">Spend so far</div>
             <div className="desc">
-              Estimated from token usage at catalogued prices (as of {u?.pricing_verified_at ?? "—"}).
+              Estimated from your recorded usage at catalogued prices (as of {u?.pricing_verified_at ?? "—"}).
               With your own key you pay your provider directly.
             </div>
           </div>

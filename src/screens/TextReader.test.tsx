@@ -398,6 +398,30 @@ describe("TextReader selection toolbar — Escape dismiss + a11y", () => {
   });
 });
 
+describe("TextReader New-note modal — humanized position", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("shows the chapter and a plain position, never a raw char: locator", async () => {
+    mockBackend([]);
+    // Resume mid-section so the modal's position is meaningfully non-zero:
+    // char 320 of a 1000-char section → "32% in".
+    const today = card();
+    today.resume_locator = "char:320";
+    today.resume_percent = 32;
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    const modal = screen.getByRole("dialog");
+    // Where the note lives, in reader words: the chapter + how far in.
+    expect(modal.textContent).toContain("Chapter: Chapter 1");
+    expect(modal.textContent).toContain("32% in");
+    // The raw locator string is plumbing — it never reaches the reader.
+    expect(modal.textContent).not.toMatch(/char:/);
+    expect(modal.textContent).not.toMatch(/Locator/i);
+  });
+});
+
 describe("TextReader Deep Study — stale-section guard", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();

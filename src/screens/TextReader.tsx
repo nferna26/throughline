@@ -9,6 +9,7 @@ import { segmentParagraph, blockRoleFor, type StyleRange } from "../paragraphStr
 import { useDialog } from "../hooks/useDialog";
 import type { BookSection, Note, ReadingSession, TodayCard, ReaderMode, SettingsDto } from "../types";
 import { NOTE_TYPES, makeCharLocator, parseLocator } from "../types";
+import { locatorHint } from "../locatorHint";
 import { reduceMargin, initialMarginState, marginVisible } from "../marginPanel";
 
 interface Props {
@@ -788,6 +789,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
           sessionId={session?.id ?? null}
           chapter={currentSection.label}
           locator={locator}
+          positionHint={locatorHint(locator, { start: secBase, length: Math.max(0, secEnd - secBase) })}
           onClose={() => setShowNote(false)}
         />
       )}
@@ -1029,7 +1031,10 @@ function NotePanel(props: {
   bookId: string;
   sessionId: string | null;
   chapter: string;
+  /** Stored with the note (plumbing) — never rendered; see positionHint. */
   locator: string;
+  /** Reader-facing "32% in"-style position, or null when it adds nothing. */
+  positionHint: string | null;
   onClose: () => void;
 }) {
   const [noteType, setNoteType] = useState<string>("Reflection");
@@ -1082,7 +1087,7 @@ function NotePanel(props: {
           </select>
         </label>
 
-        <div className="row"><span>Chapter: {props.chapter}</span><span>Locator: {props.locator}</span></div>
+        <div className="row"><span>Chapter: {props.chapter}</span>{props.positionHint && <span>{props.positionHint}</span>}</div>
 
         <label>Note
           <textarea

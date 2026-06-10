@@ -186,6 +186,19 @@ describe("MarginTutorCard — brief default + go deeper", () => {
   });
 });
 
+describe("MarginTutorCard — quote chip", () => {
+  it("shows the passage itself, never a raw char: locator", async () => {
+    localStorage.setItem("rg.tutorEnabled", "true");
+    const { container } = render(card());
+    // The quote is the anchor the reader cares about…
+    expect(await screen.findByText(/the unjust man is happy/)).toBeInTheDocument();
+    // …and the chip carries no locator plumbing.
+    const chip = container.querySelector(".tl-quotechip");
+    expect(chip).not.toBeNull();
+    expect(chip!.textContent).not.toMatch(/char:/);
+  });
+});
+
 describe("MarginTutorCard — cap-hit three doors (CM6)", () => {
   // Company mode, proxy says the allowance is spent: cmd_ai_ask rejects with
   // CapExhausted BEFORE any stream — the card must show three doors, free first.

@@ -429,14 +429,14 @@ export default function MarginTutorCard(props: {
         </button>
       </div>
 
-      {/* collapsed quote chip: the passage + locator, click to expand */}
+      {/* collapsed quote chip: the passage itself is the anchor the reader
+          cares about — no raw locator plumbing. Click to expand. */}
       <button
         className={`tl-quotechip${quoteOpen ? " is-open" : ""}`}
         onClick={(e) => { e.stopPropagation(); setQuoteOpen((o) => !o); }}
         title={quoteOpen ? "Hide full passage" : "Show full passage"}
       >
         <span className="tl-quotechip-text">“{draft.anchoredText}”</span>
-        {draft.locator && <span className="tl-quotechip-loc">{draft.locator}</span>}
       </button>
 
       {capExhausted ? (
