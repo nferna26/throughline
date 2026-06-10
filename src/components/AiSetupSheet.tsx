@@ -218,9 +218,14 @@ export default function AiSetupSheet(props: {
     setDetect("checking");
     setLocalModel(null);
     try {
-      // Point the probe at the local endpoint (loopback-validated backend-side).
-      await invoke("cmd_set_ai_settings", { baseUrl: LOCAL_BASE_URL }).catch(() => {});
-      const conn = await invoke<ConnTestResult>("cmd_test_ai_connection", { provider: "local" });
+      // Probe the local endpoint as a DRAFT (loopback-validated backend-side) —
+      // never persist it just to point the probe, or merely opening this panel
+      // would overwrite a reader's saved custom base URL. Persisting happens
+      // only on the explicit "Use this model & answer" (useLocalModel).
+      const conn = await invoke<ConnTestResult>("cmd_test_ai_connection", {
+        provider: "local",
+        baseUrl: LOCAL_BASE_URL,
+      });
       if (!conn.reachable) {
         setDetect("no_server");
         return;

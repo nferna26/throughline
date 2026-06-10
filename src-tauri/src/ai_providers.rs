@@ -316,10 +316,16 @@ async fn emit_usage(tx: &mpsc::Sender<StreamEvent>, u: &TokenUsage) {
     }
 }
 
-// pump_sse is Anthropic-only (OpenAI/Local go through ai_client::run_chat_call),
-// so it accumulates Anthropic usage from message_start/message_delta inline.
-async fn pump_sse<F>(resp: reqwest::Response, tx: mpsc::Sender<StreamEvent>, parse: F)
-where
+// pump_sse is Anthropic-shape-only (OpenAI/Local go through
+// ai_client::run_chat_call), so it accumulates Anthropic usage from
+// message_start/message_delta inline. The caller's per-provider breaker is fed
+// from the stream's outcome, mirroring run_chat_call's placement.
+async fn pump_sse<F>(
+    resp: reqwest::Response,
+    tx: mpsc::Sender<StreamEvent>,
+    parse: F,
+    breaker: &'static crate::circuit_breaker::Breaker,
+) where
     F: Fn(&str) -> SseOutcome,
 {
     let mut stream = resp.bytes_stream();
@@ -329,6 +335,7 @@ where
         let chunk = match chunk {
             Ok(b) => b,
             Err(e) => {
+                breaker.on_failure();
                 let _ = tx
                     .send(StreamEvent::Error {
                         message: format!("stream error: {e}"),
@@ -347,11 +354,13 @@ where
                     let _ = tx.send(StreamEvent::Delta { text: t }).await;
                 }
                 SseOutcome::Done => {
+                    breaker.on_success();
                     emit_usage(&tx, &usage).await;
                     let _ = tx.send(StreamEvent::Done).await;
                     return;
                 }
                 SseOutcome::Error(m) => {
+                    breaker.on_failure();
                     let _ = tx.send(StreamEvent::Error { message: m }).await;
                     return;
                 }
@@ -359,9 +368,15 @@ where
             }
         }
     }
+    breaker.on_success();
     emit_usage(&tx, &usage).await;
     let _ = tx.send(StreamEvent::Done).await;
 }
+
+/// Fixed reader-facing message for a corrupted SSE stream. NEVER interpolate the
+/// payload or the parse error — mid-stream both carry book-derived text
+/// (invariant 1). Matches the OpenAI-compatible path's copy in `ai_client`.
+const STREAM_INTERRUPTED_MSG: &str = "The answer stream was interrupted — try again.";
 
 /// Strip the `data:` prefix from an SSE line, returning the JSON payload (or None
 /// for `event:`/comment/blank lines that carry no data).
@@ -388,7 +403,10 @@ pub fn parse_anthropic_line(line: &str) -> SseOutcome {
     };
     let v: serde_json::Value = match serde_json::from_str(payload) {
         Ok(v) => v,
-        Err(_) => return SseOutcome::Ignore,
+        // A `data:` payload that fails to parse is a transport fault — surfacing
+        // it (with fixed text) matches the OpenAI path's strictness instead of
+        // silently truncating the answer and ending with a clean Done.
+        Err(_) => return SseOutcome::Error(STREAM_INTERRUPTED_MSG.to_string()),
     };
     match v.get("type").and_then(|x| x.as_str()) {
         Some("content_block_delta") => {
@@ -451,6 +469,11 @@ async fn run_anthropic(
     max_tokens: Option<u32>,
     timeout: Duration,
 ) -> Result<mpsc::Receiver<StreamEvent>> {
+    // Fail fast if the breaker is Open — don't hand the reader a 180s hang.
+    let breaker = crate::ai_client::breaker_for(AiProvider::Anthropic);
+    if let Err(e) = breaker.check() {
+        return Err(anyhow!("AI service unavailable: {}", e));
+    }
     let client = reqwest::Client::builder()
         .timeout(timeout)
         .build()
@@ -470,8 +493,11 @@ async fn run_anthropic(
             .await;
         let _ = &model;
         match resp {
-            Ok(r) if r.status().is_success() => pump_sse(r, tx, parse_anthropic_line).await,
+            Ok(r) if r.status().is_success() => {
+                pump_sse(r, tx, parse_anthropic_line, breaker).await
+            }
             Ok(r) => {
+                breaker.on_failure();
                 let status = r.status();
                 let snippet = r.text().await.unwrap_or_default();
                 let _ = tx
@@ -481,6 +507,7 @@ async fn run_anthropic(
                     .await;
             }
             Err(e) => {
+                breaker.on_failure();
                 let _ = tx
                     .send(StreamEvent::Error {
                         message: format!("Anthropic request failed: {e}"),
@@ -505,6 +532,12 @@ async fn run_company(
     max_tokens: Option<u32>,
     timeout: Duration,
 ) -> Result<mpsc::Receiver<StreamEvent>> {
+    // Fail fast if the breaker is Open — a hung relay must not hand company
+    // readers the full request timeout on every retry.
+    let breaker = crate::ai_client::breaker_for(AiProvider::Company);
+    if let Err(e) = breaker.check() {
+        return Err(anyhow!("AI service unavailable: {}", e));
+    }
     let client = reqwest::Client::builder()
         .timeout(timeout)
         .build()
@@ -518,18 +551,25 @@ async fn run_company(
         .json(&body)
         .send()
         .await
-        .map_err(|e| anyhow!("Throughline AI request failed: {e}"))?;
+        .map_err(|e| {
+            breaker.on_failure();
+            anyhow!("Throughline AI request failed: {e}")
+        })?;
     let status = resp.status();
     if status.as_u16() == 402 {
+        // An authoritative metering refusal proves the relay is healthy — it
+        // must never open the circuit and mask CapExhausted as unavailability.
+        breaker.on_success();
         return Err(anyhow!(CAP_EXHAUSTED_SENTINEL));
     }
     if !status.is_success() {
+        breaker.on_failure();
         let snippet = resp.text().await.unwrap_or_default();
         return Err(anyhow!(humanize_http("Throughline AI", status, &snippet)));
     }
     let (tx, rx) = mpsc::channel::<StreamEvent>(64);
     tokio::spawn(async move {
-        pump_sse(resp, tx, parse_anthropic_line).await;
+        pump_sse(resp, tx, parse_anthropic_line, breaker).await;
     });
     Ok(rx)
 }
@@ -938,7 +978,8 @@ pub fn parse_codex_line(line: &str) -> SseOutcome {
     };
     let v: serde_json::Value = match serde_json::from_str(payload) {
         Ok(v) => v,
-        Err(_) => return SseOutcome::Ignore,
+        // Same transport-fault contract as `parse_anthropic_line`.
+        Err(_) => return SseOutcome::Error(STREAM_INTERRUPTED_MSG.to_string()),
     };
     match v.get("type").and_then(|x| x.as_str()) {
         Some("response.output_text.delta") => match v.get("delta").and_then(|x| x.as_str()) {
@@ -986,6 +1027,11 @@ async fn run_codex(
     let mut creds = load_codex().ok_or_else(|| {
         anyhow!("No Codex login found. Sign in with ChatGPT in Settings → Assistance, or run `codex login`.")
     })?;
+    // Fail fast if the breaker is Open — don't hand the reader a 180s hang.
+    let breaker = crate::ai_client::breaker_for(AiProvider::Codex);
+    if let Err(e) = breaker.check() {
+        return Err(anyhow!("AI service unavailable: {}", e));
+    }
     let client = reqwest::Client::builder()
         .timeout(timeout)
         .build()
@@ -1005,8 +1051,9 @@ async fn run_codex(
     let (tx, rx) = mpsc::channel::<StreamEvent>(64);
     tokio::spawn(async move {
         match resp {
-            Ok(r) if r.status().is_success() => pump_sse(r, tx, parse_codex_line).await,
+            Ok(r) if r.status().is_success() => pump_sse(r, tx, parse_codex_line, breaker).await,
             Ok(r) => {
+                breaker.on_failure();
                 let status = r.status();
                 let snippet = r.text().await.unwrap_or_default();
                 let _ = tx
@@ -1016,6 +1063,7 @@ async fn run_codex(
                     .await;
             }
             Err(e) => {
+                breaker.on_failure();
                 let _ = tx
                     .send(StreamEvent::Error {
                         message: format!("Codex request failed: {e}"),
@@ -1089,11 +1137,18 @@ pub async fn test_provider(
             None => (false, None, "Add your Anthropic API key first.".to_string()),
         },
         AiProvider::Codex => test_codex(model, timeout).await,
-        AiProvider::Company => (
-            true,
-            Some(crate::settings::DEFAULT_ANTHROPIC_MODEL.to_string()),
-            "Throughline AI is active (Claude Sonnet, company-paid).".to_string(),
-        ),
+        AiProvider::Company => {
+            // The license is the Bearer credential; read it from the Keychain
+            // when the caller didn't thread one. Never logged.
+            match key.or_else(|| crate::keystore::get_key("company")) {
+                Some(license) => test_company(base_url, &license, timeout).await,
+                None => (
+                    false,
+                    None,
+                    "Activate Throughline AI in Settings → Assistance.".to_string(),
+                ),
+            }
+        }
         AiProvider::Disabled | AiProvider::Unset => {
             (false, None, "Choose a provider first.".to_string())
         }
@@ -1101,6 +1156,10 @@ pub async fn test_provider(
 }
 
 async fn test_openai(key: &str, timeout: Duration) -> ConnTest {
+    // Connection tests bypass the breaker `check()` (the operator wants a real
+    // probe even when it's Open) but STILL feed the outcome — a successful probe
+    // is the cheapest way to close the circuit. Mirrors ai_client::test_connection.
+    let breaker = crate::ai_client::breaker_for(AiProvider::OpenAi);
     let client = match reqwest::Client::builder().timeout(timeout).build() {
         Ok(c) => c,
         Err(e) => return (false, None, format!("client build: {e}")),
@@ -1112,6 +1171,7 @@ async fn test_openai(key: &str, timeout: Duration) -> ConnTest {
         .await
     {
         Ok(r) if r.status().is_success() => {
+            breaker.on_success();
             #[derive(Deserialize)]
             struct M {
                 id: String,
@@ -1136,6 +1196,7 @@ async fn test_openai(key: &str, timeout: Duration) -> ConnTest {
             )
         }
         Ok(r) => {
+            breaker.on_failure();
             let status = r.status();
             (
                 false,
@@ -1143,11 +1204,16 @@ async fn test_openai(key: &str, timeout: Duration) -> ConnTest {
                 humanize_http("OpenAI", status, &r.text().await.unwrap_or_default()),
             )
         }
-        Err(e) => (false, None, format!("OpenAI request failed: {e}")),
+        Err(e) => {
+            breaker.on_failure();
+            (false, None, format!("OpenAI request failed: {e}"))
+        }
     }
 }
 
 async fn test_anthropic(key: &str, model: &str, timeout: Duration) -> ConnTest {
+    // Bypass-with-feedback: no `check()`, but the probe's outcome feeds the breaker.
+    let breaker = crate::ai_client::breaker_for(AiProvider::Anthropic);
     let client = match reqwest::Client::builder().timeout(timeout).build() {
         Ok(c) => c,
         Err(e) => return (false, None, format!("client build: {e}")),
@@ -1161,13 +1227,18 @@ async fn test_anthropic(key: &str, model: &str, timeout: Duration) -> ConnTest {
         .send()
         .await
     {
-        Ok(r) if r.status().is_success() => (
-            true,
-            Some(model.to_string()),
-            format!("Connected to Anthropic ({model})."),
-        ),
+        Ok(r) if r.status().is_success() => {
+            breaker.on_success();
+            (
+                true,
+                Some(model.to_string()),
+                format!("Connected to Anthropic ({model})."),
+            )
+        }
         Ok(r) if r.status().as_u16() == 400 => {
-            // Auth passed (a 400 means the key worked but the body/model needs a tweak).
+            // Auth passed (a 400 means the key worked but the body/model needs a
+            // tweak) — the service answered, so the circuit is healthy.
+            breaker.on_success();
             (
                 true,
                 Some(model.to_string()),
@@ -1175,6 +1246,7 @@ async fn test_anthropic(key: &str, model: &str, timeout: Duration) -> ConnTest {
             )
         }
         Ok(r) => {
+            breaker.on_failure();
             let status = r.status();
             (
                 false,
@@ -1182,7 +1254,10 @@ async fn test_anthropic(key: &str, model: &str, timeout: Duration) -> ConnTest {
                 humanize_http("Anthropic", status, &r.text().await.unwrap_or_default()),
             )
         }
-        Err(e) => (false, None, format!("Anthropic request failed: {e}")),
+        Err(e) => {
+            breaker.on_failure();
+            (false, None, format!("Anthropic request failed: {e}"))
+        }
     }
 }
 
@@ -1216,13 +1291,19 @@ async fn test_codex(model: &str, timeout: Duration) -> ConnTest {
             }
         }
     }
+    // Bypass-with-feedback: no `check()`, but the probe's outcome feeds the breaker.
+    let breaker = crate::ai_client::breaker_for(AiProvider::Codex);
     match resp {
-        Ok(r) if r.status().is_success() => (
-            true,
-            Some(model.to_string()),
-            "Connected via your Codex login.".to_string(),
-        ),
+        Ok(r) if r.status().is_success() => {
+            breaker.on_success();
+            (
+                true,
+                Some(model.to_string()),
+                "Connected via your Codex login.".to_string(),
+            )
+        }
         Ok(r) => {
+            breaker.on_failure();
             let status = r.status();
             (
                 false,
@@ -1230,7 +1311,78 @@ async fn test_codex(model: &str, timeout: Duration) -> ConnTest {
                 humanize_http("Codex", status, &r.text().await.unwrap_or_default()),
             )
         }
-        Err(e) => (false, None, format!("Codex request failed: {e}")),
+        Err(e) => {
+            breaker.on_failure();
+            (false, None, format!("Codex request failed: {e}"))
+        }
+    }
+}
+
+/// Company-paid path: really probe the relay by GETting `/v1/credits` with the
+/// Bearer license. A 2xx whose body carries the proxy's explicit `ok` field
+/// proves the relay is up and the license is recognized; a transport error gets
+/// a fixed human message (reqwest's Display text is plumbing). Bypasses the
+/// breaker `check()` but feeds the outcome, like the other connection tests.
+async fn test_company(base_url: &str, license: &str, timeout: Duration) -> ConnTest {
+    let breaker = crate::ai_client::breaker_for(AiProvider::Company);
+    let client = match reqwest::Client::builder().timeout(timeout).build() {
+        Ok(c) => c,
+        Err(e) => return (false, None, format!("client build: {e}")),
+    };
+    let url = format!("{}/v1/credits", base_url.trim_end_matches('/'));
+    match client
+        .get(&url)
+        .header("authorization", format!("Bearer {license}"))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await.unwrap_or_default();
+            match body.get("ok").and_then(|v| v.as_bool()) {
+                Some(ok) => {
+                    // The relay answered authoritatively either way — healthy.
+                    breaker.on_success();
+                    let message = if ok {
+                        "Throughline AI is active (Claude Sonnet, company-paid).".to_string()
+                    } else {
+                        "Throughline AI is reachable, but your included allowance needs attention."
+                            .to_string()
+                    };
+                    (
+                        true,
+                        Some(crate::settings::DEFAULT_ANTHROPIC_MODEL.to_string()),
+                        message,
+                    )
+                }
+                None => {
+                    breaker.on_failure();
+                    (
+                        false,
+                        None,
+                        "Throughline AI answered unexpectedly. Try again shortly.".to_string(),
+                    )
+                }
+            }
+        }
+        Ok(r) => {
+            breaker.on_failure();
+            let status = r.status();
+            (
+                false,
+                None,
+                humanize_http("Throughline AI", status, &r.text().await.unwrap_or_default()),
+            )
+        }
+        Err(_) => {
+            breaker.on_failure();
+            // Fixed copy — transport detail (DNS/TLS/socket) is plumbing and
+            // must never reach the reader (mirrors COMPANY_UNREACHABLE_MSG).
+            (
+                false,
+                None,
+                "Can't reach Throughline AI right now.".to_string(),
+            )
+        }
     }
 }
 
@@ -1386,6 +1538,44 @@ mod tests {
             SseOutcome::Error(m) => assert_eq!(m, "boom"),
             _ => panic!("expected Error"),
         }
+    }
+
+    /// CORE-1027: a `data:` line that fails JSON parsing is a transport fault,
+    /// not noise — silently ignoring it truncates the answer while still ending
+    /// with a clean Done. Both named-event parsers must surface it with FIXED
+    /// text (mid-stream the payload is book-derived; invariant 1), matching the
+    /// OpenAI-compatible path's strictness in `ai_client`.
+    #[test]
+    fn malformed_data_lines_surface_as_generic_errors_not_silence() {
+        match parse_anthropic_line("data: {\"type\":\"content_block_delta\",\"delta\":{\"te") {
+            SseOutcome::Error(m) => {
+                assert_eq!(m, "The answer stream was interrupted — try again.");
+                assert!(
+                    !m.contains("content_block_delta"),
+                    "error text must never echo the payload: {m}"
+                );
+            }
+            _ => panic!("anthropic: malformed data line must surface, got Ignore/Delta/Done"),
+        }
+        match parse_codex_line("data: {\"type\":\"response.output_text.delta\",\"del") {
+            SseOutcome::Error(m) => {
+                assert_eq!(m, "The answer stream was interrupted — try again.")
+            }
+            _ => panic!("codex: malformed data line must surface, got Ignore/Delta/Done"),
+        }
+        // Non-data noise (event names, blanks, the [DONE] sentinel) stays ignored:
+        assert!(matches!(parse_anthropic_line("event: ping"), SseOutcome::Ignore));
+        assert!(matches!(parse_anthropic_line(""), SseOutcome::Ignore));
+        assert!(matches!(
+            parse_anthropic_line("data: [DONE]"),
+            SseOutcome::Ignore
+        ));
+        assert!(matches!(
+            parse_codex_line("event: response.created"),
+            SseOutcome::Ignore
+        ));
+        assert!(matches!(parse_codex_line(""), SseOutcome::Ignore));
+        assert!(matches!(parse_codex_line("data: [DONE]"), SseOutcome::Ignore));
     }
 
     #[test]

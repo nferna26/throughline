@@ -146,6 +146,37 @@ describe("AiSetupSheet — LM STUDIO detect", () => {
     expect(screen.getByText(/^Copy prompt$/i)).toBeInTheDocument();
   });
 
+  it("CORE-1034: detection probes the default URL as a DRAFT and never persists settings", async () => {
+    mocks.invoke.mockImplementation((cmd: string) => {
+      // A reader whose saved local server lives on a custom port.
+      if (cmd === "cmd_get_settings")
+        return Promise.resolve({ ai_codex_creds_present: false, ai_base_url: "http://localhost:8080/v1" });
+      if (cmd === "cmd_test_ai_connection")
+        return Promise.resolve({ reachable: true, first_model_id: "gemma-4-31b-it-mlx", message: "ok" });
+      return Promise.resolve({});
+    });
+    const onConnected = vi.fn();
+    render(sheet("lm_studio", onConnected));
+    expect(await screen.findByText(/Local model found/i)).toBeInTheDocument();
+    // The probe passes the draft endpoint to the backend (loopback-validated there)…
+    expect(mocks.invoke).toHaveBeenCalledWith(
+      "cmd_test_ai_connection",
+      expect.objectContaining({ provider: "local", baseUrl: "http://localhost:1234/v1" }),
+    );
+    // …and merely opening the panel never writes settings (the reader's custom
+    // base URL must survive the recovery panel).
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_set_ai_settings", expect.anything());
+    // Persisting stays where it belongs: the explicit "Use this model & answer".
+    fireEvent.click(screen.getByText(/Use this model & answer/i));
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith(
+        "cmd_set_ai_settings",
+        expect.objectContaining({ provider: "local", baseUrl: "http://localhost:1234/v1" }),
+      ),
+    );
+    await waitFor(() => expect(onConnected).toHaveBeenCalledWith("local"));
+  });
+
   it("RUNNING-BUT-NO-MODEL: explains the server is up but no model is loaded", async () => {
     mocks.invoke.mockImplementation((cmd: string) => {
       if (cmd === "cmd_get_settings") return Promise.resolve({ ai_codex_creds_present: false });
