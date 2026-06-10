@@ -76,6 +76,16 @@ describe("Settings — Your data trust summary", () => {
     expect(screen.getByText(/choose OpenAI or Anthropic with your own API key/i)).toBeInTheDocument();
   });
 
+  it("renders no shell command fragments anywhere a reader can see", async () => {
+    wire({});
+    const { container } = render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Local storage path/i)).toBeInTheDocument());
+    const text = container.textContent ?? "";
+    expect(text).not.toMatch(/rm\s+-rf/);
+    // No standalone "rm " shell fragment at all (word-boundary so prose like "Confirm " stays legal).
+    expect(text).not.toMatch(/\brm\s/);
+  });
+
   it("does not flag OpenAI as experimental", async () => {
     wire({ ai_provider: "openai", ai_remote_allowed: true });
     render(<Settings />);

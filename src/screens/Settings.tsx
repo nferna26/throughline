@@ -202,7 +202,6 @@ export default function Settings() {
               <span className="tl-path" title={dto?.app_data_path}>{dto?.app_data_path}</span>
             </div>
           </div>
-          <p className="hint" style={{ marginTop: "var(--tl-2)" }}>Rollback: <code>rm -rf {dto?.app_data_path}</code></p>
         </div>
 
         {/* ── Assistance (AI) ── */}
