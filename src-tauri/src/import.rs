@@ -7,6 +7,7 @@ use std::io::Read;
 use std::path::Path;
 use uuid::Uuid;
 
+use crate::gutenberg_markup;
 use crate::models::{Book, BookSection};
 use crate::paths;
 
@@ -716,14 +717,36 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
 
     let sha = hash_file(&dest)?;
 
-    // Sectionize
+    // Clean Project Gutenberg markup BEFORE sectionizing so the stored section
+    // text and its offsets are consistent: drop `[Illustration]` markers and
+    // strip `_…_` italic delimiters (recording `em` marks), then detect heading
+    // lines. This mirrors the EPUB importer, which produces clean section text +
+    // per-section StyleRanges; here the cleaned body lives in a DERIVED
+    // `reader.txt` (the raw `source.txt` stays the immutable SHA anchor).
+    let cleaned = gutenberg_markup::clean_body(body);
+    let body = cleaned.text.as_str();
+    let mut marks = cleaned.marks;
+    marks.extend(gutenberg_markup::detect_headings(body));
+
+    // Sectionize the CLEANED body (unchanged sectionizer; offsets index `body`).
     let raw_sections = sectionize(body);
     let assignable_flags = classify_assignable(&raw_sections, body);
+    // Translate body-offset em/heading marks into per-section StyleRanges
+    // (section-relative UTF-16 offsets), persisted through the SAME structure.json
+    // path the EPUB importer uses, so cmd_read_section_structure returns them.
+    let per_section_ranges = gutenberg_markup::marks_to_section_ranges(body, &marks, &raw_sections);
     let now = Utc::now().to_rfc3339();
     let mut sections: Vec<BookSection> = Vec::with_capacity(raw_sections.len());
+    let mut structure: std::collections::HashMap<String, Vec<crate::models::StyleRange>> =
+        std::collections::HashMap::new();
     for (i, (label, s, e)) in raw_sections.iter().enumerate() {
-        // locators are stored as char offsets into the body
+        // locators are stored as char offsets into the (cleaned) body
         let id = format!("sec_{}", Uuid::new_v4().simple());
+        if let Some(ranges) = per_section_ranges.get(i) {
+            if !ranges.is_empty() {
+                structure.insert(id.clone(), ranges.clone());
+            }
+        }
         sections.push(BookSection {
             id,
             book_id: book_id.clone(),
@@ -736,6 +759,25 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
             assignable: assignable_flags[i],
         });
     }
+
+    // Write the DERIVED cleaned body (read-only) the reader renders, plus the
+    // structure sidecar. The reader reads `reader.txt` when present; offsets index
+    // it directly, so its body marker is body_start = 0 (no header to skip).
+    let reader_path = book_dir.join("reader.txt");
+    fs::write(&reader_path, body).context("write derived reader.txt")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(&reader_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o444);
+            let _ = fs::set_permissions(&reader_path, perms);
+        }
+    }
+    fs::write(
+        book_dir.join("structure.json"),
+        serde_json::to_string(&structure)?,
+    )?;
 
     let manifest = ImportManifest {
         book_id: book_id.clone(),
@@ -756,12 +798,14 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
         book_dir.join("manifest.json"),
         serde_json::to_string_pretty(&manifest)?,
     )?;
-    // Also save a body-offset marker so reader knows where book body begins in source.txt
+    // Body-offset marker: the reader renders the cleaned `reader.txt`, whose
+    // section offsets index it from 0 (the header was already excluded by
+    // cleaning the [body_start, body_end) slice of the raw source).
     fs::write(
         book_dir.join("body_offsets.json"),
         serde_json::to_string(&serde_json::json!({
-            "body_start": body_start,
-            "body_end": body_end,
+            "body_start": 0usize,
+            "body_end": body.len(),
         }))?,
     )?;
 
@@ -1092,6 +1136,95 @@ mod tests {
             "error must name the limit in plain language, got: {msg}"
         );
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// End-to-end: importing a Project Gutenberg-style `.txt` yields a derived
+    /// `reader.txt` whose section text is CLEAN (no `_` italics, no
+    /// `[Illustration]`) and a `structure.json` whose em/heading ranges slice the
+    /// section text to exactly the styled phrases — the same shape the EPUB
+    /// importer produces. Reads back through the real `read_txt_section` path.
+    #[test]
+    fn import_txt_produces_clean_reader_text_and_style_ranges() {
+        use crate::models::StyleRange;
+        let _g = paths::lock_env_for_test();
+        let dir = std::env::temp_dir().join(format!("tl-txt-pg-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("austen-preface.txt");
+        // A PG header, then a preface with an [Illustration] marker and two italic
+        // spans, then enough body for the sectionizer to keep one section.
+        let raw = "Title: Northanger Abbey\nAuthor: Jane Austen\n\n\
+*** START OF THE PROJECT GUTENBERG EBOOK NORTHANGER ABBEY ***\n\n\
+PREFACE.\n\n\
+[Illustration]\n\n\
+_Walt Whitman has somewhere a fine and just distinction._ The humour of \
+_Northanger Abbey_, its completeness, is plain to every reader who comes to \
+it after the others. It is the work of a writer in full command of her craft, \
+and the preface that follows says as much in its own quiet way about the book \
+and its long history before the world finally met it in print.\n\n\
+*** END OF THE PROJECT GUTENBERG EBOOK NORTHANGER ABBEY ***\n";
+        fs::write(&src, raw).unwrap();
+
+        let result = import_txt(&src).expect("import a PG-style .txt");
+        let book_id = result.book.id.clone();
+        let book_dir = paths::book_dir(&book_id).unwrap();
+
+        // A derived reader.txt exists and is clean; the immutable source.txt still
+        // carries the raw markup (it is the SHA anchor, never mutated).
+        let reader = fs::read_to_string(book_dir.join("reader.txt")).expect("reader.txt written");
+        assert!(!reader.contains('_'), "reader.txt kept underscores: {reader:?}");
+        assert!(
+            !reader.contains("[Illustration"),
+            "reader.txt kept the illustration marker: {reader:?}"
+        );
+        let source = fs::read_to_string(book_dir.join("source.txt")).unwrap();
+        assert!(
+            source.contains("[Illustration]") && source.contains('_'),
+            "source.txt must stay the raw, immutable copy"
+        );
+
+        // Reading the first section through the real reader path returns clean text.
+        let first = &result.sections[0];
+        let start: usize = first.start_locator.as_deref().unwrap().parse().unwrap();
+        let end: Option<usize> = first.end_locator.as_deref().and_then(|s| s.parse().ok());
+        let section_text =
+            crate::commands::books::read_txt_section(&book_id, start, end).expect("read section");
+        assert!(!section_text.contains('_'));
+        assert!(!section_text.contains("[Illustration"));
+        assert!(section_text.contains("Walt Whitman has somewhere"));
+        assert!(section_text.contains("Northanger Abbey"));
+
+        // structure.json carries em + heading ranges that slice the section text.
+        let structure_raw =
+            fs::read_to_string(book_dir.join("structure.json")).expect("structure.json");
+        let structure: std::collections::HashMap<String, Vec<StyleRange>> =
+            serde_json::from_str(&structure_raw).unwrap();
+        let ranges = structure.get(&first.id).expect("first section has ranges");
+        let u16_slice = |r: &StyleRange| -> String {
+            let utf16: Vec<u16> = section_text.encode_utf16().collect();
+            String::from_utf16(&utf16[r.start as usize..r.end as usize]).unwrap()
+        };
+        let ems: Vec<String> = ranges
+            .iter()
+            .filter(|r| r.kind == "em")
+            .map(u16_slice)
+            .collect();
+        assert!(
+            ems.iter()
+                .any(|s| s == "Walt Whitman has somewhere a fine and just distinction."),
+            "em must cover the Walt Whitman sentence, got {ems:?}"
+        );
+        assert!(
+            ems.iter().any(|s| s == "Northanger Abbey"),
+            "em must cover 'Northanger Abbey', got {ems:?}"
+        );
+        let heading = ranges
+            .iter()
+            .find(|r| r.kind == "h1" || r.kind == "h2")
+            .expect("a heading range");
+        assert_eq!(u16_slice(heading), "PREFACE.");
+
+        fs::remove_dir_all(&dir).ok();
+        let _ = fs::remove_dir_all(book_dir);
     }
 
     #[test]
