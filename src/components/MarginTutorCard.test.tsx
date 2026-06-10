@@ -32,7 +32,6 @@ function setImpl() {
           ai_provider: "local",
           ai_base_url: "http://localhost:1234/v1",
           ai_model: "gemma-4-31b-it-mlx",
-          ai_local_only: true,
           ai_requests_retention_days: 90,
         });
       case "cmd_ai_ask":

@@ -16,7 +16,6 @@ function wire(dto: Partial<SettingsDto>) {
     ai_posture: "Local-only mode: ON",
     ai_base_url: "http://localhost:1234/v1",
     ai_model: "m",
-    ai_local_only: true,
     quote_policy: "Short quotes only.",
     quote_warn_chars: 300,
     ai_requests_retention_days: 90,

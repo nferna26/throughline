@@ -288,7 +288,6 @@ export interface SettingsDto {
   ai_posture: string;
   ai_base_url: string;
   ai_model: string;
-  ai_local_only: boolean;
   quote_policy: string;
   quote_warn_chars: number;
   ai_requests_retention_days: number;

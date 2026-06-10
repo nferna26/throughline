@@ -487,7 +487,7 @@ describe("TextReader Deep Study — stale-section guard", () => {
         case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
         case "cmd_read_section_text": return textPromises[args.sectionId as string] ?? Promise.resolve("");
         case "cmd_list_notes": return Promise.resolve([]);
-        case "cmd_get_settings": return Promise.resolve({ ai_provider: "local", ai_base_url: "http://localhost:1234/v1", ai_model: "m", ai_local_only: true, margin_help: "deep_study" });
+        case "cmd_get_settings": return Promise.resolve({ ai_provider: "local", ai_base_url: "http://localhost:1234/v1", ai_model: "m", margin_help: "deep_study" });
         case "cmd_test_ai_connection": return Promise.resolve({ reachable: true, first_model_id: "m", message: "ok" });
         case "cmd_ai_ask": return Promise.resolve({ ai_request_id: "ai_1", prompt_sent: "(hidden)", provider_host: "localhost" });
         default: return Promise.resolve(undefined);

@@ -19,7 +19,7 @@ function setImpl() {
   mocks.invoke.mockImplementation((cmd: string) => {
     switch (cmd) {
       case "cmd_get_settings":
-        return Promise.resolve({ ai_provider: "local", ai_base_url: "http://localhost:1234/v1", ai_model: "m", ai_local_only: true, margin_help: "deep_study" });
+        return Promise.resolve({ ai_provider: "local", ai_base_url: "http://localhost:1234/v1", ai_model: "m", margin_help: "deep_study" });
       case "cmd_ai_ask":
         return Promise.resolve({ ai_request_id: "ai_1", prompt_sent: "(hidden)", provider_host: "localhost" });
       case "cmd_test_ai_connection":
