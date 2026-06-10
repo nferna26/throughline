@@ -34,6 +34,11 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const [assignableSections, setAssignableSections] = useState<BookSection[]>([]);
   const [currentIdx, setCurrentIdx] = useState<number>(-1);
   const [text, setText] = useState<string>("");
+  // A failed section-text read is said out loud in the reading column (never a
+  // silent blank page) with a Try again. null = no error. `loadNonce` bumps to
+  // re-run the load effect on retry.
+  const [textError, setTextError] = useState<string | null>(null);
+  const [loadNonce, setLoadNonce] = useState(0);
   // Identity guard: which section `text` actually belongs to. Cleared the moment
   // currentIdx changes and only set once the matching section's text resolves, so
   // Deep Study can never generate/cache a briefing from the previous section's
@@ -190,16 +195,24 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       setCurrentIdx(startIdx);
       const baseOffset = parseInt(list[startIdx]?.start_locator || "0", 10);
       const startLoc = today.resume_locator ?? makeCharLocator(baseOffset);
-      const s = await invoke<ReadingSession>("cmd_start_session", {
-        bookId: book.id,
-        sectionId: list[startIdx]?.id ?? assignedSection.id,
-        startLocator: startLoc,
-      });
-      if (cancelled) return;
+      // A failed session-start must not blank the reader OR discard a later typed
+      // takeaway (FT-33): the text still loads and reads; `session` stays null, so
+      // finalizeSession saves the takeaway as a session-less note and skips the end.
+      let s: ReadingSession | null = null;
+      try {
+        s = await invoke<ReadingSession>("cmd_start_session", {
+          bookId: book.id,
+          sectionId: list[startIdx]?.id ?? assignedSection.id,
+          startLocator: startLoc,
+        });
+      } catch { /* read without a session rather than a dead end */ }
+      if (cancelled || !s) return;
       setSession(s);
       startedAt.current = Date.now();
     }
-    init();
+    // Catch is a safety net so a rejected list/section read never surfaces as an
+    // unhandled promise rejection; the empty-section fallback UI handles the rest.
+    init().catch(() => {});
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id, assignedSection?.id]);
@@ -213,12 +226,21 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     const sec = assignableSections[currentIdx];
     setTextSectionId(null);
     setStructure([]);
+    setTextError(null);
     async function loadSection() {
       if (!sec) return;
-      const t = await invoke<string>("cmd_read_section_text", {
-        bookId: book.id,
-        sectionId: sec.id,
-      });
+      let t: string;
+      try {
+        t = await invoke<string>("cmd_read_section_text", {
+          bookId: book.id,
+          sectionId: sec.id,
+        });
+      } catch (e) {
+        // A failed read is a dead end without this: surface the message + a retry
+        // rather than leaving the reader staring at an empty column.
+        if (!cancelled) setTextError(errorMessage(e));
+        return;
+      }
       if (cancelled) return;
       setText(t);
       setTextSectionId(sec.id);
@@ -252,7 +274,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     loadSection();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIdx, assignableSections.length]);
+  }, [currentIdx, assignableSections.length, loadNonce]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const paragraphRefs = useRef<Map<number, HTMLParagraphElement>>(new Map());
@@ -402,18 +424,18 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   // null without racing a setState. Rescue mode never forces a takeaway and
   // never forces section completion — a short sitting still counts.
   async function finalizeSession(takeaway: string | null) {
-    if (!session) return onExit();
-    const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
     const tk = takeaway && takeaway.trim() ? takeaway.trim() : null;
     // The recap's "one sentence to remember" is a first-class Takeaway: it stays
     // in the session export AND becomes a durable, user-authored Takeaway note,
     // so it surfaces in the chapter notebook and on Today's "Last time". Skipping
     // (blank) saves nothing. The body is the reader's own words — privacy-safe.
+    // Saved BEFORE the session guard so a failed session-start can't silently
+    // discard the reader's typed takeaway (sessionId null is a legal arg).
     if (tk) {
       try {
         await invoke<Note>("cmd_save_note", {
           bookId: book.id,
-          sessionId: session.id,
+          sessionId: session?.id ?? null,
           noteType: "Takeaway",
           locator,
           chapterLabel: currentSection?.label ?? null,
@@ -425,6 +447,8 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         });
       } catch { /* recap takeaway is best-effort; never block ending a session */ }
     }
+    if (!session) return onExit();
+    const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
     await invoke<ReadingSession>("cmd_end_session", {
       sessionId: session.id,
       endLocator: locator,
@@ -767,6 +791,15 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
               <span>Ten minutes. The goal is just to stay connected to the book — not to finish anything.</span>
             </div>
           )}
+          {textError ? (
+            <div className="tl-readcol" style={{ maxWidth: `${lineWidth}px` }}>
+              <div className="tl-read-error" role="alert">
+                <p>{textError}</p>
+                <p className="tl-read-error-hint">The book file may have moved or be in use. Try again, or reopen this book from Today.</p>
+                <button className="tl-btn tl-btn-primary" onClick={() => { setTextError(null); setLoadNonce((n) => n + 1); }}>Try again</button>
+              </div>
+            </div>
+          ) : (
           <div className="tl-readcol" ref={colRef} style={{ maxWidth: `${lineWidth}px`, fontSize: `${fontSize}px` }}>
             {paragraphs.map((p) => {
               // Block role (heading/blockquote) styles the WHOLE paragraph via a
@@ -790,6 +823,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
               );
             })}
           </div>
+          )}
         </div>
 
         {/* The margin stays MOUNTED when collapsed (hidden via display:none), so a

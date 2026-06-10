@@ -762,6 +762,11 @@
 /* The reading column centers within the scroll-region's ACTUAL width (which
    shrinks when the panel opens), capped at the reader's chosen line width. */
 .tl-reader-main .tl-readcol { margin: 0 auto; width: 100%; box-sizing: border-box; }
+/* A failed section load is said out loud in the column, with a retry — never a
+   silent blank page (FT-33). The container itself keeps a quiet focus ring from
+   `.tl-root :focus-visible` (it is keyboard-focusable for paging, FT-31). */
+.tl-read-error { padding: 48px 8px; text-align: center; color: var(--tl-ink); }
+.tl-read-error .tl-read-error-hint { color: var(--tl-muted); font-size: 14px; margin: 8px 0 18px; }
 
 /* Drag-to-resize handle between text and panel. */
 .tl-panel-resizer {

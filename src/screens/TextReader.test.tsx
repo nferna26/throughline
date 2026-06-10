@@ -604,6 +604,72 @@ describe("TextReader New-note modal — save failure", () => {
   });
 });
 
+// FT-33: a failed section load must surface an honest, retryable error (never a
+// blank column); a failed session start must NOT swallow a typed takeaway on
+// "Save & finish".
+describe("TextReader failed section load (FT-33)", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("shows an honest in-column error with a Try again that re-reads the text", async () => {
+    let attempts = 0;
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text":
+          attempts += 1;
+          return attempts === 1
+            ? Promise.reject({ message: "Throughline couldn't open this book's file." })
+            : Promise.resolve(TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Throughline couldn't open this book's file.");
+
+    // Try again re-invokes the read and, on success, paints the text.
+    fireEvent.click(screen.getByRole("button", { name: /Try again/i }));
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("TextReader failed session start keeps the takeaway (FT-33)", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  it("saves the typed takeaway note even when the session failed to start", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section, section2]);
+        case "cmd_start_session": return Promise.reject({ message: "Throughline couldn't start this session." });
+        case "cmd_read_section_text": return Promise.resolve(TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    fireEvent.click(screen.getByRole("button", { name: /Add a takeaway/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Your one line/i), { target: { value: "the takeaway survives" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save & finish/i }));
+
+    await waitFor(() => {
+      const call = vi.mocked(invoke).mock.calls.find(
+        (c) => c[0] === "cmd_save_note" && (c[1] as { noteType?: string }).noteType === "Takeaway",
+      );
+      expect(call).toBeTruthy();
+      const args = call![1] as { body: string; sessionId: string | null };
+      expect(args.body).toBe("the takeaway survives");
+      expect(args.sessionId).toBeNull();
+    });
+  });
+});
+
 describe("TextReader Deep Study — stale-section guard", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
