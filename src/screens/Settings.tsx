@@ -835,16 +835,12 @@ export default function Settings() {
               </div>
               <div className="row-control">
                 {/* The short-quote note is a fixed protection in this build
-                    (counsel-reviewed copyright posture), so it shows as on and
-                    isn't switchable off — honest, not a dead no-op control. */}
-                <button
-                  className="toggle"
-                  role="switch"
-                  aria-checked={true}
-                  aria-disabled={true}
-                  disabled
-                  aria-label="Note on long quotes (always on)"
-                />
+                    (counsel-reviewed copyright posture) — always on, nothing to
+                    toggle — so it reads as a plain informational line, never a
+                    dead no-op switch. */}
+                <span className="quiet-line">
+                  <Icon d={ICON.check} size={15} /> Always on
+                </span>
               </div>
             </div>
             <div className="row">
