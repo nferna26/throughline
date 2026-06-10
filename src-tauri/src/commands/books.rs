@@ -672,27 +672,47 @@ fn today_memory(
 }
 
 fn compute_streak(conn: &Connection, book_id: &str) -> rusqlite::Result<models::StreakSummary> {
-    // Streak window = the last 7 *local* days (CORE-1014). `started_at` stays a
-    // UTC timestamp in the DB; the boundary date is computed in Rust via
-    // `plan::app_today()` and passed as a param — SQL's own "now" is the UTC day.
-    let week_start = (plan::app_today() - chrono::Duration::days(6)).to_string();
+    // Streak days are the reader's *local* calendar days (CORE-1014): both the
+    // 7-day window boundary AND each session's day bucket. `started_at` stays a
+    // UTC timestamp in the DB, and SQL's DATE() of it is the UTC day — a 9pm-ET
+    // session would land on "tomorrow", and an evening + next-morning pair
+    // would collapse into one day — so each stamp converts through
+    // `plan::local_day_of` and the window math runs in Rust on explicit dates.
     let mut stmt = conn.prepare(
-        "SELECT DATE(started_at) AS d, COALESCE(SUM(minutes), 0)
-         FROM reading_sessions
-         WHERE book_id = ?1 AND DATE(started_at) >= ?2
-         GROUP BY d",
+        "SELECT started_at, COALESCE(minutes, 0) FROM reading_sessions WHERE book_id = ?1",
     )?;
-    let mut days = 0i64;
-    let mut minutes = 0i64;
-    let mut rows = stmt.query(params![book_id, week_start])?;
+    let mut sessions: Vec<(chrono::NaiveDate, i64)> = Vec::new();
+    let mut rows = stmt.query(params![book_id])?;
     while let Some(row) = rows.next()? {
-        days += 1;
-        minutes += row.get::<_, i64>(1)?;
+        let started: String = row.get(0)?;
+        if let Some(day) = plan::local_day_of(&started) {
+            sessions.push((day, row.get(1)?));
+        }
     }
-    Ok(models::StreakSummary {
-        days_read_last_7: days,
+    Ok(summarize_streak(&sessions, plan::app_today()))
+}
+
+/// Pure 7-day-window aggregation over already-localized `(day, minutes)`
+/// pairs: distinct days read and total minutes from `today - 6` onward. Split
+/// from `compute_streak` so the bucketing logic is tested with explicit dates
+/// (the repo's no-wall-clock test discipline).
+fn summarize_streak(
+    sessions: &[(chrono::NaiveDate, i64)],
+    today: chrono::NaiveDate,
+) -> models::StreakSummary {
+    let week_start = today - chrono::Duration::days(6);
+    let mut days = std::collections::BTreeSet::new();
+    let mut minutes = 0i64;
+    for (day, mins) in sessions {
+        if *day >= week_start {
+            days.insert(*day);
+            minutes += *mins;
+        }
+    }
+    models::StreakSummary {
+        days_read_last_7: days.len() as i64,
         minutes_last_7: minutes,
-    })
+    }
 }
 
 #[tauri::command]
@@ -1053,6 +1073,49 @@ pub fn cmd_set_active_book(book_id: String, state: State<DbState>) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn d(y: i32, m: u32, day: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    /// CORE-1014: an evening session and the next morning's session are TWO
+    /// distinct reading days (UTC bucketing collapsed them whenever the
+    /// evening stamp crossed the UTC midnight), and two sittings on the same
+    /// local day stay ONE day. Explicit injected dates — no wall clock.
+    #[test]
+    fn streak_counts_distinct_local_days() {
+        let today = d(2026, 6, 10);
+        let sessions = vec![
+            (d(2026, 6, 9), 30),  // last night
+            (d(2026, 6, 10), 20), // this morning
+            (d(2026, 6, 10), 10), // second sitting today — same day
+        ];
+        let s = summarize_streak(&sessions, today);
+        assert_eq!(s.days_read_last_7, 2, "evening + morning are two days");
+        assert_eq!(s.minutes_last_7, 60);
+    }
+
+    /// The window is the last 7 local days inclusive: `today - 6` is in,
+    /// `today - 7` is out (its minutes don't count either).
+    #[test]
+    fn streak_window_is_seven_local_days_inclusive() {
+        let today = d(2026, 6, 10);
+        let sessions = vec![
+            (d(2026, 6, 4), 15), // exactly today - 6 → inside
+            (d(2026, 6, 3), 45), // today - 7 → outside
+        ];
+        let s = summarize_streak(&sessions, today);
+        assert_eq!(s.days_read_last_7, 1);
+        assert_eq!(s.minutes_last_7, 15);
+    }
+
+    /// No sessions → a calm zero, not an error.
+    #[test]
+    fn streak_is_zero_with_no_sessions() {
+        let s = summarize_streak(&[], d(2026, 6, 10));
+        assert_eq!(s.days_read_last_7, 0);
+        assert_eq!(s.minutes_last_7, 0);
+    }
 
     /// CORE-1004: a book whose last plan was "let go" (soft-deleted) must still
     /// reach Today. `cmd_today` returning None for an existing book strands the

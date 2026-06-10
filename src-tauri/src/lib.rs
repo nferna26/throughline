@@ -707,6 +707,11 @@ mod tests {
         let rust_utc_day = format!("{}{}", "naive_utc().", "date()");
         let rust_utc_day_2 = format!("{}{}", "Utc::now().", "date_naive()");
         let sql_utc_day = format!("{}{}", "date('", "now'");
+        // SQL day-bucketing of a stored UTC timestamp is the same bug from the
+        // other side: `DATE(started_at)` groups a session by the UTC day of its
+        // RFC3339 stamp (9pm ET lands on "tomorrow"). Bucket in Rust via
+        // `plan::local_day_of` instead.
+        let sql_started_day = format!("{}{}", "date(", "started_at");
 
         let mut violations: Vec<String> = Vec::new();
         for (path, code) in backend_sources_without_comments() {
@@ -733,6 +738,15 @@ mod tests {
                      plan::app_today() (pass the local date into SQL as a param)",
                     path.display(),
                     sql_utc_day
+                ));
+            }
+            if code.to_lowercase().contains(sql_started_day.as_str()) {
+                violations.push(format!(
+                    "{}: contains `{}` (any case) — sessions must bucket by the \
+                     reader's LOCAL day via plan::local_day_of, not SQL's UTC \
+                     DATE() of the stored timestamp",
+                    path.display(),
+                    sql_started_day
                 ));
             }
         }
