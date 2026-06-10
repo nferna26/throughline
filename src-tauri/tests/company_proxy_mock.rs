@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use throughline_lib::ai_client::{breaker_for, StreamEvent};
 use throughline_lib::ai_providers::{
-    run_provider_call, ProviderAuth, ProviderCall, CAP_EXHAUSTED_SENTINEL,
+    run_provider_call, test_provider, ProviderAuth, ProviderCall, CAP_EXHAUSTED_SENTINEL,
 };
 use throughline_lib::settings::AiProvider;
 
@@ -184,4 +184,76 @@ async fn company_arm_maps_402_to_cap_exhausted() {
         err.to_string().contains(CAP_EXHAUSTED_SENTINEL),
         "402 → cap-exhausted sentinel, got: {err}"
     );
+}
+
+/// CORE-1018: "Test connection" for Company must really probe the relay's
+/// /v1/credits with the Bearer license — a live relay answers and the reader
+/// sees the active message; nothing is hardcoded.
+#[tokio::test]
+async fn company_test_probes_credits() {
+    let _g = company_breaker_test_guard();
+    let body = "{\"ok\":true,\"remaining_fraction\":0.8,\"approx_questions_left\":320}";
+    let resp = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let resp: &'static str = Box::leak(resp.into_boxed_str());
+    let (base_url, captured) = mock_proxy(resp);
+
+    let (reachable, model, message) = test_provider(
+        AiProvider::Company,
+        Some("lic_test.deadbeef".to_string()),
+        &base_url,
+        "claude-sonnet-4-6",
+        Duration::from_secs(5),
+    )
+    .await;
+
+    assert!(
+        reachable,
+        "a live relay answering /v1/credits is reachable: {message}"
+    );
+    assert_eq!(model.as_deref(), Some("claude-sonnet-4-6"));
+    assert!(
+        message.contains("Throughline AI"),
+        "reader-facing message names Throughline AI: {message}"
+    );
+
+    let req = captured.lock().unwrap().clone();
+    assert!(
+        req.starts_with("GET /v1/credits"),
+        "must probe GET /v1/credits, not report statically: {req}"
+    );
+    assert!(
+        req.to_lowercase()
+            .contains("authorization: bearer lic_test.deadbeef"),
+        "must Bearer-auth the license: {req}"
+    );
+}
+
+/// CORE-1018: with the relay down (nothing listening), "Test connection" must
+/// report failure honestly with a human message — never a static success.
+#[tokio::test]
+async fn company_test_fails_when_unreachable() {
+    let _g = company_breaker_test_guard();
+    // Bind then drop a listener so the port is closed → connection refused.
+    let port = {
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
+        l.local_addr().unwrap().port()
+    };
+    let base_url = format!("http://127.0.0.1:{port}");
+
+    let (reachable, model, message) = test_provider(
+        AiProvider::Company,
+        Some("lic_test.deadbeef".to_string()),
+        &base_url,
+        "claude-sonnet-4-6",
+        Duration::from_secs(2),
+    )
+    .await;
+
+    assert!(!reachable, "a dead relay must not report active: {message}");
+    assert!(model.is_none());
+    assert_eq!(message, "Can't reach Throughline AI right now.");
 }

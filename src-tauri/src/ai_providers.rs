@@ -1137,11 +1137,18 @@ pub async fn test_provider(
             None => (false, None, "Add your Anthropic API key first.".to_string()),
         },
         AiProvider::Codex => test_codex(model, timeout).await,
-        AiProvider::Company => (
-            true,
-            Some(crate::settings::DEFAULT_ANTHROPIC_MODEL.to_string()),
-            "Throughline AI is active (Claude Sonnet, company-paid).".to_string(),
-        ),
+        AiProvider::Company => {
+            // The license is the Bearer credential; read it from the Keychain
+            // when the caller didn't thread one. Never logged.
+            match key.or_else(|| crate::keystore::get_key("company")) {
+                Some(license) => test_company(base_url, &license, timeout).await,
+                None => (
+                    false,
+                    None,
+                    "Activate Throughline AI in Settings → Assistance.".to_string(),
+                ),
+            }
+        }
         AiProvider::Disabled | AiProvider::Unset => {
             (false, None, "Choose a provider first.".to_string())
         }
@@ -1307,6 +1314,74 @@ async fn test_codex(model: &str, timeout: Duration) -> ConnTest {
         Err(e) => {
             breaker.on_failure();
             (false, None, format!("Codex request failed: {e}"))
+        }
+    }
+}
+
+/// Company-paid path: really probe the relay by GETting `/v1/credits` with the
+/// Bearer license. A 2xx whose body carries the proxy's explicit `ok` field
+/// proves the relay is up and the license is recognized; a transport error gets
+/// a fixed human message (reqwest's Display text is plumbing). Bypasses the
+/// breaker `check()` but feeds the outcome, like the other connection tests.
+async fn test_company(base_url: &str, license: &str, timeout: Duration) -> ConnTest {
+    let breaker = crate::ai_client::breaker_for(AiProvider::Company);
+    let client = match reqwest::Client::builder().timeout(timeout).build() {
+        Ok(c) => c,
+        Err(e) => return (false, None, format!("client build: {e}")),
+    };
+    let url = format!("{}/v1/credits", base_url.trim_end_matches('/'));
+    match client
+        .get(&url)
+        .header("authorization", format!("Bearer {license}"))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await.unwrap_or_default();
+            match body.get("ok").and_then(|v| v.as_bool()) {
+                Some(ok) => {
+                    // The relay answered authoritatively either way — healthy.
+                    breaker.on_success();
+                    let message = if ok {
+                        "Throughline AI is active (Claude Sonnet, company-paid).".to_string()
+                    } else {
+                        "Throughline AI is reachable, but your included allowance needs attention."
+                            .to_string()
+                    };
+                    (
+                        true,
+                        Some(crate::settings::DEFAULT_ANTHROPIC_MODEL.to_string()),
+                        message,
+                    )
+                }
+                None => {
+                    breaker.on_failure();
+                    (
+                        false,
+                        None,
+                        "Throughline AI answered unexpectedly. Try again shortly.".to_string(),
+                    )
+                }
+            }
+        }
+        Ok(r) => {
+            breaker.on_failure();
+            let status = r.status();
+            (
+                false,
+                None,
+                humanize_http("Throughline AI", status, &r.text().await.unwrap_or_default()),
+            )
+        }
+        Err(_) => {
+            breaker.on_failure();
+            // Fixed copy — transport detail (DNS/TLS/socket) is plumbing and
+            // must never reach the reader (mirrors COMPANY_UNREACHABLE_MSG).
+            (
+                false,
+                None,
+                "Can't reach Throughline AI right now.".to_string(),
+            )
         }
     }
 }

@@ -1010,7 +1010,13 @@ pub async fn cmd_test_ai_connection(
             Some(p) => settings::AiProvider::from_str(p),
             None => settings::get_ai_provider(&conn),
         };
-        let base_url = settings::get_ai_base_url(&conn);
+        // The Company relay has its own endpoint (and its license is read inside
+        // test_provider's Company arm); everything else probes the saved base URL.
+        let base_url = if matches!(prov, settings::AiProvider::Company) {
+            settings::get_company_base_url(&conn)
+        } else {
+            settings::get_ai_base_url(&conn)
+        };
         let model = settings::get_ai_model_for(&conn, prov);
         // Prefer an explicitly-passed key (test-before-save); else the stored one.
         let resolved_key = match prov {
