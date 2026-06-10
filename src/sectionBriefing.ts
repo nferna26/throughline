@@ -16,6 +16,8 @@
 // re-imported source (new sha), or a different margin-help mode all miss the
 // cache and re-prepare; the same trio hits instantly within the sitting.
 
+import { LEGACY_PREFIX } from "./legacyStorage";
+
 export type MarginHelp = "quiet" | "guided" | "deep_study";
 
 export const BRIEFING_LABELS = [
@@ -62,9 +64,10 @@ export function briefingTextReady(
   return !!loadedText && loadedText.trim().length > 0;
 }
 
-/** The pre-v0.3.x persistent cache's localStorage prefix — used only by
- *  `purgeLegacyBriefings` to clean older installs. New code never writes it. */
-const LEGACY_PREFIX = "rg.briefing.";
+/** The pre-v0.3.x persistent cache's localStorage prefix (under the pre-rename
+ *  app prefix) — used only by `purgeLegacyBriefings` to clean older installs.
+ *  New code never writes it. */
+const LEGACY_BRIEFING_PREFIX = `${LEGACY_PREFIX}.briefing.`;
 
 /** Session-only store. Process memory by design — see the module header. */
 const cache = new Map<string, string>();
@@ -92,14 +95,14 @@ export function resetBriefingCache(): void {
 }
 
 /** One-time startup cleanup (App.tsx): earlier builds persisted briefings in
- *  localStorage under `rg.briefing.*`, which the counsel posture forbids —
- *  remove any leftovers so no unsaved AI output survives on disk. */
+ *  localStorage under the legacy briefing prefix, which the counsel posture
+ *  forbids — remove any leftovers so no unsaved AI output survives on disk. */
 export function purgeLegacyBriefings(): void {
   try {
     const doomed: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith(LEGACY_PREFIX)) doomed.push(k);
+      if (k && k.startsWith(LEGACY_BRIEFING_PREFIX)) doomed.push(k);
     }
     doomed.forEach((k) => localStorage.removeItem(k));
   } catch {

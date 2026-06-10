@@ -7,7 +7,7 @@
 // it lives in localStorage alongside fontSize / lineWidth / panelOpen — not in
 // the Rust settings DB (which governs the endpoint, model, and local-only).
 
-const KEY = "rg.tutorEnabled";
+const KEY = "tl.tutorEnabled";
 
 /** True only when the reader has explicitly enabled the local tutor. */
 export function isTutorEnabled(): boolean {

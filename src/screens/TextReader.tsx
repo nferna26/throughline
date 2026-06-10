@@ -53,10 +53,10 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const [session, setSession] = useState<ReadingSession | null>(null);
   const [visited, setVisited] = useState<Set<string>>(new Set());
   const [fontSize, setFontSize] = useState<number>(
-    () => parseInt(localStorage.getItem("rg.fontSize") || "18", 10)
+    () => parseInt(localStorage.getItem("tl.fontSize") || "18", 10)
   );
   const [lineWidth, setLineWidth] = useState<number>(
-    () => parseInt(localStorage.getItem("rg.lineWidth") || "640", 10)
+    () => parseInt(localStorage.getItem("tl.lineWidth") || "640", 10)
   );
   const [showNote, setShowNote] = useState(false);
   const [topOffset, setTopOffset] = useState<number>(0);
@@ -84,13 +84,13 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   // something. `pinned` (the toolbar toggle) persists; a bare selection never opens it.
   const [marginState, dispatchMargin] = useReducer(
     reduceMargin,
-    localStorage.getItem("rg.panelOpen") === "true",
+    localStorage.getItem("tl.panelOpen") === "true",
     initialMarginState,
   );
   const panelOpen = marginState.open;
   const pinned = marginState.pinned;
   const [panelWidth, setPanelWidth] = useState<number>(
-    () => clampPanelWidth(parseInt(localStorage.getItem("rg.panelWidth") || "320", 10))
+    () => clampPanelWidth(parseInt(localStorage.getItem("tl.panelWidth") || "320", 10))
   );
   const draggingRef = useRef<boolean>(false);
   const readerRef = useRef<HTMLElement | null>(null);
@@ -122,11 +122,11 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   }, [book.id]);
   useEffect(() => { refreshNotes(); }, [refreshNotes]);
 
-  useEffect(() => { localStorage.setItem("rg.fontSize", String(fontSize)); }, [fontSize]);
-  useEffect(() => { localStorage.setItem("rg.lineWidth", String(lineWidth)); }, [lineWidth]);
+  useEffect(() => { localStorage.setItem("tl.fontSize", String(fontSize)); }, [fontSize]);
+  useEffect(() => { localStorage.setItem("tl.lineWidth", String(lineWidth)); }, [lineWidth]);
   // Persist the reader's open-preference (the pin) under the long-standing key.
-  useEffect(() => { localStorage.setItem("rg.panelOpen", String(pinned)); }, [pinned]);
-  useEffect(() => { localStorage.setItem("rg.panelWidth", String(panelWidth)); }, [panelWidth]);
+  useEffect(() => { localStorage.setItem("tl.panelOpen", String(pinned)); }, [pinned]);
+  useEffect(() => { localStorage.setItem("tl.panelWidth", String(panelWidth)); }, [panelWidth]);
 
   // Drag the resizer: panel width = window-right-edge minus pointer x, clamped.
   const startPanelDrag = useCallback((e: React.MouseEvent, opts?: { opening?: boolean }) => {

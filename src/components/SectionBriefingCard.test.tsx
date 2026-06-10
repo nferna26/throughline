@@ -61,7 +61,7 @@ describe("SectionBriefingCard", () => {
   });
 
   it("auto-prepares (streams) when tutor is enabled and nothing is cached", async () => {
-    localStorage.setItem("rg.tutorEnabled", "true");
+    localStorage.setItem("tl.tutorEnabled", "true");
     render(<SectionBriefingCard {...props} />);
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.objectContaining({ mode: "section_briefing", selection: "Great art Thou, O Lord…" })),
@@ -82,7 +82,7 @@ describe("SectionBriefingCard", () => {
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.objectContaining({ mode: "section_briefing" })),
     );
-    expect(localStorage.getItem("rg.tutorEnabled")).toBe("true");
+    expect(localStorage.getItem("tl.tutorEnabled")).toBe("true");
   });
 
   it("renders Watch-for items as plain text when no marker handler is given", async () => {
@@ -122,7 +122,7 @@ describe("SectionBriefingCard — provider gate", () => {
   }
 
   it("does NOT generate when no provider is chosen, and shows the cold-start setup sheet", async () => {
-    localStorage.setItem("rg.tutorEnabled", "true"); // would normally auto-prepare
+    localStorage.setItem("tl.tutorEnabled", "true"); // would normally auto-prepare
     setNoProvider();
     render(<SectionBriefingCard {...props} />);
     // The dead-end "Choose one in Settings" message is replaced by setup-at-intent.
@@ -135,7 +135,7 @@ describe("SectionBriefingCard — provider gate", () => {
   });
 
   it("when a CLOUD provider is chosen, the briefing IS allowed (calls cmd_ai_ask) and never claims local", async () => {
-    localStorage.setItem("rg.tutorEnabled", "true");
+    localStorage.setItem("tl.tutorEnabled", "true");
     mocks.invoke.mockReset();
     mocks.invoke.mockImplementation((cmd: string) => {
       switch (cmd) {

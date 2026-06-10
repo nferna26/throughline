@@ -14,6 +14,7 @@ import "./tl-theme.css";
 import type { TodayCard, ReaderMode, Book, ImportOutcome, ExportPathStatus } from "./types";
 import { errorMessage } from "./types";
 import { purgeLegacyBriefings } from "./sectionBriefing";
+import { migrateLegacyLocalStorageKeys } from "./legacyStorage";
 
 type BookTab = "today" | "notes";
 
@@ -102,6 +103,9 @@ export default function App() {
     // localStorage. The counsel posture (CLAUDE.md §3) is "non-persistent
     // unless saved", so remove any leftovers — the live cache is in-memory.
     purgeLegacyBriefings();
+    // One-time rename shim (CORE-1031): carry pre-rename preference keys (tutor
+    // consent, font size, panel state) over to their tl.* twins, then drop them.
+    migrateLegacyLocalStorageKeys();
   }, []);
 
   // Activation feedback (CORE-1009): the deep link is the buyer's

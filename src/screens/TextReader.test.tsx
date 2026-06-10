@@ -13,7 +13,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 // The reader persists panel open/width to localStorage; clear it before each
 // test so the companion panel starts at its CLOSED default (tests that need it
-// open set rg.panelOpen="true" explicitly).
+// open set tl.panelOpen="true" explicitly).
 beforeEach(() => localStorage.clear());
 
 const section: BookSection = {
@@ -77,7 +77,7 @@ function mockBackend(notes: Note[]) {
 describe("TextReader Companion Margin", () => {
   // These cases assert the margin CARD is visible, so open the panel (the new
   // default is closed). Runs after the module-level localStorage.clear().
-  beforeEach(() => { vi.mocked(invoke).mockReset(); localStorage.setItem("rg.panelOpen", "true"); });
+  beforeEach(() => { vi.mocked(invoke).mockReset(); localStorage.setItem("tl.panelOpen", "true"); });
 
   it("paints an anchored note as an inline highlight and a margin card", async () => {
     mockBackend([note({ body: "my thought" })]);
@@ -355,7 +355,7 @@ describe("splitParagraphs (Gutenberg soft-wrap reflow)", () => {
 });
 
 describe("TextReader selection toolbar — Escape dismiss + a11y", () => {
-  beforeEach(() => { vi.mocked(invoke).mockReset(); localStorage.setItem("rg.panelOpen", "true"); });
+  beforeEach(() => { vi.mocked(invoke).mockReset(); localStorage.setItem("tl.panelOpen", "true"); });
 
   // Drive a real DOM selection over the rendered paragraph so the floating
   // toolbar appears, then assert Escape dismisses it. jsdom's getBoundingClientRect
@@ -457,8 +457,8 @@ describe("TextReader Deep Study — stale-section guard", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
     localStorage.clear();
-    localStorage.setItem("rg.panelOpen", "true");
-    localStorage.setItem("rg.tutorEnabled", "true"); // consent given → briefing can auto-generate
+    localStorage.setItem("tl.panelOpen", "true");
+    localStorage.setItem("tl.tutorEnabled", "true"); // consent given → briefing can auto-generate
   });
 
   const A_TEXT = "0123456789AAAA section one body text for the briefing.";

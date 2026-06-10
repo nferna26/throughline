@@ -8,10 +8,10 @@ describe("tutorConsent", () => {
     expect(isTutorEnabled()).toBe(false);
   });
 
-  it("enabling persists under rg.tutorEnabled", () => {
+  it("enabling persists under tl.tutorEnabled", () => {
     setTutorEnabled(true);
     expect(isTutorEnabled()).toBe(true);
-    expect(localStorage.getItem("rg.tutorEnabled")).toBe("true");
+    expect(localStorage.getItem("tl.tutorEnabled")).toBe("true");
   });
 
   it("is revocable — turning it off re-arms the consent gate", () => {
@@ -21,7 +21,7 @@ describe("tutorConsent", () => {
   });
 
   it("treats any non-\"true\" value as disabled", () => {
-    localStorage.setItem("rg.tutorEnabled", "yes");
+    localStorage.setItem("tl.tutorEnabled", "yes");
     expect(isTutorEnabled()).toBe(false);
   });
 });

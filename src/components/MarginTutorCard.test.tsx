@@ -104,12 +104,12 @@ describe("MarginTutorCard — opt-in gate", () => {
         expect.objectContaining({ mode: "explain", depth: "brief", selection: "the unjust man is happy" }),
       ),
     );
-    expect(localStorage.getItem("rg.tutorEnabled")).toBe("true");
+    expect(localStorage.getItem("tl.tutorEnabled")).toBe("true");
   });
 });
 
 describe("MarginTutorCard — brief default + go deeper", () => {
-  beforeEach(() => localStorage.setItem("rg.tutorEnabled", "true"));
+  beforeEach(() => localStorage.setItem("tl.tutorEnabled", "true"));
 
   it("streams a BRIEF answer immediately and shows 'Go deeper' (no prompt surface)", async () => {
     render(card());
@@ -188,7 +188,7 @@ describe("MarginTutorCard — brief default + go deeper", () => {
 
 describe("MarginTutorCard — quote chip", () => {
   it("shows the passage itself, never a raw char: locator", async () => {
-    localStorage.setItem("rg.tutorEnabled", "true");
+    localStorage.setItem("tl.tutorEnabled", "true");
     const { container } = render(card());
     // The quote is the anchor the reader cares about…
     expect(await screen.findByText(/the unjust man is happy/)).toBeInTheDocument();
@@ -221,7 +221,7 @@ describe("MarginTutorCard — cap-hit three doors (CM6)", () => {
   }
 
   beforeEach(() => {
-    localStorage.setItem("rg.tutorEnabled", "true");
+    localStorage.setItem("tl.tutorEnabled", "true");
     setCapHit();
   });
 
@@ -280,7 +280,7 @@ describe("MarginTutorCard — first-cloud-send consent copy", () => {
   }
 
   async function consentDialog(provider: string, host: string) {
-    localStorage.setItem("rg.tutorEnabled", "true");
+    localStorage.setItem("tl.tutorEnabled", "true");
     setConsentNeeded(provider, host);
     render(card());
     return await screen.findByRole("dialog", { name: /Confirm cloud AI/i });
@@ -330,7 +330,7 @@ describe("MarginTutorCard — provider gate", () => {
   }
 
   it("when no provider is chosen, does NOT call cmd_ai_ask and shows the cold-start setup sheet", async () => {
-    localStorage.setItem("rg.tutorEnabled", "true"); // would normally auto-start
+    localStorage.setItem("tl.tutorEnabled", "true"); // would normally auto-start
     setNoProvider();
     render(card());
     // The dead-end "Choose one in Settings" message is replaced by setup-at-intent.
@@ -351,7 +351,7 @@ describe("MarginTutorCard — provider gate", () => {
   });
 
   it("when a CLOUD provider is chosen, the tutor IS allowed (calls cmd_ai_ask) and never claims local", async () => {
-    localStorage.setItem("rg.tutorEnabled", "true");
+    localStorage.setItem("tl.tutorEnabled", "true");
     mocks.invoke.mockReset();
     mocks.invoke.mockImplementation((cmd: string) => {
       switch (cmd) {
