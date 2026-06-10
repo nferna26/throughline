@@ -572,8 +572,9 @@ async fn run_company(
         } else {
             breaker.on_failure();
         }
-        let snippet = resp.text().await.unwrap_or_default();
-        return Err(anyhow!(humanize_http("Throughline AI", status, &snippet)));
+        // Company arm: never echo the forwarded provider body into the reader's
+        // margin card — calm fixed copy keyed on the status class (FT-10).
+        return Err(anyhow!(humanize_company_http(status)));
     }
     let (tx, rx) = mpsc::channel::<StreamEvent>(64);
     tokio::spawn(async move {
@@ -1374,16 +1375,9 @@ async fn test_company(base_url: &str, license: &str, timeout: Duration) -> ConnT
         }
         Ok(r) => {
             breaker.on_failure();
-            let status = r.status();
-            (
-                false,
-                None,
-                humanize_http(
-                    "Throughline AI",
-                    status,
-                    &r.text().await.unwrap_or_default(),
-                ),
-            )
+            // Same company-arm rule as the relay path (FT-10): never echo the
+            // forwarded provider body — calm copy keyed on the status class.
+            (false, None, humanize_company_http(r.status()))
         }
         Err(_) => {
             breaker.on_failure();
@@ -1405,6 +1399,24 @@ fn humanize_http(provider: &str, status: reqwest::StatusCode, snippet: &str) -> 
         403 => format!("{provider}: access denied (403). {s}"),
         429 => format!("{provider}: rate limited (429). Try again shortly."),
         _ => format!("{provider}: HTTP {status}. {s}"),
+    }
+}
+
+/// FT-10 (CORE-1043): the company-arm sibling of `humanize_http`. The relay
+/// forwards the upstream provider's response body verbatim, so it can carry raw
+/// JSON / payload bytes — that must never reach the reader's margin card (the
+/// no-payload-in-diagnostics rule, P2-15/CORE-1013). This message is keyed on
+/// the status *class* only: it keeps the numeric status code (callers and the
+/// breaker tests rely on it) but never the body. BYO arms keep their snippets;
+/// the company path must not.
+fn humanize_company_http(status: reqwest::StatusCode) -> String {
+    let code = status.as_u16();
+    match code {
+        429 => "Throughline AI is busy right now. Try again shortly.".to_string(),
+        c if (400..500).contains(&c) => format!(
+            "Throughline AI couldn't take that request ({c}). Try again — if it keeps happening, check for an app update."
+        ),
+        c => format!("Throughline AI hit a problem answering ({c}). Try again in a moment."),
     }
 }
 

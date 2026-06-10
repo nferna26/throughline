@@ -353,6 +353,43 @@ async fn company_4xx_does_not_open_the_breaker() {
     );
 }
 
+/// FT-10 (CORE-1043): a non-success relay reply must never echo the provider's
+/// response body into the reader's margin card. The body is forwarded verbatim
+/// from the upstream API and can carry raw JSON / payload bytes; the company arm
+/// must answer with calm fixed copy keyed on the status class, naming Throughline
+/// AI and a next step, while keeping the numeric status code.
+#[tokio::test]
+async fn company_http_error_never_echoes_response_body() {
+    let _g = company_breaker_test_guard();
+    let body = "{\"error\":\"bad_request\",\"detail\":\"max_tokens too large\"}";
+    let resp = format!(
+        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let resp: &'static str = Box::leak(resp.into_boxed_str());
+    let (base_url, _) = mock_proxy(resp);
+
+    let err = run_provider_call(company_call(base_url))
+        .await
+        .expect_err("a 400 must surface as an error");
+    let msg = err.to_string();
+    for leaked in ["bad_request", "max_tokens", "{", "detail"] {
+        assert!(
+            !msg.contains(leaked),
+            "the company message must not echo response-body bytes ({leaked:?}): {msg}"
+        );
+    }
+    assert!(
+        msg.contains("Throughline AI"),
+        "the message names Throughline AI: {msg}"
+    );
+    assert!(
+        msg.to_lowercase().contains("try again"),
+        "the message offers a next step: {msg}"
+    );
+}
+
 /// CORE-1018: "Test connection" for Company must really probe the relay's
 /// /v1/credits with the Bearer license — a live relay answers and the reader
 /// sees the active message; nothing is hardcoded.
