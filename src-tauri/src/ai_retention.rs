@@ -158,7 +158,10 @@ mod tests {
         let usage_left: i64 = conn
             .query_row("SELECT COUNT(*) FROM ai_request_usage", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(usage_left, 0, "the swept request's usage child goes with it");
+        assert_eq!(
+            usage_left, 0,
+            "the swept request's usage child goes with it"
+        );
 
         let kept: Vec<String> = conn
             .prepare("SELECT id FROM ai_requests ORDER BY id")
