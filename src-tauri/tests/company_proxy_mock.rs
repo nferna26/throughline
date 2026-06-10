@@ -314,6 +314,45 @@ async fn company_arm_maps_402_to_cap_exhausted() {
     );
 }
 
+/// CORE-1036: an authoritative client-error verdict (here a 400) proves the
+/// relay answered — three of them must not open the breaker and lock every
+/// company lens behind the cool-down. Only outage signals (408/429, 5xx,
+/// transport failures) may count, mirroring the 402 arm's rationale.
+#[tokio::test]
+async fn company_4xx_does_not_open_the_breaker() {
+    let _g = company_breaker_test_guard();
+    let body = "{\"error\":\"max_tokens too large\"}";
+    let resp = format!(
+        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let resp: &'static str = Box::leak(resp.into_boxed_str());
+
+    for i in 0..3 {
+        let (base_url, _) = mock_proxy(resp);
+        let err = run_provider_call(company_call(base_url))
+            .await
+            .expect_err("a 400 still surfaces as an error");
+        assert!(err.to_string().contains("400"), "call {i}: {err}");
+    }
+    assert!(
+        breaker_for(AiProvider::Company).check().is_ok(),
+        "three authoritative 400s must not open the circuit — the relay answered every one"
+    );
+
+    // And a fourth call still reaches the wire instead of failing fast
+    // (mirrors the hit-counting in the breaker-open test above, via the
+    // captured request).
+    let (base_url, captured) = mock_proxy(resp);
+    let _ = run_provider_call(company_call(base_url)).await;
+    let req = captured.lock().unwrap().clone();
+    assert!(
+        req.contains("POST /v1/tutor"),
+        "the fourth call must still reach the wire, not fail fast: {req}"
+    );
+}
+
 /// CORE-1018: "Test connection" for Company must really probe the relay's
 /// /v1/credits with the Bearer license — a live relay answers and the reader
 /// sees the active message; nothing is hardcoded.

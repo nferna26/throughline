@@ -563,7 +563,15 @@ async fn run_company(
         return Err(anyhow!(CAP_EXHAUSTED_SENTINEL));
     }
     if !status.is_success() {
-        breaker.on_failure();
+        // An authoritative client-error verdict (4xx minus the retryable pair)
+        // proves the relay is up and answering — like the 402 arm above, it
+        // must never open the circuit and dress a bad request up as an outage.
+        // 408/429, 5xx, and transport failures stay outage signals.
+        if status.is_client_error() && !matches!(status.as_u16(), 408 | 429) {
+            breaker.on_success();
+        } else {
+            breaker.on_failure();
+        }
         let snippet = resp.text().await.unwrap_or_default();
         return Err(anyhow!(humanize_http("Throughline AI", status, &snippet)));
     }
