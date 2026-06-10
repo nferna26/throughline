@@ -5,6 +5,26 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.4.5] - 2026-06-10
+
+The reading page — the heart of the app — got the care it deserves.
+
+### Changed
+
+- **A page on a desk.** The reading column now sits as a quiet sheet centered in
+  the window, and it no longer jumps sideways when you open the margin — the
+  space for your notes is always held, whether the margin is open or not. On a
+  big screen the surrounding room reads as a calm desk rather than a marooned
+  column.
+- **Real book typography.** Plain-text books now render the way they were meant
+  to: words the author italicized are italic (no more stray underscores),
+  chapter and section headings stand apart as centered small caps, and each
+  section opens with a drop cap. Project Gutenberg's `[Illustration]` placeholders
+  no longer clutter the page.
+
+> Note: this applies to books added from this version on. To see it on a title
+> you already have, get it again from Discover.
+
 ## [0.4.4] - 2026-06-10
 
 The rest of the field-test polish — the reader-felt seams across Today, the
