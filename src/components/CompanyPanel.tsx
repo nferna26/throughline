@@ -3,9 +3,18 @@ import { invoke } from "@tauri-apps/api/core";
 import TLIcon from "./TLIcon";
 import type { CompanyStatus, CompanyCredits } from "../types";
 
-/** Three-state fuel gauge — robust to price changes (no exact "N questions"). */
-function fuel(credits: CompanyCredits | null): { label: string; level: "ok" | "low" | "empty" } {
-  if (!credits || credits.status !== "active") return { label: "Almost out", level: "empty" };
+/**
+ * Fuel gauge — robust to price changes (no exact "N questions"). Only a
+ * confirmed-active license reaches the real gauge; when the check itself
+ * fails (offline, relay hiccup → null or status "unknown") we say so calmly
+ * instead of crying "Almost out". Exhausted stays with the cap screen.
+ */
+export function fuel(
+  credits: CompanyCredits | null,
+): { label: string; level: "ok" | "low" | "empty" | "unavailable" } {
+  if (!credits || credits.status !== "active") {
+    return { label: "Can't check right now", level: "unavailable" };
+  }
   const frac = credits.remaining_fraction;
   if (frac > 0.33) return { label: "Plenty of AI left", level: "ok" };
   if (frac > 0.1) return { label: "Running low", level: "low" };
@@ -84,8 +93,13 @@ export default function CompanyPanel({ onActivated }: { onActivated: () => void 
           <div className="desc">Claude Sonnet, no API key — billed to your one-time purchase.</div>
         </div>
         <div className={`tl-fuel ${f.level}`} role="status" aria-label={`AI credits: ${f.label}`}>
-          <span className="tl-fuel-bar" aria-hidden="true"><span className="fill" /></span>
-          <span className="tl-fuel-label">{f.label}</span>
+          {f.level !== "unavailable" && (
+            <span className="tl-fuel-bar" aria-hidden="true"><span className="fill" /></span>
+          )}
+          <span className="tl-fuel-label">
+            {f.label}
+            {f.level === "unavailable" && " — the tutor still answers"}
+          </span>
         </div>
       </div>
     );
