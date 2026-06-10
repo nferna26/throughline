@@ -105,43 +105,6 @@ pub fn assigned_section_index(
     Some(idx.min(sections_count - 1))
 }
 
-/// How many sections *should* be completed by end of day_idx.
-pub fn expected_completed(sections_count: usize, total_days: i64, day_idx: i64) -> usize {
-    if sections_count == 0 || total_days <= 0 {
-        return 0;
-    }
-    let d = day_idx.clamp(0, total_days);
-    ((d as f64 * sections_count as f64 / total_days as f64).round() as usize).min(sections_count)
-}
-
-pub fn pace_state(
-    sections_count: usize,
-    completed: usize,
-    total_days: i64,
-    day_idx: i64,
-) -> PaceState {
-    if sections_count == 0 {
-        return PaceState::NotStarted;
-    }
-    if completed >= sections_count {
-        return PaceState::Done;
-    }
-    let expected = expected_completed(sections_count, total_days, day_idx);
-    if completed >= expected {
-        PaceState::OnPace
-    } else {
-        let deficit = expected as i64 - completed as i64;
-        // 1 section behind = "behind"; >=3 sections behind = recovery
-        if deficit >= 3 {
-            PaceState::Recovery
-        } else {
-            PaceState::Behind {
-                days_behind: deficit,
-            }
-        }
-    }
-}
-
 /// Forward-looking finish forecast from the OBSERVED reading rate — gentle, not
 /// punitive. The caller guarantees the plan is active. Within the grace window
 /// (or before any reading) it trusts the plan's own rate, so a just-started book

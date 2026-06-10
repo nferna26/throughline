@@ -642,7 +642,7 @@ pub fn codex_cli_auth_present() -> bool {
 /// don't model via serde flatten. The app only ever rewrites it after a refresh.
 fn write_codex_auth(auth: &CodexAuth) -> Result<()> {
     let path = codex_auth_path();
-    let tmp = path.with_extension("json.rgtmp");
+    let tmp = path.with_extension("json.tltmp");
     let data = serde_json::to_string_pretty(auth).context("serialize codex auth")?;
     std::fs::write(&tmp, data).context("write codex auth tmp")?;
     std::fs::rename(&tmp, &path).context("rename codex auth")?;

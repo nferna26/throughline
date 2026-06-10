@@ -276,8 +276,7 @@ mod tests {
     use rusqlite::params;
 
     use crate::import::{estimate_minutes_for_chars, sectionize};
-    use crate::models::PaceState;
-    use crate::plan::{assigned_section_index, expected_completed, pace_state};
+    use crate::plan::assigned_section_index;
     use crate::{ai_client, db, export, paths};
 
     #[test]
@@ -308,34 +307,6 @@ mod tests {
     #[test]
     fn test_estimate_minutes() {
         assert!(estimate_minutes_for_chars(10_000) >= 1);
-    }
-
-    #[test]
-    fn test_pace_state_on_pace_when_caught_up() {
-        let state = pace_state(30, 5, 30, 5);
-        matches!(state, PaceState::OnPace);
-    }
-
-    #[test]
-    fn test_pace_state_behind() {
-        let state = pace_state(30, 8, 30, 10);
-        if let PaceState::Behind { days_behind } = state {
-            assert_eq!(days_behind, 2);
-        } else {
-            panic!("expected Behind")
-        }
-    }
-
-    #[test]
-    fn test_pace_state_recovery_when_far_behind() {
-        let state = pace_state(30, 0, 30, 10);
-        matches!(state, PaceState::Recovery);
-    }
-
-    #[test]
-    fn test_expected_completed_endpoints() {
-        assert_eq!(expected_completed(30, 30, 0), 0);
-        assert_eq!(expected_completed(30, 30, 30), 30);
     }
 
     #[test]
