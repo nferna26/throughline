@@ -202,9 +202,34 @@ describe("AiSetupSheet — CONFIGURED-BUT-UNAVAILABLE (Tutor paused)", () => {
     expect(screen.getByText(/Check again/i)).toBeInTheDocument();
     expect(screen.getByText(/Switch provider/i)).toBeInTheDocument();
     expect(screen.getByText(/Copy prepared prompt/i)).toBeInTheDocument();
+    // The request for this session DID go out (the audit row says Sent →), so
+    // the paused state must never claim nothing was sent.
+    expect(screen.queryByText(/Nothing has been sent/i)).toBeNull();
     // "Check again" just retries the live provider (empty string → caller retry).
     fireEvent.click(screen.getByText(/Check again/i));
     expect(onConnected).toHaveBeenCalledWith("");
+  });
+
+  it("company unavailable: truthful, single-product voice — names Throughline AI, no key-pasting CTA", async () => {
+    const onConnected = vi.fn();
+    render(
+      <AiSetupSheet
+        ctx={baseCtx}
+        initialState="unavailable"
+        provider="company"
+        onConnected={onConnected}
+      />,
+    );
+    expect(await screen.findByText(/Throughline AI hit a snag/i)).toBeInTheDocument();
+    // Truthful: the question went out before the relay went quiet — never
+    // "Nothing has been sent", and never the BYO "your provider" framing.
+    expect(screen.queryByText(/Nothing has been sent/i)).toBeNull();
+    expect(screen.queryByText(/your provider/i)).toBeNull();
+    // Single-product voice: no paste-a-key door for a $20 buyer.
+    expect(screen.queryByRole("button", { name: /Switch provider/i })).toBeNull();
+    expect(screen.getByText(/Throughline AI/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Check again/i })).toBeInTheDocument();
+    expect(screen.getByText(/Copy prepared prompt/i)).toBeInTheDocument();
   });
 });
 

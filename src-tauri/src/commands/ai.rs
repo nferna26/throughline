@@ -310,6 +310,26 @@ const PREPARE_NEXT_MAX_TOKENS: u32 = 512;
 /// not a wall, but with enough headroom that all five parts complete.
 const SECTION_BRIEFING_MAX_TOKENS: u32 = 768;
 
+/// The company relay's shape gate: it rejects any request whose `max_tokens`
+/// exceeds this with HTTP 400 ("max_tokens too large") before the model is
+/// reached. Mirrors `MAX_OUTPUT_TOKENS = "800"` in
+/// throughline-ai-proxy/wrangler.toml as of 2026-06-10 — if the proxy gate
+/// moves, move this with it. The contract test below pins every mode ceiling
+/// under it, and `clamp_to_company_relay` keeps even future drift from turning
+/// into a deterministic 400 for company readers.
+pub const COMPANY_RELAY_MAX_OUTPUT_TOKENS: u32 = 800;
+
+/// Cap a per-mode ceiling at the relay's shape gate for company calls — a
+/// ceiling raised for BYO headroom must never become a guaranteed rejection on
+/// the paid path. BYO providers keep the full ceiling.
+pub fn clamp_to_company_relay(provider: settings::AiProvider, max_tokens: u32) -> u32 {
+    if matches!(provider, settings::AiProvider::Company) {
+        max_tokens.min(COMPANY_RELAY_MAX_OUTPUT_TOKENS)
+    } else {
+        max_tokens
+    }
+}
+
 /// Pick the generated-token ceiling for a (mode, depth) pair.
 fn max_tokens_for(mode: ai_stub::StubMode, depth: ai_stub::Depth) -> u32 {
     use ai_stub::{Depth, StubMode};
@@ -474,7 +494,10 @@ pub async fn cmd_ai_ask(
         provider,
         model: model.clone(),
         prompt: prompt.clone(),
-        max_tokens: Some(max_tokens_for(stub_mode, answer_depth)),
+        max_tokens: Some(clamp_to_company_relay(
+            provider,
+            max_tokens_for(stub_mode, answer_depth),
+        )),
         timeout: std::time::Duration::from_secs(180),
         auth,
         base_url: base_url.clone(),
@@ -1338,6 +1361,55 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// CORE-1035: the relay's shape gate rejects any `max_tokens` above its
+    /// `MAX_OUTPUT_TOKENS` before the request reaches the model, so every
+    /// (mode, depth) ceiling the app can attach must fit under the documented
+    /// gate — otherwise a whole lens deterministically 400s for company readers
+    /// (the v0.4.0 Section-briefing outage). This is the app's half of the
+    /// cross-repo contract; the proxy's half lives in wrangler.toml.
+    #[test]
+    fn every_mode_ceiling_fits_the_relay_contract() {
+        use ai_stub::{Depth, StubMode};
+        for mode in [
+            StubMode::Explain,
+            StubMode::Historical,
+            StubMode::Vocabulary,
+            StubMode::Socratic,
+            StubMode::DurableNote,
+            StubMode::PrepareNext,
+            StubMode::SectionBriefing,
+        ] {
+            for depth in [Depth::Brief, Depth::Deep] {
+                let cap = max_tokens_for(mode, depth);
+                assert!(
+                    cap <= COMPANY_RELAY_MAX_OUTPUT_TOKENS,
+                    "{mode:?}/{depth:?}: ceiling {cap} exceeds the relay shape gate \
+                     ({COMPANY_RELAY_MAX_OUTPUT_TOKENS}) — every company call in this \
+                     mode would 400 before reaching the model"
+                );
+            }
+        }
+    }
+
+    /// The call-boundary clamp protects against future drift: even if a ceiling
+    /// is raised past the relay gate for BYO headroom (as happened to
+    /// SectionBriefing), the company arm sends at most the gate value, while
+    /// BYO providers keep the full ceiling.
+    #[test]
+    fn company_clamp_bounds_a_hypothetical_over_limit_ceiling() {
+        let over = COMPANY_RELAY_MAX_OUTPUT_TOKENS + 200;
+        assert_eq!(
+            clamp_to_company_relay(settings::AiProvider::Company, over),
+            COMPANY_RELAY_MAX_OUTPUT_TOKENS,
+            "a company call must never carry max_tokens above the relay gate"
+        );
+        assert_eq!(
+            clamp_to_company_relay(settings::AiProvider::Anthropic, over),
+            over,
+            "BYO providers keep their full headroom"
+        );
     }
 
     /// `cmd_ai_preview` returns a non-empty reader-facing prompt for every lens

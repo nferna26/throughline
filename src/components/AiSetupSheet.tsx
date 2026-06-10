@@ -109,6 +109,10 @@ export default function AiSetupSheet(props: {
    *  wrong there (a send was attempted and refused before any stream). */
   title?: string;
   subtitle?: string;
+  /** The provider that went quiet (settings id, e.g. "company"). The
+   *  `unavailable` state uses it to speak truthfully in the product's voice:
+   *  a Throughline AI buyer is never steered toward pasting a key. */
+  provider?: string;
 }) {
   const { ctx } = props;
   const [state, setState] = useState<SetupState>(props.initialState ?? "not_connected");
@@ -354,25 +358,44 @@ export default function AiSetupSheet(props: {
         </div>
       )}
 
-      {state === "unavailable" && (
-        <div className="tl-aiset-body">
-          <h3 style={sx.title}>Tutor paused</h3>
-          <p style={sx.sub}>
-            Your provider isn’t answering right now. Nothing has been sent.
-          </p>
-          <div style={sx.actions}>
-            <button className="tl-btn tl-btn-primary" onClick={() => props.onConnected("")}>
-              <TLIcon name="refresh" size={14} /> Check again
-            </button>
-            <button className="tl-tutor-ghost" onClick={() => setState("paste_key")}>
-              Switch provider
-            </button>
-            <button style={sx.link} onClick={openFallback}>
-              Copy prepared prompt
-            </button>
+      {/* The paused copy never claims nothing was sent: by the time this state
+          opens, the question for this session already went out (Request history
+          shows the Sent row). "Nothing has been sent" is true only on the
+          not_connected first-run path above. */}
+      {state === "unavailable" &&
+        (props.provider === "company" ? (
+          <div className="tl-aiset-body">
+            <h3 style={sx.title}>Throughline AI hit a snag</h3>
+            <p style={sx.sub}>
+              It couldn’t answer just now. Your question went out but no answer came back —
+              nothing was saved to your notes.
+            </p>
+            <div style={sx.actions}>
+              <button className="tl-btn tl-btn-primary" onClick={() => props.onConnected("")}>
+                <TLIcon name="refresh" size={14} /> Check again
+              </button>
+              <button style={sx.link} onClick={openFallback}>
+                Copy prepared prompt
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="tl-aiset-body">
+            <h3 style={sx.title}>Tutor paused</h3>
+            <p style={sx.sub}>Your provider isn’t answering right now.</p>
+            <div style={sx.actions}>
+              <button className="tl-btn tl-btn-primary" onClick={() => props.onConnected("")}>
+                <TLIcon name="refresh" size={14} /> Check again
+              </button>
+              <button className="tl-tutor-ghost" onClick={() => setState("paste_key")}>
+                Switch provider
+              </button>
+              <button style={sx.link} onClick={openFallback}>
+                Copy prepared prompt
+              </button>
+            </div>
+          </div>
+        ))}
 
       {state === "paste_key" && (
         <div className="tl-aiset-body">
