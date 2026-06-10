@@ -134,6 +134,39 @@ describe("Discover — full on-device catalogue search", () => {
     expect(screen.getByText(/results for/i).textContent).toMatch(/2\s*results for/i);
   });
 
+  it("a failed Get says what happened and what to do, and offers Retry (FT-30)", async () => {
+    // The import rejects (e.g. the download didn't finish). The screen must
+    // surface a spoken-aloud error line, not just flip the button to Retry.
+    vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
+      const a = (args ?? {}) as Record<string, unknown>;
+      const query = (a.query ?? null) as string | null;
+      switch (cmd) {
+        case "cmd_discover_search":
+        case "cmd_discover_seed":
+          return query == null
+            ? Promise.resolve({ count: 1, results: [book(1342, "Pride and Prejudice", "Jane Austen")], next_page: null, offline: false })
+            : Promise.resolve({ count: 1, results: [book(1342, "Pride and Prejudice", "Jane Austen")], next_page: null, offline: false });
+        case "cmd_import_from_gutendex":
+          return Promise.reject({ message: "The download didn't finish." });
+        default:
+          return Promise.resolve(undefined);
+      }
+    });
+    render(<Discover onBack={noop} onPicked={noop} />);
+
+    fireEvent.change(screen.getByLabelText(/Search all titles and authors/i), { target: { value: "austen" } });
+    await waitFor(() => expect(screen.getByText(/Pride and Prejudice/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /Get Pride and Prejudice/i }));
+
+    // The failure is announced (role=alert) in the app's voice…
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/couldn.t .*(download|get)/i);
+    // …and the row offers a Retry.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Get Pride and Prejudice/i }).textContent).toMatch(/Retry/i),
+    );
+  });
+
   it("Get imports a result and pauses on the saved confirmation", async () => {
     const outcome = { book: { id: "b1", title: "Pride and Prejudice" }, created: true } as unknown as ImportOutcome;
     wire({
