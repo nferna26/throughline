@@ -995,42 +995,62 @@ pub async fn cmd_list_ai_models(
     }
 }
 
+/// Resolve the inputs for a connection test from the saved settings plus the
+/// caller's draft overrides — READ-ONLY, so probing can never mutate settings.
+/// Split from `cmd_test_ai_connection` so the no-persist draft contract is
+/// unit-testable against a plain `Connection` (mirrors `cmd_list_ai_models`).
+fn resolve_conn_test_inputs(
+    conn: &rusqlite::Connection,
+    provider: Option<&str>,
+    key: Option<String>,
+    base_url: Option<String>,
+) -> (settings::AiProvider, Option<String>, String, String) {
+    let prov = match provider {
+        Some(p) => settings::AiProvider::from_str(p),
+        None => settings::get_ai_provider(conn),
+    };
+    // The Company relay has its own endpoint (and its license is read inside
+    // test_provider's Company arm). Local may probe an unsaved draft base URL —
+    // loopback-validated downstream exactly like the saved path — WITHOUT
+    // writing it. Everything else probes the saved base URL.
+    let base_url = match prov {
+        settings::AiProvider::Company => settings::get_company_base_url(conn),
+        settings::AiProvider::Local => base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| settings::get_ai_base_url(conn)),
+        _ => settings::get_ai_base_url(conn),
+    };
+    let model = settings::get_ai_model_for(conn, prov);
+    // Prefer an explicitly-passed key (test-before-save); else the stored one.
+    let resolved_key = match prov {
+        settings::AiProvider::OpenAi => key
+            .filter(|k| !k.trim().is_empty())
+            .or_else(|| crate::keystore::get_key("openai")),
+        settings::AiProvider::Anthropic => key
+            .filter(|k| !k.trim().is_empty())
+            .or_else(|| crate::keystore::get_key("anthropic")),
+        _ => None,
+    };
+    (prov, resolved_key, base_url, model)
+}
+
 /// Test a provider connection. `provider` + `key` may be supplied to test BEFORE
-/// saving (onboarding); otherwise the stored provider/key are used. The key is
+/// saving (onboarding); `base_url` is an optional draft for the Local arm so the
+/// LM Studio detect flow can probe without persisting (CORE-1034). The key is
 /// never logged or returned.
 #[tauri::command]
 pub async fn cmd_test_ai_connection(
     provider: Option<String>,
     key: Option<String>,
+    base_url: Option<String>,
     state: State<'_, DbState>,
 ) -> Result<ConnTestResult, AppError> {
     let (prov, resolved_key, base_url, model) = {
         let conn = state.0.lock()?;
-        let prov = match provider.as_deref() {
-            Some(p) => settings::AiProvider::from_str(p),
-            None => settings::get_ai_provider(&conn),
-        };
-        // The Company relay has its own endpoint (and its license is read inside
-        // test_provider's Company arm); everything else probes the saved base URL.
-        let base_url = if matches!(prov, settings::AiProvider::Company) {
-            settings::get_company_base_url(&conn)
-        } else {
-            settings::get_ai_base_url(&conn)
-        };
-        let model = settings::get_ai_model_for(&conn, prov);
-        // Prefer an explicitly-passed key (test-before-save); else the stored one.
-        let resolved_key = match prov {
-            settings::AiProvider::OpenAi => key
-                .clone()
-                .filter(|k| !k.trim().is_empty())
-                .or_else(|| crate::keystore::get_key("openai")),
-            settings::AiProvider::Anthropic => key
-                .clone()
-                .filter(|k| !k.trim().is_empty())
-                .or_else(|| crate::keystore::get_key("anthropic")),
-            _ => None,
-        };
-        (prov, resolved_key, base_url, model)
+        resolve_conn_test_inputs(&conn, provider.as_deref(), key, base_url)
     };
 
     let (reachable, model_id, message) = crate::ai_providers::test_provider(
@@ -1197,6 +1217,53 @@ mod tests {
             )
             .unwrap();
         assert_eq!((it, ot, cm), (4750, 400, 20_250));
+    }
+
+    /// CORE-1034: the connection test may probe a DRAFT base URL (the LM Studio
+    /// panel's default endpoint) without persisting it — merely opening the
+    /// recovery panel must never overwrite a reader's saved custom URL. The
+    /// draft applies to the Local arm only; Company keeps its relay endpoint.
+    #[test]
+    fn conn_test_draft_base_url_probes_without_persisting() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        // A reader running their local server on a custom port.
+        settings::set_string(&conn, settings::KEY_AI_BASE_URL, "http://localhost:8080/v1")
+            .unwrap();
+
+        let (prov, _key, base_url, _model) = resolve_conn_test_inputs(
+            &conn,
+            Some("local"),
+            None,
+            Some("http://localhost:1234/v1".to_string()),
+        );
+        assert!(matches!(prov, settings::AiProvider::Local));
+        assert_eq!(
+            base_url, "http://localhost:1234/v1",
+            "the draft is what gets probed"
+        );
+        // Probing is read-only: the saved custom URL survives untouched.
+        assert_eq!(
+            settings::get_string(&conn, settings::KEY_AI_BASE_URL).as_deref(),
+            Some("http://localhost:8080/v1"),
+            "a draft probe must never write KEY_AI_BASE_URL"
+        );
+
+        // No draft → the saved URL is probed (unchanged behavior); blank too.
+        let (_, _, saved, _) = resolve_conn_test_inputs(&conn, Some("local"), None, None);
+        assert_eq!(saved, "http://localhost:8080/v1");
+        let (_, _, blank, _) =
+            resolve_conn_test_inputs(&conn, Some("local"), None, Some("  ".to_string()));
+        assert_eq!(blank, "http://localhost:8080/v1");
+
+        // The draft never leaks into another provider's probe.
+        let (_, _, company, _) = resolve_conn_test_inputs(
+            &conn,
+            Some("company"),
+            None,
+            Some("http://localhost:1234/v1".to_string()),
+        );
+        assert_eq!(company, settings::DEFAULT_COMPANY_BASE_URL);
     }
 
     #[test]
