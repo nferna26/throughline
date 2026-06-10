@@ -34,6 +34,11 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const [assignableSections, setAssignableSections] = useState<BookSection[]>([]);
   const [currentIdx, setCurrentIdx] = useState<number>(-1);
   const [text, setText] = useState<string>("");
+  // A failed section-text read is said out loud in the reading column (never a
+  // silent blank page) with a Try again. null = no error. `loadNonce` bumps to
+  // re-run the load effect on retry.
+  const [textError, setTextError] = useState<string | null>(null);
+  const [loadNonce, setLoadNonce] = useState(0);
   // Identity guard: which section `text` actually belongs to. Cleared the moment
   // currentIdx changes and only set once the matching section's text resolves, so
   // Deep Study can never generate/cache a briefing from the previous section's
@@ -67,10 +72,21 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const [showNote, setShowNote] = useState(false);
   const [topOffset, setTopOffset] = useState<number>(0);
   const startedAt = useRef<number>(Date.now());
+  // Double-end guard: cmd_end_session must fire at most once per sitting, whether
+  // the reader leaves via Finish, the toolbar back button, or anything that calls
+  // onExit. Set before the awaited end so a second path can't slip past.
+  const endedRef = useRef<boolean>(false);
   const [endingPrompt, setEndingPrompt] = useState(false);
   const [summary, setSummary] = useState("");
   // ── Companion Margin: anchored notes/highlights/tutor cards beside the text ──
   const [notes, setNotes] = useState<Note[]>([]);
+  // Soft-delete (FT-32): the margin card's X hides the note optimistically and
+  // shows a 6s Undo toast (the house idiom from PlansView); cmd_delete_note only
+  // fires when that timer lapses. `pendingDelete` is the hidden note's id;
+  // deleteTimer commits it. Undo cancels the timer and re-shows the card.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const deleteTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (deleteTimer.current) clearTimeout(deleteTimer.current); }, []);
   // Draft tutor cards live only in component state until the reader saves one
   // (which turns it into a durable TutorNote via the existing approval path).
   const [tutorDrafts, setTutorDrafts] = useState<TutorDraft[]>([]);
@@ -183,16 +199,24 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       setCurrentIdx(startIdx);
       const baseOffset = parseInt(list[startIdx]?.start_locator || "0", 10);
       const startLoc = today.resume_locator ?? makeCharLocator(baseOffset);
-      const s = await invoke<ReadingSession>("cmd_start_session", {
-        bookId: book.id,
-        sectionId: list[startIdx]?.id ?? assignedSection.id,
-        startLocator: startLoc,
-      });
-      if (cancelled) return;
+      // A failed session-start must not blank the reader OR discard a later typed
+      // takeaway (FT-33): the text still loads and reads; `session` stays null, so
+      // finalizeSession saves the takeaway as a session-less note and skips the end.
+      let s: ReadingSession | null = null;
+      try {
+        s = await invoke<ReadingSession>("cmd_start_session", {
+          bookId: book.id,
+          sectionId: list[startIdx]?.id ?? assignedSection.id,
+          startLocator: startLoc,
+        });
+      } catch { /* read without a session rather than a dead end */ }
+      if (cancelled || !s) return;
       setSession(s);
       startedAt.current = Date.now();
     }
-    init();
+    // Catch is a safety net so a rejected list/section read never surfaces as an
+    // unhandled promise rejection; the empty-section fallback UI handles the rest.
+    init().catch(() => {});
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id, assignedSection?.id]);
@@ -206,12 +230,21 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     const sec = assignableSections[currentIdx];
     setTextSectionId(null);
     setStructure([]);
+    setTextError(null);
     async function loadSection() {
       if (!sec) return;
-      const t = await invoke<string>("cmd_read_section_text", {
-        bookId: book.id,
-        sectionId: sec.id,
-      });
+      let t: string;
+      try {
+        t = await invoke<string>("cmd_read_section_text", {
+          bookId: book.id,
+          sectionId: sec.id,
+        });
+      } catch (e) {
+        // A failed read is a dead end without this: surface the message + a retry
+        // rather than leaving the reader staring at an empty column.
+        if (!cancelled) setTextError(errorMessage(e));
+        return;
+      }
       if (cancelled) return;
       setText(t);
       setTextSectionId(sec.id);
@@ -245,7 +278,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     loadSection();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIdx, assignableSections.length]);
+  }, [currentIdx, assignableSections.length, loadNonce]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const paragraphRefs = useRef<Map<number, HTMLParagraphElement>>(new Map());
@@ -271,6 +304,17 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     if (el.clientHeight > 0 && endReached(el)) markEndReached(sec.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [textSectionId, currentIdx, assignableSections, markEndReached]);
+
+  // Focus the reading column once the current section's text mounts, so Space and
+  // the arrows page immediately after the reader opens — never stealing focus from
+  // an open note/modal field the reader is typing in (only claims it from the body).
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || textSectionId == null) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && el !== active && !el.contains(active)) return;
+    el.focus({ preventScroll: true });
+  }, [textSectionId]);
 
   function scrollToOffset(within: number) {
     if (!containerRef.current) return;
@@ -320,6 +364,37 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     }
   }
 
+  // Keyboard paging: Space is the most ingrained reading gesture on a Mac, and a
+  // book that can't be turned by keyboard is a WCAG 2.1.1 gap. Handles Space /
+  // Shift+Space, PageUp/PageDown, arrows, and Home/End as scroll deltas on the
+  // reading column, then reconciles progress via handleScroll. Lets editable
+  // targets (note textareas) keep their native Space/arrows.
+  function onReaderKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    const el = containerRef.current;
+    if (!el) return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+    const page = Math.max(40, el.clientHeight * 0.9);
+    const line = 60;
+    let delta: number | null = null;
+    let absolute: number | null = null;
+    switch (e.key) {
+      case " ": case "Spacebar": delta = e.shiftKey ? -page : page; break;
+      case "PageDown": delta = page; break;
+      case "PageUp": delta = -page; break;
+      case "ArrowDown": delta = line; break;
+      case "ArrowUp": delta = -line; break;
+      case "Home": absolute = 0; break;
+      case "End": absolute = el.scrollHeight; break;
+      default: return;
+    }
+    e.preventDefault();
+    const max = Math.max(0, el.scrollHeight - el.clientHeight);
+    const next = absolute != null ? absolute : el.scrollTop + (delta ?? 0);
+    el.scrollTop = Math.min(max, Math.max(0, next));
+    handleScroll();
+  }
+
   const locator = useMemo(() => {
     const sec = assignableSections[currentIdx];
     if (!sec) return makeCharLocator(0);
@@ -349,22 +424,43 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     return completed;
   }
 
+  // Flush the sitting to the backend: end the session (completed sections +
+  // minutes) so completion state isn't lost. Idempotent via endedRef — the recap
+  // path AND the toolbar back button both call this, and only the first wins.
+  // When the session never started, there's nothing to end (but a takeaway may
+  // still be saved by finalizeSession before this runs).
+  async function flushSession() {
+    if (endedRef.current) return;
+    if (!session) return;
+    endedRef.current = true;
+    const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
+    try {
+      await invoke<ReadingSession>("cmd_end_session", {
+        sessionId: session.id,
+        endLocator: locator,
+        minutes,
+        completedSectionIds: completedSectionIds(),
+        summarySentence: summary.trim() ? summary.trim() : null,
+      });
+    } catch { /* ending is best-effort; never trap the reader in the reader */ }
+  }
+
   // `takeaway` is passed explicitly (not read from state) so Skip can end with
   // null without racing a setState. Rescue mode never forces a takeaway and
   // never forces section completion — a short sitting still counts.
   async function finalizeSession(takeaway: string | null) {
-    if (!session) return onExit();
-    const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
     const tk = takeaway && takeaway.trim() ? takeaway.trim() : null;
     // The recap's "one sentence to remember" is a first-class Takeaway: it stays
     // in the session export AND becomes a durable, user-authored Takeaway note,
     // so it surfaces in the chapter notebook and on Today's "Last time". Skipping
     // (blank) saves nothing. The body is the reader's own words — privacy-safe.
+    // Saved BEFORE the session guard so a failed session-start can't silently
+    // discard the reader's typed takeaway (sessionId null is a legal arg).
     if (tk) {
       try {
         await invoke<Note>("cmd_save_note", {
           bookId: book.id,
-          sessionId: session.id,
+          sessionId: session?.id ?? null,
           noteType: "Takeaway",
           locator,
           chapterLabel: currentSection?.label ?? null,
@@ -376,13 +472,27 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         });
       } catch { /* recap takeaway is best-effort; never block ending a session */ }
     }
-    await invoke<ReadingSession>("cmd_end_session", {
-      sessionId: session.id,
-      endLocator: locator,
-      minutes,
-      completedSectionIds: completedSectionIds(),
-      summarySentence: tk,
-    });
+    if (!session) return onExit();
+    if (!endedRef.current) {
+      endedRef.current = true;
+      const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
+      try {
+        await invoke<ReadingSession>("cmd_end_session", {
+          sessionId: session.id,
+          endLocator: locator,
+          minutes,
+          completedSectionIds: completedSectionIds(),
+          summarySentence: tk,
+        });
+      } catch { /* ending is best-effort; never trap the reader in the reader */ }
+    }
+    onExit();
+  }
+
+  // Toolbar "‹ Today" is not plain navigation — it flushes the sitting first so
+  // the sections read this sitting are recorded (FT-29), then exits.
+  async function handleBackExit() {
+    await flushSession();
     onExit();
   }
 
@@ -419,6 +529,9 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const sectionNotes = useMemo(() => {
     return notes
       .filter((n) => {
+        // A note pending soft-delete hides at once (its card AND inline highlight)
+        // while the Undo toast is up — see deleteNote/undoDelete (FT-32).
+        if (n.id === pendingDelete) return false;
         const p = parseLocator(n.anchor_start || n.locator);
         if (p.kind === "char") {
           const v = parseInt(p.value, 10);
@@ -427,7 +540,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         return n.chapter_label != null && n.chapter_label === currentSection?.label;
       })
       .sort((a, b) => anchorChar(a) - anchorChar(b));
-  }, [notes, secBase, secEnd, currentSection?.label]);
+  }, [notes, secBase, secEnd, currentSection?.label, pendingDelete]);
 
   // Highlights to paint inline, grouped by within-section char span.
   const highlights = useMemo(() => {
@@ -615,10 +728,31 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     setTutorDrafts((d) => d.filter((x) => x.draftId !== draftId));
     if (activeNoteId === draftId) setActiveNoteId(null);
   }
-  async function deleteNote(id: string) {
+  // The X on a margin card is a DISMISS-then-commit, never a one-click destroy
+  // (FT-32). The card hides at once, a 6s Undo toast appears, and the real
+  // cmd_delete_note runs only after the timer lapses — matching every other X in
+  // the app (and the PlansView "Let go" idiom).
+  const commitDelete = useCallback(async (id: string) => {
+    deleteTimer.current = null;
+    setPendingDelete((cur) => (cur === id ? null : cur));
     try { await invoke("cmd_delete_note", { noteId: id }); } catch { /* ignore */ }
-    if (activeNoteId === id) setActiveNoteId(null);
     await refreshNotes();
+  }, [refreshNotes]);
+  function deleteNote(id: string) {
+    // A second delete supersedes the first: commit the still-pending one now so
+    // its 6s window doesn't outlive its toast.
+    if (deleteTimer.current) {
+      clearTimeout(deleteTimer.current);
+      deleteTimer.current = null;
+      if (pendingDelete && pendingDelete !== id) void commitDelete(pendingDelete);
+    }
+    if (activeNoteId === id) setActiveNoteId(null);
+    setPendingDelete(id);
+    deleteTimer.current = window.setTimeout(() => { void commitDelete(id); }, 6000);
+  }
+  function undoDelete() {
+    if (deleteTimer.current) { clearTimeout(deleteTimer.current); deleteTimer.current = null; }
+    setPendingDelete(null);
   }
 
   if (!currentSection) {
@@ -633,7 +767,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   return (
     <section className="tl-reader" ref={readerRef}>
       <div className="tl-readtoolbar">
-        <button className="tl-back" onClick={onExit}><TLIcon name="chevronLeft" size={18} /> Today</button>
+        <button className="tl-back" onClick={handleBackExit}><TLIcon name="chevronLeft" size={18} /> Today</button>
         <span className="tl-tb-title">
           {currentSection.label}
           {targetSection && targetSection.id !== currentSection.id && ` · today: ${targetSection.label}`}
@@ -680,13 +814,29 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       </div>
 
       <div className="tl-reader-body">
-        <div className="tl-reader-main" ref={containerRef} onScroll={handleScroll} onMouseUp={onTextMouseUp}>
+        <div
+          className="tl-reader-main"
+          ref={containerRef}
+          tabIndex={0}
+          onScroll={handleScroll}
+          onMouseUp={onTextMouseUp}
+          onKeyDown={onReaderKeyDown}
+        >
           {rescue && (
             <div className="tl-rescue-banner" style={{ maxWidth: `${lineWidth}px` }} role="note">
               <TLIcon name="clock" size={15} />
               <span>Ten minutes. The goal is just to stay connected to the book — not to finish anything.</span>
             </div>
           )}
+          {textError ? (
+            <div className="tl-readcol" style={{ maxWidth: `${lineWidth}px` }}>
+              <div className="tl-read-error" role="alert">
+                <p>{textError}</p>
+                <p className="tl-read-error-hint">The book file may have moved or be in use. Try again, or reopen this book from Today.</p>
+                <button className="tl-btn tl-btn-primary" onClick={() => { setTextError(null); setLoadNonce((n) => n + 1); }}>Try again</button>
+              </div>
+            </div>
+          ) : (
           <div className="tl-readcol" ref={colRef} style={{ maxWidth: `${lineWidth}px`, fontSize: `${fontSize}px` }}>
             {paragraphs.map((p) => {
               // Block role (heading/blockquote) styles the WHOLE paragraph via a
@@ -710,6 +860,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
               );
             })}
           </div>
+          )}
         </div>
 
         {/* The margin stays MOUNTED when collapsed (hidden via display:none), so a
@@ -825,6 +976,14 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
           positionHint={locatorHint(locator, { start: secBase, length: Math.max(0, secEnd - secBase) })}
           onClose={() => setShowNote(false)}
         />
+      )}
+
+      {/* Soft-delete Undo toast (FT-32) — the same idiom as PlansView "Let go". */}
+      {pendingDelete && (
+        <div className="tl-plans-toast" role="status" aria-live="polite">
+          <span>Note removed.</span>
+          <button onClick={undoDelete}>Undo</button>
+        </div>
       )}
 
       {endingPrompt && (() => {
