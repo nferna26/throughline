@@ -556,7 +556,8 @@
 
 /* The credits fuel-gauge bar — the margin tutor strip (TutorFuel) draws it. */
 .tl-fuel-bar { width: 120px; height: 8px; border-radius: 999px; background: var(--tl-line); overflow: hidden; }
-.tl-fuel-bar .fill { display: block; height: 100%; border-radius: 999px; }
+.tl-fuel-bar .fill { display: block; height: 100%; border-radius: 999px; background: var(--tl-accent); }
+.tl-tutorfuel.low .tl-fuel-bar .fill { background: var(--tl-warn); }
 
 /* ── Book Setup Sheet ─────────────────────────────────────────────────── */
 .tl-setup { flex: 1; display: flex; justify-content: center; padding: var(--tl-7) var(--tl-7) var(--tl-8); overflow-y: auto; }
