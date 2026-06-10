@@ -103,14 +103,27 @@ pub fn apply_pending(conn: &Connection) -> Result<Vec<&'static str>> {
         if applied.contains(m.version) {
             continue;
         }
-        (m.up)(conn).with_context(|| format!("migration {} ({})", m.version, m.description))?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?1, ?2, datetime('now'))",
-            params![m.version, m.description],
-        )?;
+        apply_one(conn, m)?;
         newly_applied.push(m.version);
     }
     Ok(newly_applied)
+}
+
+/// Run one migration's `up` and record it in `schema_migrations` — both inside
+/// one transaction, so a migration that fails partway leaves no partial state
+/// (SQLite DDL is transactional). Dropping the transaction on the error path
+/// rolls everything back. `unchecked_transaction` is the `&Connection` form;
+/// the `PRAGMA journal_mode = WAL` in v001 is a no-op here because `db.rs` sets
+/// WAL before migrating (and in-memory test DBs can't enter WAL at all).
+fn apply_one(conn: &Connection, m: &Migration) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    (m.up)(conn).with_context(|| format!("migration {} ({})", m.version, m.description))?;
+    conn.execute(
+        "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?1, ?2, datetime('now'))",
+        params![m.version, m.description],
+    )?;
+    tx.commit()?;
+    Ok(())
 }
 
 fn ensure_schema_migrations_table(conn: &Connection) -> Result<()> {
@@ -430,6 +443,55 @@ mod tests {
             )
             .unwrap();
         assert_eq!(lc, "active", "new plans default to the 'active' lifecycle");
+    }
+
+    /// `up` step for `failing_migration_leaves_no_partial_state`: creates a
+    /// table, then fails. The transaction wrapper must roll the table back.
+    fn failing_up(conn: &Connection) -> Result<()> {
+        conn.execute_batch("CREATE TABLE mig_tx_probe (id TEXT);")?;
+        conn.execute_batch("SELECT * FROM nonexistent;")?;
+        Ok(())
+    }
+
+    /// **The doc-comment promise**: `up` + the `schema_migrations` row land
+    /// inside one transaction, so a migration that fails partway leaves no
+    /// partial state behind. SQLite DDL is transactional, so the probe table
+    /// must be rolled back along with everything else.
+    #[test]
+    fn failing_migration_leaves_no_partial_state() {
+        let conn = fresh();
+        apply_pending(&conn).unwrap();
+        let bad = Migration {
+            version: "v999_test_failing",
+            description: "test-only migration that fails after a CREATE TABLE",
+            up: failing_up,
+        };
+        assert!(
+            apply_one(&conn, &bad).is_err(),
+            "a migration whose body errors must surface the error"
+        );
+        let probe_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='mig_tx_probe'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            probe_count, 0,
+            "failed migration left partial state: mig_tx_probe survived the rollback"
+        );
+        let recorded: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version='v999_test_failing'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            recorded, 0,
+            "failed migration must not be recorded as applied"
+        );
     }
 
     #[test]
