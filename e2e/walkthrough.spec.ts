@@ -22,8 +22,10 @@ test("welcome-first-run", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EMPTY__ = true; });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /Welcome to Throughline/i })).toBeVisible();
-  // The privacy + durability promise (the switching-anxiety answer) is stated plainly.
-  await expect(page.getByText(/never leave this Mac/i)).toBeVisible();
+  // The privacy + durability promise (the switching-anxiety answer) is stated
+  // plainly — and truthfully: books stay local; an opted-in tutor sends only
+  // the selected passage (review P1-4, CORE-1002).
+  await expect(page.getByText(/only the passage you select is sent — never the book/i)).toBeVisible();
   await expect(page.getByText(/Markdown that outlives the app/i)).toBeVisible();
   await shoot(page, "00-welcome");
 });

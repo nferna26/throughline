@@ -105,7 +105,7 @@ export default function Today({ today, onDiscover, onImport, onStart, onStartRes
           <h1>Welcome to Throughline</h1>
           <p>One book at a time, a little each day. Find something you mean to finish, and it'll be waiting on Today.</p>
           <ul className="tl-welcome-promise" aria-label="How Throughline treats your reading">
-            <li><TLIcon name="check" size={15} /> Your books and notes never leave this Mac.</li>
+            <li><TLIcon name="check" size={15} /> Your books stay on this Mac. If you ask the tutor, only the passage you select is sent — never the book.</li>
             <li><TLIcon name="check" size={15} /> Your notes export as plain Markdown that outlives the app.</li>
             <li><TLIcon name="check" size={15} /> No account, no cloud, no tracking.</li>
           </ul>

@@ -67,6 +67,22 @@ describe("Today", () => {
     expect(screen.getByRole("button", { name: /Import a file instead/i })).toBeInTheDocument();
   });
 
+  // REVIEW P1-4 / CORE-1002: the first screen must not overpromise. Since the
+  // AI pivot, an opted-in tutor sends the reader's SELECTED PASSAGE to a cloud
+  // provider — so the welcome promise names exactly what stays and what can go,
+  // mirroring the Settings trust card and the consent sheet.
+  it("welcome promise is truthful about the tutor (no absolute 'never leaves' claim)", () => {
+    render(<Today today={null} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    expect(
+      screen.getByText(/Your books stay on this Mac\. If you ask the tutor, only the passage you select is sent — never the book\./),
+    ).toBeInTheDocument();
+    // The pre-pivot absolute claim is gone…
+    expect(screen.queryByText(/never leave this Mac/i)).toBeNull();
+    // …and the two promises that are still literally true stay.
+    expect(screen.getByText(/Markdown that outlives the app/i)).toBeInTheDocument();
+    expect(screen.getByText(/No account, no cloud, no tracking/i)).toBeInTheDocument();
+  });
+
   it("welcome primary opens Discover, secondary opens the file picker", () => {
     const onDiscover = vi.fn();
     const onImport = vi.fn();
