@@ -19,11 +19,17 @@ const fmtN = (n: number) => n.toLocaleString("en-US");
 // "the public-domain library".
 type DlState = "idle" | "loading" | "done" | "error";
 
-// ── server-backed catalogue search ──
+// ── on-device catalogue search ──
 // Discover opens to hand-authored editorial shelves (an empty query). Typing
-// runs a debounced full-catalogue search and switches to the ranked results
-// list — search is the secondary, intent-declared affordance. "Load more"
+// runs a debounced search and switches to the ranked results list — search is
+// the secondary, intent-declared affordance. cmd_discover_search is now
+// synchronous and network-free: it searches the WHOLE bundled catalogue, so it
+// can never fail to reach the library. There is no offline path. "Load more"
 // appends the next page in place.
+//
+// `count` from the mounted empty query is the whole-catalogue size — the live
+// scale shown in the search affordance (FT-37). It is read straight from the
+// response, never hardcoded.
 interface DiscoverState {
   query: string;
   results: DiscoverBook[];
@@ -32,7 +38,9 @@ interface DiscoverState {
   status: "loading" | "ready" | "error";
   loadingMore: boolean;
   error: string | null;
-  offline: boolean;
+  // The whole-catalogue size, captured from the empty-query search on mount.
+  // Drives "Search all N titles"; never sourced from the seed. 0 until known.
+  catalogueSize: number;
 }
 
 function useDiscover() {
@@ -45,13 +53,10 @@ function useDiscover() {
     status: "loading",
     loadingMore: false,
     error: null,
-    offline: false,
+    catalogueSize: 0,
   });
   // Guards against out-of-order responses when the query changes mid-flight.
   const reqId = useRef(0);
-  // Tracks which request's live result has already landed, so the (faster)
-  // instant-seed paint never overwrites fresher live results.
-  const liveDone = useRef(0);
 
   const runSearch = useCallback((q: string) => {
     const id = ++reqId.current;
@@ -60,37 +65,12 @@ function useDiscover() {
     // existing list stays put until the next results replace it.
     setS((prev) => ({ ...prev, query: q, error: null, status: prev.results.length ? prev.status : "loading" }));
 
-    // Phase 1 — instant offline seed (no network). Paints in milliseconds so
-    // opening Discover never waits on the live API. For a query with no seed
-    // match, stay in "loading" rather than flashing "no matches" before live.
-    invoke<DiscoverPage>("cmd_discover_seed", { query: trimmed, page: 1 })
-      .then((seed) => {
-        if (id !== reqId.current || liveDone.current === id) return;
-        if (!trimmed || seed.results.length > 0) {
-          setS({
-            query: q,
-            results: seed.results,
-            count: seed.count,
-            nextPage: seed.next_page,
-            status: "ready",
-            loadingMore: false,
-            error: null,
-            offline: true,
-          });
-        } else {
-          setS((prev) => ({ ...prev, query: q, status: "loading", error: null }));
-        }
-      })
-      .catch(() => {/* the bundled seed never fails; ignore */});
-
-    // Phase 2 — live catalogue (network; itself falls back to the seed on
-    // failure). Replaces the seed paint when it lands: full catalogue if the API
-    // answered, or the same seed (invisibly) if it was unreachable.
+    // Search the full on-device catalogue. Synchronous + network-free, so this
+    // always reaches the whole library — a zero-result is truthful absence.
     invoke<DiscoverPage>("cmd_discover_search", { query: trimmed, page: 1 })
       .then((page) => {
         if (id !== reqId.current) return;
-        liveDone.current = id;
-        setS({
+        setS((prev) => ({
           query: q,
           results: page.results,
           count: page.count,
@@ -98,14 +78,13 @@ function useDiscover() {
           status: "ready",
           loadingMore: false,
           error: null,
-          offline: page.offline,
-        });
+          // The empty-query count is the whole-catalogue scale — capture it once.
+          catalogueSize: trimmed == null ? page.count : prev.catalogueSize,
+        }));
       })
       .catch((e) => {
         if (id !== reqId.current) return;
-        liveDone.current = id;
-        // Keep the seed if it already painted; only surface an error if nothing did.
-        setS((prev) => (prev.status === "ready" ? prev : { ...prev, status: "error", error: errorMessage(e) }));
+        setS((prev) => ({ ...prev, status: "error", error: errorMessage(e) }));
       });
   }, []);
 
@@ -120,10 +99,7 @@ function useDiscover() {
       if (prev.nextPage == null || prev.loadingMore) return prev;
       const id = ++reqId.current;
       const page = prev.nextPage;
-      // When showing the offline seed, page it instantly from the seed too;
-      // only reach for the (slow when down) live API once we're on live results.
-      const cmd = prev.offline ? "cmd_discover_seed" : "cmd_discover_search";
-      invoke<DiscoverPage>(cmd, { query: prev.query.trim() || null, page })
+      invoke<DiscoverPage>("cmd_discover_search", { query: prev.query.trim() || null, page })
         .then((res) => {
           if (id !== reqId.current) return;
           setS((cur) => ({
@@ -153,7 +129,7 @@ function useDiscover() {
     status: s.status,
     loadingMore: s.loadingMore,
     error: s.error,
-    offline: s.offline,
+    catalogueSize: s.catalogueSize,
     runSearch,
     loadMore,
   };
@@ -275,7 +251,9 @@ export default function Discover({ onBack, onPicked }: Props) {
           <input
             ref={searchRef}
             value={d.query}
-            placeholder="Search all titles and authors…"
+            // The whole catalogue is on-device — surface its real scale (FT-37).
+            // Read live from the mounted empty-search count; never hardcoded.
+            placeholder={d.catalogueSize > 0 ? `Search all ${fmtN(d.catalogueSize)} titles…` : "Search all titles and authors…"}
             aria-label="Search all titles and authors in the public-domain library"
             onChange={(e) => d.setQuery(e.target.value)}
           />
@@ -342,30 +320,25 @@ export default function Discover({ onBack, onPicked }: Props) {
             </div>
           )
         ) : (
-          /* ── Active query: the ranked live/search results list (unchanged) ── */
+          /* ── Active query: the ranked on-device catalogue results list ── */
           <>
             <div className="tl-disc-meta" aria-live="polite">
               <span className="tl-disc-count">
                 {d.status === "error" ? (
-                  "Couldn’t reach the library"
+                  "Couldn’t search the library"
                 ) : (
                   <>
                     <b>{fmtN(d.count)}</b> result{d.count === 1 ? "" : "s"} for “{d.query.trim()}”
                   </>
                 )}
               </span>
-              {d.offline && d.status !== "error" && (
-                <span className="tl-disc-offline" title="The live library was unreachable — showing a built-in catalogue of popular titles.">
-                  <TLIcon name="globe" size={13} /> Offline catalogue
-                </span>
-              )}
             </div>
 
             {d.status === "error" ? (
               <div className="tl-disc-empty" role="alert">
-                <span className="ico"><TLIcon name="globe" size={30} /></span>
-                <span className="big">The public-domain library isn’t responding</span>
-                <span>It may be briefly unavailable, or you might be offline. Your imported books aren’t affected — only finding new ones needs the connection.</span>
+                <span className="ico"><TLIcon name="search" size={30} /></span>
+                <span className="big">Something went wrong searching</span>
+                <span>Your imported books aren’t affected. Try the search again.</span>
                 <button className="searchall" onClick={() => d.runSearch(d.query)}>
                   <TLIcon name="refresh" size={15} /> Try again
                 </button>
@@ -376,28 +349,16 @@ export default function Discover({ onBack, onPicked }: Props) {
                 <span>Searching the library…</span>
               </div>
             ) : d.results.length === 0 ? (
-              // Zero hits mean different things depending on what was searched.
-              // Offline, only the small built-in shelf was looked at — a miss
-              // there says NOTHING about the library, so never assert absence.
-              d.offline ? (
-                <div className="tl-disc-empty">
-                  <span className="ico"><TLIcon name="globe" size={30} /></span>
-                  <span className="big">We couldn’t search the full library</span>
-                  <span>We can’t reach it right now, so we only searched a built-in shelf of popular titles. “{d.query.trim()}” may still be there — try again in a moment.</span>
-                  <button className="searchall" onClick={() => d.runSearch(d.query)}>
-                    <TLIcon name="refresh" size={15} /> Try again
-                  </button>
-                </div>
-              ) : (
-                <div className="tl-disc-empty">
-                  <span className="ico"><TLIcon name="search" size={30} /></span>
-                  <span className="big">No matches</span>
-                  <span>“{d.query.trim()}” isn’t in the public-domain library.</span>
-                  <button className="searchall" onClick={() => d.setQuery("")}>
-                    <TLIcon name="chevronLeft" size={15} /> Back to the shelves
-                  </button>
-                </div>
-              )
+              // The whole on-device catalogue was searched, so a zero-result is
+              // truthful absence — say so plainly and point to the next try.
+              <div className="tl-disc-empty">
+                <span className="ico"><TLIcon name="search" size={30} /></span>
+                <span className="big">No match in the public-domain library</span>
+                <span>Nothing for “{d.query.trim()}” — try another title or author.</span>
+                <button className="searchall" onClick={() => d.setQuery("")}>
+                  <TLIcon name="chevronLeft" size={15} /> Back to the shelves
+                </button>
+              </div>
             ) : (
               <>
                 <div className="tl-index">
