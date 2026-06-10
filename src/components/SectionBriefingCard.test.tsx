@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
 import SectionBriefingCard from "./SectionBriefingCard";
-import { setCachedBriefing } from "../sectionBriefing";
+import { setCachedBriefing, resetBriefingCache } from "../sectionBriefing";
 
 const mocks = vi.hoisted(() => {
   class MockChannel {
@@ -30,7 +30,9 @@ function setImpl() {
   });
 }
 
-beforeEach(() => { cleanup(); localStorage.clear(); setImpl(); });
+// The briefing cache is session-only (in-memory) — localStorage.clear() no
+// longer resets it, so drop it explicitly between cases.
+beforeEach(() => { cleanup(); localStorage.clear(); resetBriefingCache(); setImpl(); });
 
 const props = {
   bookId: "bk", sectionId: "s1", sourceSha: "sha1", mode: "deep_study",
