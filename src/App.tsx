@@ -17,6 +17,31 @@ import { purgeLegacyBriefings } from "./sectionBriefing";
 
 type BookTab = "today" | "notes";
 
+/** Outcome of a file-drop import attempt. Exported for tests. */
+export type DropResult =
+  | { kind: "imported"; outcome: ImportOutcome }
+  | { kind: "unsupported"; message: string }
+  | { kind: "none" }
+  | { kind: "error"; message: string };
+
+/** Import the first readable file from an OS drag-and-drop — the advertised
+ *  "drag in a book" path, funneled through the SAME `cmd_import_book` (with its
+ *  SHA dedup) the file picker uses. Anything that isn't .txt/.epub gets a calm
+ *  message, never silence. Exported for tests; the caller routes the result. */
+export async function handleDroppedPaths(paths: string[]): Promise<DropResult> {
+  if (paths.length === 0) return { kind: "none" };
+  const file = paths.find((p) => /\.(txt|epub)$/i.test(p));
+  if (!file) {
+    return { kind: "unsupported", message: "Throughline reads .txt and DRM-free .epub files." };
+  }
+  try {
+    const outcome = await invoke<ImportOutcome>("cmd_import_book", { path: file });
+    return { kind: "imported", outcome };
+  } catch (e) {
+    return { kind: "error", message: `Import failed: ${errorMessage(e)}` };
+  }
+}
+
 type View =
   | { kind: "today" }
   | { kind: "reader"; today: TodayCard; mode: ReaderMode }
@@ -95,6 +120,37 @@ export default function App() {
       }
     })();
     return () => unlisten?.();
+  }, []);
+
+  // Drag a book in (golden loop, first link). The webview intercepts OS file
+  // drops; .txt/.epub routes through the same import + setup flow as the file
+  // picker, anything else gets a calm dismissable notice. The dynamic import +
+  // try/catch makes this a no-op outside Tauri (the test harness / a browser).
+  const [dropNotice, setDropNotice] = useState<string | null>(null);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+        unlisten = await getCurrentWebview().onDragDropEvent(async (event) => {
+          if (event.payload.type !== "drop") return;
+          const result = await handleDroppedPaths(event.payload.paths);
+          if (result.kind === "imported") {
+            setDropNotice(null);
+            await refreshToday();
+            // Same routing as importBook: genuinely new → Book Setup Sheet;
+            // a dedup just lands on Today as the active book.
+            setView(result.outcome.created ? { kind: "setup", book: result.outcome.book } : { kind: "today" });
+          } else if (result.kind === "unsupported" || result.kind === "error") {
+            setDropNotice(result.message);
+          }
+        });
+      } catch {
+        /* not running under Tauri — nothing to listen to */
+      }
+    })();
+    return () => unlisten?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Export-folder preflight: catch a misconfigured path or an unmounted drive on
@@ -256,6 +312,14 @@ export default function App() {
           <TLIcon name="behind" size={16} />
           <span>{exportWarning} Your reading is safe — new notes just won't export until you choose a folder.</span>
           <button className="tl-btn-quiet" onClick={() => setView({ kind: "settings" })}>Choose a folder</button>
+        </div>
+      )}
+
+      {dropNotice && (
+        <div className="tl-export-warning" role="alert">
+          <TLIcon name="behind" size={16} />
+          <span>{dropNotice}</span>
+          <button className="tl-btn-quiet" onClick={() => setDropNotice(null)}>OK</button>
         </div>
       )}
 
