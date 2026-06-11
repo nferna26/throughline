@@ -66,7 +66,7 @@ pub fn init_isolated_data_dir(label: &str) -> PathBuf {
     assert!(
         resolved_export.starts_with(&sys_temp),
         "BIN GUARDRAIL VIOLATED: paths::default_export_root() returned {:?}, which is NOT under std::env::temp_dir() ({:?}). \
-         Acceptance binaries MUST use an isolated export dir to avoid scattering stub Markdown into the user's real GBrain folder.",
+         Acceptance binaries MUST use an isolated export dir to avoid scattering stub Markdown into the user's real export folder.",
         resolved_export, sys_temp
     );
     root

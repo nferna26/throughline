@@ -300,7 +300,7 @@ mod tests {
     /// Point the Markdown mirror at an isolated temp dir for the duration of
     /// `f` (update_note_impl re-exports through `paths::default_export_root()`,
     /// which honors THROUGHLINE_EXPORT_DIR) and serialize against other
-    /// env-touching tests so nothing ever lands in the user's real GBrain.
+    /// env-touching tests so nothing ever lands in the user's real export folder.
     fn with_isolated_export_dir(label: &str, f: impl FnOnce()) {
         let _g = crate::paths::lock_env_for_test();
         let export_dir = std::env::temp_dir().join(format!("tl-{label}-{}", std::process::id()));

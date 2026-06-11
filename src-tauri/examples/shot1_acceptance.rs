@@ -14,7 +14,7 @@
 // path `import_txt` uses on the real Gutenberg file.
 //
 // Everything runs against an ISOLATED temp data + export dir (see
-// `bin_guardrail`) so it can never touch the user's real DB or ~/GBrain.
+// `bin_guardrail`) so it can never touch the user's real DB or export folder.
 //
 // Usage: cargo run --example shot1_acceptance
 
@@ -76,7 +76,7 @@ fn confessions_fixture() -> String {
 
 fn main() -> anyhow::Result<()> {
     // GUARDRAIL: first line of main(). Redirects data + export dirs under the OS
-    // temp dir and panics if it didn't take — the real DB/GBrain are untouchable.
+    // temp dir and panics if it didn't take — the real DB / export folder are untouchable.
     let isolated = bin_guardrail::init_isolated_data_dir("shot1_acceptance");
 
     // ── 1. Import the Augustine fixture (plain text, Gutenberg-shaped) ──────
@@ -225,7 +225,7 @@ fn main() -> anyhow::Result<()> {
     let md = std::fs::read_to_string(&md_path)?;
     println!("    note exported → {}", md_path.display());
 
-    // Privacy: the export MUST stay under the isolated temp dir — never ~/GBrain.
+    // Privacy: the export MUST stay under the isolated temp dir — never the export folder.
     let sys_temp = std::env::temp_dir();
     assert!(
         md_path.starts_with(&sys_temp),

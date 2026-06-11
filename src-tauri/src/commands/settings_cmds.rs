@@ -62,9 +62,9 @@ pub fn cmd_check_export_path(state: State<DbState>) -> Result<serde_json::Value,
 }
 
 /// The launch-time check behind `cmd_check_export_path`. On an unconfigured
-/// install the effective root is the DEFAULT `~/GBrain/Reading`, and this runs
+/// install the effective root is the DEFAULT `~/Documents/Throughline`, and this runs
 /// on every launch — so it must never create the folder (CORE-1019: a
-/// stranger's first launch must not plant ~/GBrain). Only a root that already
+/// stranger's first launch must not plant the export folder). Only a root that already
 /// exists gets the real write probe. Reader-initiated setup keeps its
 /// create-and-verify UX in `cmd_set_export_path` (`settings::set_export_path`).
 fn check_export_root(root: &std::path::Path) -> serde_json::Value {
@@ -72,7 +72,7 @@ fn check_export_root(root: &std::path::Path) -> serde_json::Value {
         export_write_probe(root).err()
     } else {
         // Fine: the folder will be created on the first export. Creating it
-        // here, on launch, is exactly the ~/GBrain-planting bug.
+        // here, on launch, is exactly the the export folder-planting bug.
         None
     };
     serde_json::json!({
@@ -205,7 +205,7 @@ mod tests {
 
     /// CORE-1019: the no-arg launch preflight must NEVER create the export
     /// root. On an unconfigured install the effective root is the default
-    /// ~/GBrain/Reading — creating it here plants an unexplained folder in a
+    /// ~/Documents/Throughline — creating it here plants an unexplained folder in a
     /// stranger's home on the very first launch. A missing root reads as fine
     /// (it will be created on the first export); only an existing root gets
     /// the real write probe.

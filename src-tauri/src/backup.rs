@@ -398,7 +398,7 @@ mod tests {
         cleanup(&data);
     }
 
-    /// Backups must never land in the export/GBrain tree — only under app data.
+    /// Backups must never land in the export tree — only under app data.
     #[test]
     fn backups_never_land_in_export_dir() {
         let g = paths::lock_env_for_test();
