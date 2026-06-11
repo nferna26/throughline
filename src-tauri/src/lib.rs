@@ -27,6 +27,7 @@ pub mod ai_client;
 pub mod ai_providers;
 pub mod ai_retention;
 pub mod ai_stub;
+pub mod backup;
 pub mod bin_guardrail;
 pub mod book_structure;
 pub mod circuit_breaker;
@@ -89,14 +90,34 @@ use crate::db::DbState;
 pub const COMMAND_API_VERSION: u32 = 6;
 
 /// Open the database, recovering from a CORRUPT file rather than crash-looping on
-/// launch (a permanently-unusable app — the worst outcome for a paying user). A
-/// corrupt DB is preserved alongside the original (renamed `reading.corrupt-<pid>.db`)
-/// for manual recovery, and the app starts on a fresh DB. Environmental failures
-/// (permissions, full disk) are NOT "recovered" — wiping data wouldn't help — so
-/// they still fail loudly with a clear, non-cryptic message.
+/// launch (a permanently-unusable app — the worst outcome for a paying user).
+///
+/// On a clean open we write a rolling backup (kept to the last few launches) so
+/// corruption is survivable. On corruption we try to RESTORE from the newest
+/// good backup BEFORE renaming-aside + starting fresh — so the reader loses only
+/// since-last-backup, not their entire library ("the first paying reader's
+/// reading.db is forever"). Only when no backup is usable do we fall through to
+/// the legacy behavior: preserve the corrupt file as `reading.corrupt-<pid>.db`
+/// and start on a fresh DB.
+///
+/// Environmental failures (permissions, full disk) are NOT "recovered" — wiping
+/// data wouldn't help — so they still fail loudly with a clear, non-cryptic message.
 fn open_db_resilient() -> rusqlite::Connection {
     match db::open_and_migrate() {
-        Ok(c) => c,
+        Ok(c) => {
+            // Clean startup: refresh the rolling backup. Best-effort — a backup
+            // failure must never break launch, and we log without any content.
+            // The backup path is intentionally not logged in full (it embeds
+            // the data dir); only the fact + retention count is recorded.
+            match backup::write_rolling_backup(&c) {
+                Ok(_) => tracing::info!(
+                    "reading.db backup written ({} kept)",
+                    backup::KEEP_BACKUPS
+                ),
+                Err(e) => tracing::warn!("reading.db backup skipped: {e:#}"),
+            }
+            c
+        }
         Err(e) => {
             let msg = format!("{e:#}").to_lowercase();
             let looks_corrupt = [
@@ -111,7 +132,30 @@ fn open_db_resilient() -> rusqlite::Connection {
             if !looks_corrupt {
                 panic!("Throughline could not open its database (usually a permissions or disk problem, not data loss): {e:#}");
             }
-            tracing::error!("database appears corrupt; preserving it and starting fresh: {e:#}");
+            tracing::error!("database appears corrupt; attempting recovery from backup: {e:#}");
+
+            // RESTORE-BEFORE-FRESH: prefer the reader's most recent good backup
+            // over an empty DB. Only if no backup is usable do we fall through.
+            match backup::try_restore_newest_backup() {
+                Ok(Some(_path)) => {
+                    tracing::info!("restored reading.db from a verified backup");
+                    if let Ok(c) = db::open_and_migrate() {
+                        return c;
+                    }
+                    // The restored file failed to re-open (should not happen — it
+                    // was validated). Fall through to fresh rather than crash.
+                    tracing::error!(
+                        "restored backup unexpectedly failed to open; starting fresh"
+                    );
+                }
+                Ok(None) => {
+                    tracing::error!("no usable backup found; preserving corrupt DB and starting fresh");
+                }
+                Err(e) => {
+                    tracing::error!("backup restore attempt failed ({e:#}); preserving corrupt DB and starting fresh");
+                }
+            }
+
             if let Ok(dbp) = paths::db_path() {
                 let bak = dbp.with_file_name(format!("reading.corrupt-{}.db", std::process::id()));
                 let _ = std::fs::rename(&dbp, &bak);
