@@ -761,29 +761,21 @@
    slide so its content never reflows (the inner stays a fixed 340px). */
 .tl-margin-rail {
   flex: 0 0 0; width: 0; opacity: 0; overflow: hidden;
-  /* Sticky so the margin stays beside the text as the book scrolls — and its top
-     (the card header / quote) is always reachable. align-self:flex-start stops it
-     stretching to the full page height, which sticky needs. The rail's own
-     overflow:hidden (the width-animation clip) doesn't affect its stickiness,
-     which is relative to the scrolling desk (.tl-reader-main). */
-  position: sticky; top: 0; align-self: flex-start;
+  /* The rail flows in the spread and scrolls with the desk. A tall tutor card
+     grows in normal flow, so the desk scroll reaches BOTH its top (header/quote)
+     and its bottom (lenses/footer) — the card has no internal scroll of its own. */
   transition: flex-basis 300ms cubic-bezier(0.3, 0, 0.2, 1), opacity 220ms ease 60ms;
 }
 .tl-spread[data-margin="open"] .tl-margin-rail {
   flex-basis: 372px; opacity: 1;
 }
 /* The inner keeps a FIXED 340px width so content never reflows during the rail's
-   width animation. It is its OWN bounded scroll region (capped to the viewport)
-   so a long tutor stream scrolls INSIDE the margin — beside the text — instead of
-   yanking the page; a short margin just sits there. The rail can still grow tall
-   and scroll with the desk for everything else. */
+   width animation. NO internal scroll, NO max-height clamp: a long tutor card
+   grows in normal flow and the whole desk scrolls to it (lenses + footer always
+   sit at the card's end, reachable by the desk scroll). */
 .tl-margin-inner {
   width: 340px; margin-left: 32px; padding-top: 6px;
-  max-height: 100vh; overflow-y: auto;
-  overscroll-behavior: contain;
 }
-.tl-margin-inner::-webkit-scrollbar { width: 9px; }
-.tl-margin-inner::-webkit-scrollbar-thumb { background: var(--tl-ink-10); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
 @media (prefers-reduced-motion: reduce) {
   .tl-margin-rail { transition: none; }
 }
@@ -817,8 +809,12 @@
   .tl-spread[data-margin="open"] .tl-margin-rail {
     flex-basis: auto; transform: translateX(0); pointer-events: auto;
   }
+  /* As an OVERLAY drawer the rail is pinned to the viewport (top/bottom:0), out of
+     desk flow — so here (and only here) the inner scrolls internally to reach a
+     tall card's footer. In the wide in-spread layout the card grows in flow. */
   .tl-margin-inner {
     width: min(340px, 86vw); margin-left: 0; height: 100%; max-height: none;
+    overflow-y: auto;
     background: var(--tl-desk);
     box-shadow: -10px 0 28px -14px rgba(0,0,0,0.35), -1px 0 0 0 var(--tl-line);
     padding: 18px 20px 28px;
@@ -1061,9 +1057,6 @@
   padding: 7px 8px; font-family: var(--tl-sans); font-size: 11px; line-height: 1.4;
   color: var(--tl-muted); white-space: pre-wrap; word-break: break-word;
 }
-.tl-tutor-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
-.tl-tutor-actions .tl-btn { padding: 5px 11px; font-size: 12px; }
-
 /* Toolbar toggle for the side panel: shows a small count badge when collapsed
    while notes exist, so the reader knows there's something parked over there. */
 .tl-paneltoggle { position: relative; }
