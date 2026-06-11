@@ -195,17 +195,11 @@ pub(crate) fn today_card(conn: &Connection) -> Result<Option<TodayCard>, AppErro
     let (last_read_global, last_read_ts) = sittings::last_read(conn, &book.id, &sections)?;
 
     // Which sitting is "today", and what state is the screen in?
-    let (state, current_idx): (&str, Option<usize>) = match furthest {
-        None => ("day_one", if sits.is_empty() { None } else { Some(0) }),
-        Some(f) if content_end > 0 && f >= content_end => ("finished", None),
-        Some(f) => {
-            let idx = sits
-                .iter()
-                .position(|s| {
-                    let gs = global_start(s);
-                    f >= gs && f < gs + s.char_count
-                })
-                .unwrap_or_else(|| sits.len().saturating_sub(1));
+    let bounds: Vec<(i64, i64)> = sits.iter().map(|s| (global_start(s), s.char_count)).collect();
+    let (state, current_idx): (&str, Option<usize>) = match sittings::locate(&bounds, furthest) {
+        sittings::Position::DayOne => ("day_one", if sits.is_empty() { None } else { Some(0) }),
+        sittings::Position::Finished => ("finished", None),
+        sittings::Position::At(idx) => {
             let returning = last_read_ts
                 .as_deref()
                 .and_then(plan::local_day_of)

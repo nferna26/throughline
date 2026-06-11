@@ -248,6 +248,35 @@ pub fn rebuild_if_stale(
     Ok(true)
 }
 
+/// Where the reader is, given each sitting's `(global_start, char_count)` in
+/// reading order and the furthest global position. The single source of the Today
+/// predicate: never read → day one; at or past the last sitting's end → finished;
+/// otherwise the sitting whose half-open span contains the position.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Position {
+    DayOne,
+    Finished,
+    At(usize),
+}
+
+pub fn locate(sittings: &[(i64, i64)], furthest: Option<i64>) -> Position {
+    if sittings.is_empty() {
+        return Position::DayOne;
+    }
+    let content_end = sittings.last().map(|(s, c)| s + c).unwrap_or(0);
+    match furthest {
+        None => Position::DayOne,
+        Some(f) if content_end > 0 && f >= content_end => Position::Finished,
+        Some(f) => {
+            let idx = sittings
+                .iter()
+                .position(|(s, c)| f >= *s && f < s + c)
+                .unwrap_or(sittings.len().saturating_sub(1));
+            Position::At(idx)
+        }
+    }
+}
+
 /// A persisted sitting joined to its phrase (if one is cached).
 #[derive(Clone, Debug)]
 pub struct SittingRow {
@@ -448,6 +477,19 @@ mod tests {
         let plan = plan_sittings(&body, &sections, 1);
         // Every sitting begins inside chapter II (the only assignable section).
         assert!(plan.iter().all(|p| p.start_section_id == "s2"), "only assignable content is chunked");
+    }
+
+    #[test]
+    fn locate_is_day_one_finished_or_the_containing_sitting() {
+        // Three sittings: [0,100) [100,250) [250,400). content_end = 400.
+        let b = vec![(0i64, 100i64), (100, 150), (250, 150)];
+        assert_eq!(locate(&b, None), Position::DayOne, "never read → day one");
+        assert_eq!(locate(&[], Some(0)), Position::DayOne, "no sittings → day one");
+        assert_eq!(locate(&b, Some(0)), Position::At(0), "start is in sitting 0");
+        assert_eq!(locate(&b, Some(120)), Position::At(1), "containing sitting");
+        assert_eq!(locate(&b, Some(399)), Position::At(2), "last byte is still reading");
+        assert_eq!(locate(&b, Some(400)), Position::Finished, "furthest at content end → finished");
+        assert_eq!(locate(&b, Some(99999)), Position::Finished, "past the end → finished");
     }
 
     #[test]

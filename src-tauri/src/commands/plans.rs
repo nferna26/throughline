@@ -165,11 +165,9 @@ fn resume_plan_on(
     )
 }
 
-/// Pause an active plan (its pace clock stops; resume extends the finish date).
-/// CORE-1003: pace/forecast gating keys on `status` (plan::compute), so the
-/// pause must write status='paused' too — otherwise Today keeps counting
-/// "Behind · N days" through the pause. A never-started plan keeps its
-/// `plan_ready` status (the never-behind guarantee survives a pause round-trip).
+/// Pause an active plan. The position-based model has no pace clock or finish
+/// date, so pausing simply marks the plan paused (lifecycle + status); a
+/// never-started plan keeps its `plan_ready` status.
 #[tauri::command]
 pub fn cmd_pause_plan(plan_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
@@ -178,8 +176,8 @@ pub fn cmd_pause_plan(plan_id: String, state: State<DbState>) -> Result<(), AppE
     Ok(())
 }
 
-/// Resume a paused plan: add the paused days back to the finish date (so the
-/// reader keeps the same remaining time) and to paused_days_total.
+/// Resume a paused plan: mark it active again and accumulate the paused span into
+/// paused_days_total (there is no finish date to extend now).
 #[tauri::command]
 pub fn cmd_resume_plan(plan_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
@@ -321,12 +319,9 @@ mod tests {
         .unwrap()
     }
 
-    /// CORE-1003: pace/forecast gating keys on `status` (plan::compute), so the
-    /// pause UPDATE must write status='paused' — not just lifecycle — and the
-    /// resume UPDATE must set it back to 'active'. Otherwise a reader who pauses
-    /// their only plan watches "Behind · N days" keep growing during the pause.
-    /// Drives the real command helpers with explicit local days (pause Jan 5,
-    /// resume Jan 10 — 5 paused days for resume to add back).
+    /// Pausing marks the plan paused (lifecycle + status) and resuming restores
+    /// active; the paused span accumulates into paused_days_total. Drives the real
+    /// command helpers with explicit local days (pause Jan 5, resume Jan 10).
     #[test]
     fn pause_writes_status_paused_and_resume_restores_active() {
         let conn = db();
