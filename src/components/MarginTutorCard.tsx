@@ -42,12 +42,14 @@ export interface TutorDraft {
   chapter: string;
 }
 
-/** Lens metadata: visible label + verb-ing words shown while the model works. */
-const LENS: Record<TutorMode, { label: string; verbs: string[] }> = {
-  explain: { label: "Explain", verbs: ["Reading the passage", "Thinking", "Connecting ideas", "Writing"] },
-  historical: { label: "Context", verbs: ["Placing it in time", "Recalling the work", "Thinking", "Writing"] },
-  vocabulary: { label: "Define", verbs: ["Finding the word", "Checking usage", "Writing"] },
-  socratic: { label: "Ask questions", verbs: ["Reading closely", "Forming a question", "Writing"] },
+/** Lens metadata: the visible chip + header label for each mode. */
+const LENS: Record<TutorMode, { label: string }> = {
+  explain: { label: "Explain" },
+  historical: { label: "Context" },
+  vocabulary: { label: "Define" },
+  // Shortened to "Ask" so all four lens chips fit one row at 340px. The mode key
+  // stays 'socratic' (the Socratic lens) — only the visible label changed.
+  socratic: { label: "Ask" },
 };
 /** Order of the "Ask another way" chips (Socratic only ever appears here). */
 const LENS_ORDER: TutorMode[] = ["explain", "historical", "vocabulary", "socratic"];
@@ -89,19 +91,14 @@ function Prose({ text }: { text: string }) {
   );
 }
 
-// ── cycling "verb-ing…" status while the model works ───────────────────────
-function Verbing({ verbs, fixed }: { verbs: string[]; fixed?: string }) {
-  const [i, setI] = useState(0);
-  useEffect(() => {
-    if (fixed) return;
-    const id = setInterval(() => setI((v) => (v + 1) % verbs.length), 820);
-    return () => clearInterval(id);
-  }, [fixed, verbs]);
+// ── header "thinking" indicator: three pulsing dots + "thinking" (handoff).
+//    Replaces the Regenerate icon while the model works. Pure CSS animation; the
+//    dots hold still under prefers-reduced-motion.
+function Thinking() {
   return (
-    <span className="tl-tutor-live">
-      <span className="tl-tutor-livedot" />
-      <span className="tl-tutor-liveword">{fixed ?? verbs[i % verbs.length]}</span>
-      <span className="tl-tutor-liveell">…</span>
+    <span className="tl-tutor-thinking" aria-label="thinking" role="status">
+      <i /><i /><i />
+      <span className="tl-tutor-thinking-word">thinking</span>
     </span>
   );
 }
@@ -289,11 +286,15 @@ export default function MarginTutorCard(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keep the newest streamed text in view (unless the reader scrolled up).
+  // Keep the newest streamed text in view (unless the reader scrolled up) — but
+  // ONLY when an ancestor is its own bounded scroll region (the narrow overlay
+  // drawer / side panel / flow fallback). In the wide spread the card grows in
+  // normal flow with no internal scroll, so the desk must NOT be yanked while a
+  // passage streams — the card simply grows in place.
   useEffect(() => {
     if (!streaming || !stickToBottomRef.current) return;
     const panel = cardRef.current?.closest(".tl-margin-inner, .tl-sidepanel, .tl-margin.flow") as HTMLElement | null;
-    if (panel) panel.scrollTop = panel.scrollHeight;
+    if (panel && panel.scrollHeight > panel.clientHeight + 1) panel.scrollTop = panel.scrollHeight;
   }, [briefAnswer, deepAnswer, streaming]);
 
   // Reset the margin to the top when the reader moves to a new passage/section,
@@ -385,6 +386,15 @@ export default function MarginTutorCard(props: {
   const briefStreaming = streaming && streamTierRef.current === "brief";
   const deepStreaming = streaming && streamTierRef.current === "deep";
 
+  // Permanent privacy microline at the card's bottom — honest about WHERE the
+  // answer came from. A local model never left the Mac; a cloud answer went to
+  // the Throughline assistant (the reader never sees the upstream provider's
+  // name). Never imply on-device when the selection went to the cloud.
+  const privacyLine =
+    provider === "local"
+      ? "Answered on this Mac."
+      : "Your selection was sent to the Throughline assistant — nothing kept.";
+
   return (
     <div
       ref={cardRef}
@@ -394,21 +404,26 @@ export default function MarginTutorCard(props: {
       role="complementary"
       aria-label={`Tutor — ${lensMeta.label}`}
     >
-      {/* header: badge + lens · live status / local-only · collapse · close */}
+      {/* header: ✦ Tutor · {lens} — spacer — [streaming: thinking | done: ↻] · collapse · ×
+          Regenerate is a repair, so it lives in the header chrome next to Close,
+          not in the answer flow. While streaming it's replaced by the "thinking"
+          indicator. Provider attribution moved to the footer privacy microline. */}
       <div className="tl-tutor-head">
         <span className="tl-tutor-badge"><TLIcon name="sparkle" size={13} /> Tutor</span>
-        <span className="tl-tutor-lens">{lensMeta.label}</span>
-        <span className="tl-tutor-status">
-          {streaming ? (
-            <Verbing verbs={lensMeta.verbs} fixed={phase === "streaming" ? "Writing" : undefined} />
-          ) : phase === "done" ? (
-            provider === "local" ? (
-              <span className="tl-tutor-local"><TLIcon name="shield" size={12} /> On this Mac</span>
-            ) : (
-              <span className="tl-tutor-remote" title={`Answered by ${aiProviderLabel(provider ?? "")}`}>{aiProviderLabel(provider ?? "")}</span>
-            )
-          ) : null}
-        </span>
+        <span className="tl-tutor-lens">· {lensMeta.label}</span>
+        <span className="tl-tutor-headsp" />
+        {streaming ? (
+          <Thinking />
+        ) : phase === "done" ? (
+          <button
+            className="tl-iconbtn tl-tutor-regen"
+            aria-label="Regenerate answer"
+            title="Regenerate"
+            onClick={(e) => { e.stopPropagation(); regenerate(); }}
+          >
+            <TLIcon name="refresh" size={14} />
+          </button>
+        ) : null}
         {phase === "done" && (
           <button
             className="tl-iconbtn tl-tutor-collapse"
@@ -555,10 +570,23 @@ export default function MarginTutorCard(props: {
               {phase === "thinking" && streamTierRef.current === "brief" && !briefAnswer && (
                 <span className="tl-caret" />
               )}
+              {/* Go deeper is an inline accent text link that ENDS the brief, like
+                  "continued…" — pulling it appends the Deeper tier below and the
+                  loop bottoms out (we only have two tiers, so the link is then
+                  gone). Only offered once the brief is done and no deep yet. */}
+              {phase === "done" && !deepRequested && (
+                <button
+                  className="tl-tutor-deeper-link"
+                  onClick={(e) => { e.stopPropagation(); goDeeper(); }}
+                >
+                  Go deeper <TLIcon name="chevronDown" size={12} />
+                </button>
+              )}
             </div>
           )}
 
-          {/* the deep tier appends below the brief, behind a quiet divider */}
+          {/* the deep tier appends below the brief, behind a quiet divider — it's
+              the last (2nd) tier, so no Go deeper link follows it (hidden after 2). */}
           {!collapsed && deepRequested && (
             <div className="tl-tutor-deep">
               <div className="tl-tutor-deep-rule"><span>Deeper</span></div>
@@ -578,72 +606,77 @@ export default function MarginTutorCard(props: {
             </p>
           )}
 
-          {/* done-state actions */}
+          {/* done-state strata: lens row + footer (Save accent · "On this Mac
+              only" · privacy microline). The save form REPLACES the lens row +
+              footer so the card never grows two action areas at once. */}
           {phase === "done" && !collapsed && (
-            <div className="tl-tutor-actions">
-              {saved ? (
+            saved ? (
+              <div className="tl-tutor-foot">
                 <div className="tl-tutor-saved"><TLIcon name="check" size={15} /> Saved to notes</div>
-              ) : showSave ? (
-                <div className="tl-tutor-savebox">
-                  <textarea
-                    className="tl-tutor-takeaway"
-                    rows={3}
-                    autoFocus
-                    placeholder="Your takeaway, in your own words — optional"
-                    value={takeaway}
-                    onChange={(e) => setTakeaway(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  <div className="tl-tutor-saverow">
-                    <span className="tl-tutor-local"><TLIcon name="shield" size={12} /> Saved on this Mac only</span>
-                    <div className="tl-tutor-savebtns">
-                      <button className="tl-tutor-ghost" onClick={(e) => { e.stopPropagation(); setShowSave(false); }}>Cancel</button>
-                      <button className="tl-btn tl-btn-primary" disabled={saving} onClick={(e) => { e.stopPropagation(); doSave(); }}>
-                        {saving ? "Saving…" : "Save"}
+              </div>
+            ) : showSave ? (
+              // Save form in place of the lens row + footer row.
+              <div className="tl-tutor-foot tl-tutor-saveform">
+                <textarea
+                  className="tl-tutor-takeaway"
+                  rows={3}
+                  autoFocus
+                  aria-label="Your takeaway, in your own words — optional"
+                  placeholder="Your takeaway, in your own words — optional"
+                  value={takeaway}
+                  onChange={(e) => setTakeaway(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                />
+                <div className="tl-tutor-saverow">
+                  <span className="tl-tutor-foot-note">Saved on this Mac only</span>
+                  <span className="tl-tutor-foot-sp" />
+                  <button className="tl-tutor-ghost-link" onClick={(e) => { e.stopPropagation(); setShowSave(false); }}>Cancel</button>
+                  <button className="tl-tutor-save" disabled={saving} onClick={(e) => { e.stopPropagation(); doSave(); }}>
+                    {saving ? "Saving…" : "Save"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Lens row — outline chips in one row; the active chip is outline +
+                    dot, NEVER filled (Save is the card's only fill). */}
+                <div className="tl-tutor-asks" role="radiogroup" aria-label="Ask another way">
+                  <span className="tl-tutor-askslabel">Ask another way</span>
+                  <div className="tl-tutor-lensrow">
+                    {LENS_ORDER.map((k) => (
+                      <button
+                        key={k}
+                        className={`tl-lenschip${k === lens ? " is-active" : ""}`}
+                        role="radio"
+                        aria-checked={k === lens}
+                        onClick={(e) => { e.stopPropagation(); pickLens(k); }}
+                      >
+                        {LENS[k].label}
                       </button>
-                    </div>
+                    ))}
                   </div>
                 </div>
-              ) : (
-                <>
-                  <div className="tl-tutor-dorow">
-                    {!deepRequested && (
-                      <button className="tl-btn tl-btn-primary" onClick={(e) => { e.stopPropagation(); goDeeper(); }}>
-                        Go deeper
-                      </button>
-                    )}
-                    <button className="tl-tutor-ghost" onClick={(e) => { e.stopPropagation(); setShowSave(true); }}>
-                      <TLIcon name="pencil" size={14} /> Save
+                {/* Footer: the card's one accent control (Save as note) + where the
+                    NOTE is kept, then the permanent privacy microline (honest about
+                    where the ANSWER came from). */}
+                <div className="tl-tutor-foot">
+                  <div className="tl-tutor-foot-row">
+                    <button className="tl-tutor-save" onClick={(e) => { e.stopPropagation(); setShowSave(true); }}>
+                      <TLIcon name="pencil" size={13} /> Save as note
                     </button>
-                    <button className="tl-iconbtn tl-tutor-regen" aria-label="Regenerate answer" title="Regenerate" onClick={(e) => { e.stopPropagation(); regenerate(); }}>
-                      <TLIcon name="refresh" size={15} />
-                    </button>
+                    <span className="tl-tutor-foot-sp" />
+                    <span className="tl-tutor-foot-note">On this Mac only</span>
                   </div>
-                  <div className="tl-tutor-asks">
-                    <span className="tl-tutor-askslabel">Ask another way</span>
-                    <div className="tl-tutor-lensrow">
-                      {LENS_ORDER.map((k) => (
-                        <button
-                          key={k}
-                          className={`tl-lenschip${k === lens ? " is-active" : ""}`}
-                          aria-pressed={k === lens}
-                          onClick={(e) => { e.stopPropagation(); pickLens(k); }}
-                        >
-                          {LENS[k].label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
+                  {/* Low-allowance strip (company mode, only when low) — the card's
+                      one legitimate warning, sitting just above the privacy line. */}
+                  {!capExhausted && <TutorFuel provider={provider} />}
+                  <p className="tl-tutor-privacy">{privacyLine}</p>
+                </div>
+              </>
+            )
           )}
         </>
       )}
-
-      {/* Company-mode fuel strip: quiet early, nudges at 75%/90% used (the cap
-          screen above owns the exhausted state). */}
-      {!capExhausted && <TutorFuel provider={provider} />}
 
       {cloudConsent && (
         <div

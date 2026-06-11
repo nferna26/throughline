@@ -144,12 +144,13 @@ describe("MarginTutorCard — brief default + go deeper", () => {
     expect(screen.getByText(/The deeper reasoning move beneath it\./)).toBeInTheDocument();
     // The "Deeper" divider marks the appended tier.
     expect(screen.getByText("Deeper")).toBeInTheDocument();
-    // After deep, the deepest tier bottoms out: 'Go deeper' is gone. The Socratic
-    // turn is no longer a duplicate "Question me" button — it's the same action as
-    // the 'Ask questions' lens chip, which is always available below.
+    // After deep, the deepest tier bottoms out: 'Go deeper' is gone (hidden after
+    // 2 tiers). The Socratic turn is no longer a duplicate "Question me" button —
+    // it's the same action as the Socratic lens chip, whose visible label is now
+    // "Ask" (shortened so all four chips fit one row at 340px).
     expect(screen.queryByText(/Go deeper/i)).toBeNull();
     expect(screen.queryByText(/Question me/i)).toBeNull();
-    expect(screen.getByRole("button", { name: "Ask questions" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Ask" })).toBeInTheDocument();
   });
 
   it("saves brief + deep + optional takeaway as one TutorNote", async () => {
@@ -162,9 +163,11 @@ describe("MarginTutorCard — brief default + go deeper", () => {
     await pushDelta(lastChannel(), "Deeper elaboration.");
     await pushDone(lastChannel());
 
-    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    // The footer accent button opens the save form…
+    fireEvent.click(await screen.findByRole("button", { name: "Save as note" }));
     fireEvent.change(screen.getByPlaceholderText(/your takeaway/i), { target: { value: "my words" } });
-    fireEvent.click(screen.getByText("Save"));
+    // …and the form's confirm button persists the note.
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       const call = mocks.invoke.mock.calls.find((c) => c[0] === "cmd_save_ai_response_as_note");
@@ -184,6 +187,89 @@ describe("MarginTutorCard — brief default + go deeper", () => {
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.objectContaining({ mode: "vocabulary", depth: "brief" })),
     );
+  });
+});
+
+describe("MarginTutorCard — one accent moment + header repair (handoff)", () => {
+  beforeEach(() => localStorage.setItem("tl.tutorEnabled", "true"));
+
+  async function toDone() {
+    const { container } = render(card());
+    await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
+    await pushDelta(lastChannel(), "Brief gist of the passage.");
+    await pushDone(lastChannel());
+    await screen.findByRole("button", { name: "Save as note" });
+    return container;
+  }
+
+  it("the done state has EXACTLY one accent-filled control — the Save-as-note button", async () => {
+    const container = await toDone();
+    // The card's only fill is the Save button (.tl-tutor-save).
+    const fills = container.querySelectorAll(".tl-tutor-save");
+    expect(fills.length).toBe(1);
+    expect(fills[0].textContent).toMatch(/Save as note/);
+  });
+
+  it("the active lens chip is outline-only — NOT the accent fill", async () => {
+    const container = await toDone();
+    const active = container.querySelector(".tl-lenschip.is-active") as HTMLElement;
+    expect(active).not.toBeNull();
+    expect(active.textContent).toBe("Explain"); // the draft's lens
+    // The active chip must not carry the card's fill class…
+    expect(active.classList.contains("tl-tutor-save")).toBe(false);
+    // …and is exposed as the checked radio (one lens active).
+    expect(active.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("Regenerate is a header icon button (absent while streaming, present when done)", async () => {
+    render(card());
+    await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
+    // While streaming, the header shows the thinking indicator, not Regenerate.
+    expect(screen.queryByRole("button", { name: /Regenerate/i })).toBeNull();
+    await pushDelta(lastChannel(), "Brief gist.");
+    await pushDone(lastChannel());
+    // Done → Regenerate appears as a header icon button and re-fires the lens.
+    const regen = await screen.findByRole("button", { name: "Regenerate answer" });
+    expect(regen.className).toContain("tl-iconbtn");
+    fireEvent.click(regen);
+    await waitFor(() => expect(asksOfDepth("brief").length).toBe(2));
+  });
+});
+
+describe("MarginTutorCard — privacy microline honesty (handoff)", () => {
+  it("a LOCAL answer reads 'Answered on this Mac.'", async () => {
+    localStorage.setItem("tl.tutorEnabled", "true");
+    render(card()); // default mock provider is "local"
+    await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
+    await pushDelta(lastChannel(), "Local gist.");
+    await pushDone(lastChannel());
+    expect(await screen.findByText("Answered on this Mac.")).toBeInTheDocument();
+    // It must NOT claim the selection was sent anywhere.
+    expect(screen.queryByText(/sent to the Throughline assistant/i)).toBeNull();
+  });
+
+  it("a CLOUD answer names the assistant + 'nothing kept', and NEVER shows 'Answered on this Mac'", async () => {
+    localStorage.setItem("tl.tutorEnabled", "true");
+    mocks.invoke.mockReset();
+    mocks.invoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings":
+          return Promise.resolve({ export_path: "/x", ai_provider: "openai", ai_model_openai: "gpt-5.5", ai_requests_retention_days: 90 });
+        case "cmd_ai_ask":
+          return Promise.resolve({ ai_request_id: "ai_1", prompt_sent: "(hidden)", provider_host: "api.openai.com" });
+        default:
+          return Promise.resolve(null);
+      }
+    });
+    render(card());
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.anything()));
+    await pushDelta(lastChannel(), "Cloud gist.");
+    await pushDone(lastChannel());
+    expect(
+      await screen.findByText("Your selection was sent to the Throughline assistant — nothing kept."),
+    ).toBeInTheDocument();
+    // Never imply on-device for a cloud answer.
+    expect(screen.queryByText(/Answered on this Mac/i)).toBeNull();
   });
 });
 

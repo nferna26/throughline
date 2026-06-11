@@ -186,11 +186,14 @@ export default function SectionBriefingCard(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keep the streaming tail in view within the panel.
+  // Keep the streaming tail in view — but ONLY inside a genuinely bounded scroll
+  // region (the narrow overlay drawer / side panel / flow fallback). In the wide
+  // spread the card grows in normal flow with no internal scroll, so the desk is
+  // never yanked while the briefing streams.
   useEffect(() => {
     if (phase !== "streaming" && phase !== "thinking") return;
     const panel = cardRef.current?.closest(".tl-margin-inner, .tl-sidepanel, .tl-margin.flow") as HTMLElement | null;
-    if (panel) panel.scrollTop = panel.scrollHeight;
+    if (panel && panel.scrollHeight > panel.clientHeight + 1) panel.scrollTop = panel.scrollHeight;
   }, [text, phase]);
 
   const enableAndPrepare = useCallback(async () => {
