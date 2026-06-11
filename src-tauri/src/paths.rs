@@ -42,6 +42,18 @@ pub fn books_dir() -> Result<PathBuf> {
     Ok(app_support_dir()?.join("books"))
 }
 
+/// App-private rolling-backup directory for `reading.db`.
+///
+/// Deliberately under the app-support dir (next to `reading.db`), NEVER under
+/// the export/GBrain tree — backups are an internal recovery artifact, not
+/// something the reader should ever see in their notes folder, and they must
+/// not be exported. The directory is created on demand by the backup writer,
+/// not by `ensure_dirs()`, so a launch that never reaches a clean open leaves
+/// no empty `backups/` behind.
+pub fn backups_dir() -> Result<PathBuf> {
+    Ok(app_support_dir()?.join("backups"))
+}
+
 pub fn book_dir(book_id: &str) -> Result<PathBuf> {
     // Path-traversal guard: a `book_id` flows in from IPC args (read_section_*,
     // body_start_offset, read_txt_section) and is joined onto `books_dir()`. A
