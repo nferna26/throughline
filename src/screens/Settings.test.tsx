@@ -254,7 +254,9 @@ describe("Settings — 4-section redesign", () => {
     expect(screen.getByText("Reading")).toBeInTheDocument();
     expect(text).not.toMatch(/\/Users\/x\/GBrain/);
     // The library line stays reassuring without a path.
-    expect(screen.getByText(/Your books live on this Mac and stay here\./i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Your books live on this Mac and stay here, backed up automatically/i),
+    ).toBeInTheDocument();
   });
 
   // FT-36: the fair-use legalese card → one plain line + a short-quote note.
@@ -315,5 +317,158 @@ describe("Settings — 4-section redesign", () => {
     expect(within(note).getByText(/included assistant/i)).toBeInTheDocument();
     // It is the calm muted note, not a warn card.
     expect(note.className).not.toMatch(/warn|alert/);
+  });
+
+  // Export your library: a deliberate reader action that writes one Markdown
+  // file per book, then confirms in plain words with the count + folder name.
+  it("exports the library and confirms with the book count and folder name", async () => {
+    wire({ ai_provider: "company", export_path: "/Users/x/GBrain/Reading" });
+    mockInvoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings":
+          return Promise.resolve({
+            export_path: "/Users/x/GBrain/Reading",
+            export_path_is_default: true,
+            app_data_path: "/Users/x/Library/Application Support/Throughline",
+            ai_posture: "Local-only mode: ON",
+            ai_base_url: "http://localhost:1234/v1",
+            ai_model: "m",
+            quote_policy: "Short quotes only.",
+            quote_warn_chars: 300,
+            ai_requests_retention_days: 90,
+            margin_help: "guided",
+            ai_provider: "company",
+            ai_provider_chosen: true,
+            ai_remote_allowed: true,
+            ai_model_openai: "gpt-5.5",
+            ai_model_anthropic: "claude-opus-4-8",
+            ai_model_codex: "gpt-5.5",
+            ai_key_present_openai: false,
+            ai_key_present_anthropic: false,
+            ai_codex_creds_present: false,
+          } as SettingsDto);
+        case "cmd_company_credits":
+          return Promise.resolve({ status: "active", remaining_fraction: 0.74, approx_questions_left: 220 });
+        case "cmd_list_ai_requests":
+          return Promise.resolve([]);
+        case "cmd_export_library":
+          return Promise.resolve({ exported: 3, root: "/Users/x/GBrain/Reading" });
+        default:
+          return Promise.resolve(undefined);
+      }
+    });
+    render(<Settings />);
+    const btn = await screen.findByRole("button", { name: /Export your library/i });
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith("cmd_export_library"),
+    );
+    // Calm confirmation: the count + the folder name, never a raw path.
+    const msg = await screen.findByText(/Exported 3 books to your Reading folder\./i);
+    expect(msg).toBeInTheDocument();
+    expect(msg.textContent).not.toMatch(/\/Users\/x\/GBrain/);
+  });
+
+  it("singularizes the export confirmation for a single book", async () => {
+    wire({ ai_provider: "company", export_path: "/Users/x/GBrain/Reading" });
+    mockInvoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings":
+          return Promise.resolve({
+            export_path: "/Users/x/GBrain/Reading",
+            export_path_is_default: true,
+            app_data_path: "/Users/x/Library/Application Support/Throughline",
+            ai_posture: "Local-only mode: ON",
+            ai_base_url: "http://localhost:1234/v1",
+            ai_model: "m",
+            quote_policy: "Short quotes only.",
+            quote_warn_chars: 300,
+            ai_requests_retention_days: 90,
+            margin_help: "guided",
+            ai_provider: "company",
+            ai_provider_chosen: true,
+            ai_remote_allowed: true,
+            ai_model_openai: "gpt-5.5",
+            ai_model_anthropic: "claude-opus-4-8",
+            ai_model_codex: "gpt-5.5",
+            ai_key_present_openai: false,
+            ai_key_present_anthropic: false,
+            ai_codex_creds_present: false,
+          } as SettingsDto);
+        case "cmd_company_credits":
+          return Promise.resolve({ status: "active", remaining_fraction: 0.74, approx_questions_left: 220 });
+        case "cmd_list_ai_requests":
+          return Promise.resolve([]);
+        case "cmd_export_library":
+          return Promise.resolve({ exported: 1, root: "/Users/x/GBrain/Reading" });
+        default:
+          return Promise.resolve(undefined);
+      }
+    });
+    render(<Settings />);
+    fireEvent.click(await screen.findByRole("button", { name: /Export your library/i }));
+    expect(await screen.findByText(/Exported 1 book to your Reading folder\./i)).toBeInTheDocument();
+  });
+
+  it("shows a calm, blame-free message when the library export fails", async () => {
+    wire({ ai_provider: "company", export_path: "/Users/x/GBrain/Reading" });
+    mockInvoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings":
+          return Promise.resolve({
+            export_path: "/Users/x/GBrain/Reading",
+            export_path_is_default: true,
+            app_data_path: "/Users/x/Library/Application Support/Throughline",
+            ai_posture: "Local-only mode: ON",
+            ai_base_url: "http://localhost:1234/v1",
+            ai_model: "m",
+            quote_policy: "Short quotes only.",
+            quote_warn_chars: 300,
+            ai_requests_retention_days: 90,
+            margin_help: "guided",
+            ai_provider: "company",
+            ai_provider_chosen: true,
+            ai_remote_allowed: true,
+            ai_model_openai: "gpt-5.5",
+            ai_model_anthropic: "claude-opus-4-8",
+            ai_model_codex: "gpt-5.5",
+            ai_key_present_openai: false,
+            ai_key_present_anthropic: false,
+            ai_codex_creds_present: false,
+          } as SettingsDto);
+        case "cmd_company_credits":
+          return Promise.resolve({ status: "active", remaining_fraction: 0.74, approx_questions_left: 220 });
+        case "cmd_list_ai_requests":
+          return Promise.resolve([]);
+        case "cmd_export_library":
+          return Promise.reject(new Error("The export folder is read-only."));
+        default:
+          return Promise.resolve(undefined);
+      }
+    });
+    const { container } = render(<Settings />);
+    fireEvent.click(await screen.findByRole("button", { name: /Export your library/i }));
+    const err = await screen.findByText(/Couldn't export your library/i);
+    expect(err).toBeInTheDocument();
+    // Says what happened and what to do; reassures the books are unchanged.
+    expect(err.textContent).toMatch(/read-only/i);
+    expect(err.textContent).toMatch(/Your books are unchanged/i);
+    expect(err).toHaveClass("err");
+    // No raw stack/jargon dump beyond the human reason.
+    expect(container.querySelector(".set-msg.err")).toBeTruthy();
+  });
+
+  // The Files section reassures that the library is backed up automatically on
+  // this Mac — paired with the calm "kept on this Mac" copy, no plumbing words.
+  it("reassures the library is backed up automatically on this Mac (calm, no jargon)", async () => {
+    wire({ ai_provider: "company" });
+    const { container } = render(<Settings />);
+    await waitFor(() => expect(screen.getByText("Files")).toBeInTheDocument());
+    expect(screen.getByText(/backed up automatically/i)).toBeInTheDocument();
+    expect(screen.getByText(/Kept on this Mac/i)).toBeInTheDocument();
+    const text = container.textContent ?? "";
+    // No plumbing words in the backup reassurance.
+    expect(text).not.toMatch(/\bsync\b/i);
+    expect(text).not.toMatch(/cloud/i);
   });
 });
