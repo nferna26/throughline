@@ -300,7 +300,12 @@ fn main() -> anyhow::Result<()> {
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?12, ?13)",
         params![tutor.id, tutor.book_id, tutor.session_id, tutor.note_type, tutor.locator, tutor.chapter_label, tutor.body, tutor.short_quote, tutor.created_at, tutor.updated_at, tutor.anchor_start, tutor.anchor_end, tutor.anchored_text],
     )?;
-    let md_path = export::export_note(&export::root_for(&conn), &book, &tutor)?;
+    let md_path = export::export_book_literature_note(
+        &conn,
+        &export::root_for(&conn),
+        &book.id,
+        &now,
+    )?;
     let md = std::fs::read_to_string(&md_path)?;
     furthest = "exported";
 
@@ -311,13 +316,14 @@ fn main() -> anyhow::Result<()> {
         "export escaped isolation: {:?}",
         md_path
     );
-    // Required safe frontmatter + the user's own words present.
+    // Required safe literature-note frontmatter + a reader-facing Tutor callout
+    // (never the raw `TutorNote` enum) + the user's own words present.
     for needle in [
-        "type: reading_note",
+        "type: reading-source",
         "source_private: true",
-        "note_type: TutorNote",
-        "locator: ",
-        "chapter: ",
+        "> [!abstract] Tutor",
+        "throughline_book_id: ",
+        &format!("## {}", day1.label),
     ] {
         assert!(
             md.contains(needle),
@@ -326,6 +332,11 @@ fn main() -> anyhow::Result<()> {
             md
         );
     }
+    assert!(
+        !md.contains("] TutorNote"),
+        "the raw DB enum `TutorNote` must never be a reader-facing label:\n{}",
+        md
+    );
     assert!(
         md.contains(user_words),
         "the reader's own words must be exported"

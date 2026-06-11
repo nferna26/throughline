@@ -79,7 +79,14 @@ use crate::db::DbState;
 /// - 4 → 5: plans frontispiece (P2.1) — migration v009 added `name`,
 ///   `deleted_at` (soft-delete window), and `reached_percent` to reading_plans;
 ///   plan rows and the plans list reshaped around naming + let-go semantics.
-pub const COMMAND_API_VERSION: u32 = 5;
+/// - 5 → 6: notes export reshaped from one Markdown file PER NOTE
+///   (`Notes/{book}_{note}.md`) to one per-book LITERATURE NOTE
+///   (`Books/{slug}.md`) that re-exports idempotently in place; `cmd_save_note`
+///   / `cmd_update_note` / `cmd_save_ai_*` now write that shared book file (the
+///   note's `exported_markdown_path` points at it), delete-note re-merges rather
+///   than removing a file, and the new `cmd_export_library` regenerates every
+///   book file. The on-disk export contract a JS caller observes changed.
+pub const COMMAND_API_VERSION: u32 = 6;
 
 /// Open the database, recovering from a CORRUPT file rather than crash-looping on
 /// launch (a permanently-unusable app — the worst outcome for a paying user). A
@@ -222,6 +229,7 @@ pub fn run() {
             commands::notes::cmd_delete_note,
             commands::notes::cmd_list_notes,
             commands::notes::cmd_quote_warns,
+            commands::notes::cmd_export_library,
             // ── AI ──
             commands::ai::cmd_generate_prompt_preview,
             commands::ai::cmd_ai_preview,

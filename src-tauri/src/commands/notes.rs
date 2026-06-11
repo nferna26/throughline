@@ -118,23 +118,28 @@ fn update_note_impl(
     reexport_note(conn, note)
 }
 
-/// Delete a note and remove its exported Markdown mirror (so the notebook and
-/// the export stay in sync — no orphan files). Idempotent: deleting a missing
-/// note is a no-op success.
+/// Delete a note and regenerate its book's literature note so the deleted note's
+/// fence is merged OUT of `Books/{slug}.md` (reader edits outside the fences
+/// survive). Idempotent: deleting a missing note is a no-op success.
 #[tauri::command]
 pub fn cmd_delete_note(note_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
-    let exported: Option<String> = conn
+    // The owning book, captured BEFORE the row is gone, so we can re-merge its file.
+    let book_id: Option<String> = conn
         .query_row(
-            "SELECT exported_markdown_path FROM notes WHERE id = ?1",
+            "SELECT book_id FROM notes WHERE id = ?1",
             params![note_id],
-            |r| r.get::<_, Option<String>>(0),
+            |r| r.get::<_, String>(0),
         )
-        .ok()
-        .flatten();
+        .ok();
     conn.execute("DELETE FROM notes WHERE id = ?1", params![note_id])?;
-    if let Some(path) = exported {
-        let _ = std::fs::remove_file(&path);
+    if let Some(book_id) = book_id {
+        let now = Utc::now().to_rfc3339();
+        if let Ok(path) =
+            export::export_book_literature_note(&conn, &export::root_for(&conn), &book_id, &now)
+        {
+            log::log_export("book", &path.to_string_lossy());
+        }
     }
     Ok(())
 }
@@ -147,18 +152,25 @@ fn read_note(conn: &rusqlite::Connection, id: &str) -> Result<Note, AppError> {
     Ok(stmt.query_row(params![id], note_from_row)?)
 }
 
-/// Export `note` to its stable Markdown file and persist the path on the row.
-/// Shared by save and update so both keep the mirror current.
+/// Regenerate the note's book-level LITERATURE NOTE (`Books/{slug}.md`) and
+/// persist that file's path on the row. The export is per-BOOK now, not per-note:
+/// every note change idempotently re-merges the whole book file (the note's fence
+/// is replaced/inserted in place; reader edits outside the fences survive), so the
+/// `exported_markdown_path` column points at the shared book file.
 fn reexport_note(conn: &rusqlite::Connection, mut note: Note) -> Result<Note, AppError> {
-    if let Some(book) = fetch_book(conn, &note.book_id)? {
-        if let Ok(path) = export::export_note(&export::root_for(conn), &book, &note) {
-            log::log_export("note", &path.to_string_lossy());
-            note.exported_markdown_path = Some(path.to_string_lossy().to_string());
-            conn.execute(
-                "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
-                params![note.exported_markdown_path, note.id],
-            )?;
-        }
+    let now = Utc::now().to_rfc3339();
+    if let Ok(path) = export::export_book_literature_note(
+        conn,
+        &export::root_for(conn),
+        &note.book_id,
+        &now,
+    ) {
+        log::log_export("book", &path.to_string_lossy());
+        note.exported_markdown_path = Some(path.to_string_lossy().to_string());
+        conn.execute(
+            "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
+            params![note.exported_markdown_path, note.id],
+        )?;
     }
     Ok(note)
 }
@@ -181,6 +193,48 @@ pub fn cmd_list_notes(book_id: String, state: State<DbState>) -> Result<Vec<Note
 #[tauri::command]
 pub fn cmd_quote_warns(quote: String) -> Result<bool, AppError> {
     Ok(export::quote_too_long(&quote))
+}
+
+/// Result of a full-library export: how many book literature notes were
+/// (re)generated and the export root they landed under.
+#[derive(serde::Serialize)]
+pub struct LibraryExportResult {
+    pub exported: usize,
+    pub root: String,
+}
+
+/// Regenerate EVERY book's literature note (`Books/{slug}.md`) idempotently —
+/// the "Export library" action. Each book is re-merged in place, so reader edits
+/// outside the note fences survive. Returns the count exported and the root path.
+#[tauri::command]
+pub fn cmd_export_library(state: State<DbState>) -> Result<LibraryExportResult, AppError> {
+    let conn = state.0.lock()?;
+    export_library_inner(&conn)
+}
+
+/// `cmd_export_library`'s body, split out so it is testable against a plain
+/// `Connection` (the command wrapper just locks and delegates).
+fn export_library_inner(conn: &rusqlite::Connection) -> Result<LibraryExportResult, AppError> {
+    let root = export::root_for(conn);
+    let now = Utc::now().to_rfc3339();
+    let mut book_ids: Vec<String> = Vec::new();
+    {
+        let mut stmt = conn.prepare("SELECT id FROM books ORDER BY created_at ASC")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        for r in rows {
+            book_ids.push(r?);
+        }
+    }
+    let mut exported = 0usize;
+    for book_id in &book_ids {
+        if export::export_book_literature_note(conn, &root, book_id, &now).is_ok() {
+            exported += 1;
+        }
+    }
+    Ok(LibraryExportResult {
+        exported,
+        root: root.to_string_lossy().to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -299,9 +353,13 @@ mod tests {
     fn update_clear_flags_null_quote_and_anchor_and_update_the_mirror() {
         with_isolated_export_dir("note-clear-test", || {
             let conn = migrated();
+            // A MarginNote (not a Highlight): its BODY and its reader short_quote
+            // both export, so clearing the quote is observable in the mirror while
+            // the body survives. (A Highlight exports its anchored passage as the
+            // quote, not body+short_quote, so it can't exercise this clear path.)
             conn.execute(
                 "INSERT INTO notes (id, book_id, session_id, note_type, locator, chapter_label, body, short_quote, created_at, updated_at, exported_markdown_path, anchor_start, anchor_end, anchored_text)
-                 VALUES ('note_q','b1',NULL,'Highlight','char:5','Chapter 1','my note','keep me','2026-05-29T10:00:00Z','2026-05-29T10:00:00Z',NULL,'char:5','char:12','anchored run')",
+                 VALUES ('note_q','b1',NULL,'MarginNote','char:5','Chapter 1','my note','keep me','2026-05-29T10:00:00Z','2026-05-29T10:00:00Z',NULL,'char:5','char:12','anchored run')",
                 [],
             )
             .unwrap();
@@ -311,7 +369,7 @@ mod tests {
                 .unwrap();
             assert!(note.short_quote.is_none(), "short_quote cleared");
             assert_eq!(note.body, "my note", "body untouched");
-            assert_eq!(note.note_type, "Highlight", "type untouched");
+            assert_eq!(note.note_type, "MarginNote", "type untouched");
             assert_eq!(
                 note.anchored_text.as_deref(),
                 Some("anchored run"),

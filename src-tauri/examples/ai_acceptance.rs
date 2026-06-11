@@ -17,7 +17,7 @@
 use std::time::Duration;
 
 use rusqlite::params;
-use throughline_lib::{ai_client, ai_stub, db, export, models, settings};
+use throughline_lib::{ai_client, ai_stub, db, export, settings};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -247,19 +247,6 @@ fn demo_ephemeral_then_approve(
             id
         }
     };
-    let title: String = conn.query_row(
-        "SELECT title FROM books WHERE id = ?1",
-        params![book_id],
-        |r| r.get(0),
-    )?;
-    let author: Option<String> = conn
-        .query_row(
-            "SELECT author FROM books WHERE id = ?1",
-            params![book_id],
-            |r| r.get(0),
-        )
-        .ok();
-
     println!("\n==> Ephemeral → approve invariant");
     let ai_id = format!("ai_{}", uuid::Uuid::new_v4().simple());
     let now = chrono::Utc::now().to_rfc3339();
@@ -297,33 +284,10 @@ fn demo_ephemeral_then_approve(
         params![ai_id],
     )?;
 
-    let note = models::Note {
-        id: note_id.clone(),
-        book_id: book_id.clone(),
-        session_id: None,
-        note_type: "Reflection".to_string(),
-        locator: "cfi:OEBPS/text/chapter3".to_string(),
-        chapter_label: Some("3. Cold Start Theory".to_string()),
-        body: response_for_note,
-        short_quote: None,
-        created_at: now.clone(),
-        updated_at: now,
-        exported_markdown_path: None,
-        anchor_start: None,
-        anchor_end: None,
-        anchored_text: None,
-    };
-    let book = models::Book {
-        id: book_id.clone(),
-        title,
-        author,
-        source_type: "txt".to_string(),
-        source_path: "/tmp/x.txt".to_string(),
-        source_sha256: "abc".to_string(),
-        created_at: "2026-05-24".to_string(),
-        last_opened_at: None,
-    };
-    let md_path = export::export_note(&export::root_for(conn), &book, &note)?;
+    // The note is already inserted above; regenerate the book's per-book
+    // literature note (per-book, idempotent merge) and point the row at it.
+    let md_path =
+        export::export_book_literature_note(conn, &export::root_for(conn), &book_id, &now)?;
     conn.execute(
         "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
         params![md_path.to_string_lossy().to_string(), note_id],

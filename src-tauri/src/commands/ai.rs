@@ -255,15 +255,18 @@ fn save_preview_as_note_inner(
     )?;
     let mut note = note_stmt.query_row(params![id], note_from_row)?;
 
-    if let Some(book) = fetch_book(conn, &book_id)? {
-        if let Ok(path) = export::export_note(&export::root_for(conn), &book, &note) {
-            log::log_export("note", &path.to_string_lossy());
-            note.exported_markdown_path = Some(path.to_string_lossy().to_string());
-            conn.execute(
-                "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
-                params![note.exported_markdown_path, note.id],
-            )?;
-        }
+    // Regenerate the book's literature note (per-book, idempotent merge) and point
+    // the row's mirror path at the shared book file.
+    let now_export = Utc::now().to_rfc3339();
+    if let Ok(path) =
+        export::export_book_literature_note(conn, &export::root_for(conn), &book_id, &now_export)
+    {
+        log::log_export("book", &path.to_string_lossy());
+        note.exported_markdown_path = Some(path.to_string_lossy().to_string());
+        conn.execute(
+            "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
+            params![note.exported_markdown_path, note.id],
+        )?;
     }
     Ok(note)
 }
@@ -1528,9 +1531,10 @@ mod tests {
     /// isolated temp export dir so it never touches the user's real GBrain.
     #[test]
     fn save_preview_as_note_persists_anchors_and_exports_markdown() {
-        // export::export_note writes under paths::default_export_root(), which
-        // honors THROUGHLINE_EXPORT_DIR — point it at a temp dir and serialize
-        // against other env-touching tests so we never write into ~/GBrain.
+        // export::export_book_literature_note writes under
+        // paths::default_export_root(), which honors THROUGHLINE_EXPORT_DIR —
+        // point it at a temp dir and serialize against other env-touching tests
+        // so we never write into ~/GBrain.
         let _g = crate::paths::lock_env_for_test();
         let export_dir =
             std::env::temp_dir().join(format!("tl-tutor-save-test-{}", std::process::id()));
@@ -1591,8 +1595,14 @@ mod tests {
         );
         let md = std::fs::read_to_string(md_path).expect("exported markdown file exists");
         assert!(md.contains("source_private: true"));
-        assert!(md.contains("note_type: TutorNote"));
-        assert!(md.contains("chapter: \"I.\""));
+        // The literature note renders the chapter as a heading and the saved tutor
+        // card as a reader-facing "Tutor" callout — never the raw `TutorNote` enum.
+        assert!(md.contains("## I."), "chapter becomes a heading:\n{md}");
+        assert!(md.contains("> [!abstract] Tutor"), "Tutor callout:\n{md}");
+        assert!(
+            !md.contains("] TutorNote"),
+            "raw DB enum must not be a reader-facing label:\n{md}"
+        );
         // The body that IS exported is the reader's own words.
         assert!(
             md.contains("my takeaway on this passage"),
@@ -1708,15 +1718,17 @@ pub fn cmd_save_ai_response_as_note(
     )?;
     let mut note = note_stmt.query_row(params![id], note_from_row)?;
 
-    if let Some(book) = fetch_book(&conn, &book_id)? {
-        if let Ok(path) = export::export_note(&export::root_for(&conn), &book, &note) {
-            log::log_export("note", &path.to_string_lossy());
-            note.exported_markdown_path = Some(path.to_string_lossy().to_string());
-            conn.execute(
-                "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
-                params![note.exported_markdown_path, note.id],
-            )?;
-        }
+    // Regenerate the book's literature note (per-book, idempotent merge).
+    let now_export = Utc::now().to_rfc3339();
+    if let Ok(path) =
+        export::export_book_literature_note(&conn, &export::root_for(&conn), &book_id, &now_export)
+    {
+        log::log_export("book", &path.to_string_lossy());
+        note.exported_markdown_path = Some(path.to_string_lossy().to_string());
+        conn.execute(
+            "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
+            params![note.exported_markdown_path, note.id],
+        )?;
     }
     Ok(note)
 }
