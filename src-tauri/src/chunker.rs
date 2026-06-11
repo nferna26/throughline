@@ -19,6 +19,11 @@
 pub const WPM: usize = 200;
 pub const CHARS_PER_WORD: usize = 5;
 
+/// Bumped whenever the chunking algorithm changes in a way that should rebuild a
+/// book's sittings on next open. Stored in `sittings_meta.chunker_version`; an
+/// open whose stored version differs triggers a re-chunk.
+pub const CHUNKER_VERSION: i64 = 1;
+
 /// Fraction of the target span a break may fall on either side of the ideal end
 /// and still count as "near enough to end here".
 const WINDOW_TOLERANCE: f64 = 0.5;
