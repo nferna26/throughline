@@ -11,25 +11,33 @@
 .tl-tutor {
   display: flex;
   flex-direction: column;
-  gap: var(--tl-3);
+  gap: var(--tl-2);
+}
+/* Card shell (handoff "Continue the thought"): radius 12, padding 13/16/12. The
+   2px --accent left edge (the tutor's signature) + the sheet bg/border come from
+   the rail overrides in tl-theme.css. No internal scroll — the card grows in the
+   rail's flow and the desk scrolls to it. */
+.tl-margin-rail .tl-tutor.tl-tutor {
+  border-radius: 12px;
+  padding: 13px 16px 12px;
 }
 
-/* ── header: badge · lens · status · collapse · close ── */
+/* ── header: ✦ Tutor · {lens} — spacer — [thinking | ↻] · collapse · × ── */
 .tl-tutor-head {
   display: flex;
   align-items: center;
-  gap: var(--tl-2);
+  gap: 7px;
 }
 .tl-tutor-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex: 0 0 auto;
   white-space: nowrap;
   font-family: var(--tl-sans);
   font-size: 10.5px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
+  font-weight: 700;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--tl-accent);
 }
@@ -39,17 +47,30 @@
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--tl-sans);
-  font-size: 12.5px;
+  font-size: 10.5px;
   font-weight: 600;
-  color: var(--tl-ink);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--tl-faint);
 }
+.tl-tutor-headsp { flex: 1 1 auto; min-width: 6px; }
+/* The sibling Section briefing card (not redesigned here) still uses a status
+   slot that pushes its right-hand controls over; keep it rendering cleanly. */
 .tl-tutor-status {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
   min-height: 18px;
 }
-.tl-tutor-collapse { margin-left: 2px; }
+.tl-briefing .tl-tutor-head .tl-iconbtn { width: 26px; height: 26px; border-radius: 7px; }
+/* Header icon buttons (Regenerate / collapse / close): 26px quiet squares,
+   faint → ink on a soft accent wash. */
+.tl-tutor-head .tl-iconbtn {
+  width: 26px; height: 26px; border-radius: 7px;
+  color: var(--tl-faint);
+}
+.tl-tutor-head .tl-iconbtn:hover { color: var(--tl-ink); background: var(--tl-accent-soft); }
+.tl-tutor-collapse { margin-left: 0; }
 
 /* ── live "verb-ing…" status ── */
 .tl-tutor-live {
@@ -74,6 +95,29 @@
   50% { opacity: 1; transform: scale(1); }
 }
 
+/* ── header "thinking" indicator: three pulsing 4px dots + "thinking" (handoff).
+   Sits where Regenerate lives once done. ── */
+.tl-tutor-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--tl-sans);
+  font-size: 12.5px;
+  color: var(--tl-faint);
+}
+.tl-tutor-thinking i {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--tl-faint); display: block;
+  animation: tl-tutor-thinkpulse 0.9s ease-in-out infinite;
+}
+.tl-tutor-thinking i:nth-child(2) { animation-delay: 0.15s; }
+.tl-tutor-thinking i:nth-child(3) { animation-delay: 0.3s; }
+.tl-tutor-thinking-word { margin-left: 2px; }
+@keyframes tl-tutor-thinkpulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
 .tl-tutor-local {
   display: inline-flex;
   align-items: center;
@@ -95,7 +139,8 @@
   color: color-mix(in oklab, var(--tl-accent) 70%, var(--tl-muted));
 }
 
-/* ── collapsed quote chip ── */
+/* ── quote: serif italic, 2px --line-strong bar, clamp to 2 lines (the book's
+   voice — the only serif in the card). Click to expand the full passage. ── */
 .tl-quotechip {
   display: flex;
   flex-direction: column;
@@ -104,17 +149,18 @@
   text-align: left;
   border: 0;
   background: transparent;
-  border-left: 2px solid var(--tl-accent-line, var(--tl-line));
-  padding: 2px 0 2px var(--tl-3);
+  border-left: 2px solid var(--tl-line-strong);
+  padding: 0 0 0 10px;
+  margin: 8px 0 10px;
   cursor: pointer;
   color: inherit;
 }
 .tl-quotechip-text {
   font-family: var(--tl-serif);
   font-style: italic;
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--tl-ink);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--tl-ink-soft);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -139,42 +185,52 @@
   color: var(--tl-muted);
 }
 .tl-tutor-consent p strong { color: var(--tl-ink); }
-.tl-tutor-consent-btns,
-.tl-tutor-dorow,
-.tl-tutor-savebtns {
+.tl-tutor-consent-btns {
   display: flex;
   align-items: center;
   gap: var(--tl-2);
   justify-content: flex-end;
   flex-wrap: wrap;
 }
-/* In the narrow margin rail, each action keeps its label on ONE line and the row
-   wraps as whole buttons — never a "Save / as / note" stack. */
-.tl-tutor-dorow .tl-btn,
-.tl-tutor-dorow .tl-tutor-ghost { white-space: nowrap; flex: 0 0 auto; }
-/* Regenerate is a quiet, rarely-used secondary action: an icon, sized to sit
-   level with the ghost buttons beside it. */
-.tl-tutor-regen { flex: 0 0 auto; width: 32px; height: 32px; color: var(--tl-muted); border-radius: var(--tl-r-md, 8px); }
-.tl-tutor-regen:hover { color: var(--tl-ink); background: var(--tl-ink-04, transparent); }
+.tl-tutor-consent-btns .tl-btn,
+.tl-tutor-consent-btns .tl-tutor-ghost { white-space: nowrap; flex: 0 0 auto; }
 
-/* ── streaming answer ── */
+/* ── streaming answer: sans 13.5/1.6 ink-soft; bold lead phrase in ink ── */
 .tl-tutor-answer {
   font-family: var(--tl-sans);
   font-size: 13.5px;
-  line-height: 1.62;
-  color: var(--tl-ink);
+  line-height: 1.6;
+  color: var(--tl-ink-soft);
 }
 .tl-tutor-answer p { margin: 0 0 var(--tl-2); }
 .tl-tutor-answer p:last-child { margin-bottom: 0; }
-.tl-tutor-answer strong { font-weight: 650; }
+.tl-tutor-answer strong { color: var(--tl-ink); font-weight: 600; }
 .tl-tutor-answer-wait { min-height: 18px; }
+
+/* ── Go deeper: inline accent text link that ENDS the answer (chevron-down) ── */
+.tl-tutor-deeper-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: var(--tl-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--tl-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--tl-accent);
+  cursor: pointer;
+}
+.tl-tutor-deeper-link:hover { text-decoration: underline; }
 
 .tl-caret {
   display: inline-block;
-  width: 2px;
-  height: 1.05em;
+  width: 6px;
+  height: 1em;
   margin-left: 1px;
-  vertical-align: text-bottom;
+  vertical-align: -2px;
+  border-radius: 1px;
   background: var(--tl-accent);
   animation: tl-caret-blink 1s step-end infinite;
 }
@@ -251,13 +307,13 @@
   color: var(--tl-muted) !important;
 }
 
-/* ── deep tier: appended below the brief behind a quiet "Deeper" rule ── */
-.tl-tutor-deep { display: flex; flex-direction: column; gap: var(--tl-2); }
+/* ── deep tier: appended below the brief behind a quiet "Deeper" divider ── */
+.tl-tutor-deep { display: flex; flex-direction: column; }
 .tl-tutor-deep-rule {
   display: flex;
   align-items: center;
-  gap: var(--tl-2);
-  margin-top: var(--tl-1);
+  gap: 10px;
+  margin: 12px 0 10px;
 }
 .tl-tutor-deep-rule::before,
 .tl-tutor-deep-rule::after {
@@ -269,10 +325,10 @@
 .tl-tutor-deep-rule span {
   font-family: var(--tl-sans);
   font-size: 9.5px;
-  font-weight: 650;
-  letter-spacing: 0.1em;
+  font-weight: 700;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--tl-muted);
+  color: var(--tl-faint);
 }
 
 /* ── error ── */
@@ -282,52 +338,149 @@
   gap: var(--tl-2);
   align-items: flex-start;
 }
+/* Quiet error voice — no warn/alarm color; a missed answer is not an emergency. */
 .tl-tutor-errbox p {
   margin: 0;
   font-family: var(--tl-sans);
   font-size: 12.5px;
   line-height: 1.5;
-  color: var(--tl-warn, var(--tl-ink));
+  color: var(--tl-ink-soft);
 }
 
-/* ── done-state actions ── */
-.tl-tutor-actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tl-3);
-  padding-top: var(--tl-2);
-  border-top: 1px solid var(--tl-line);
-}
-.tl-tutor-asks { display: flex; flex-direction: column; gap: 6px; }
+/* ── lens row: label "ASK ANOTHER WAY" + 4 outline chips in one row ── */
+.tl-tutor-asks { display: flex; flex-direction: column; gap: 7px; margin-top: 12px; }
 .tl-tutor-askslabel {
   font-family: var(--tl-sans);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--tl-muted);
+  color: var(--tl-faint);
 }
 .tl-tutor-lensrow { display: flex; flex-wrap: wrap; gap: 6px; }
 .tl-lenschip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-family: var(--tl-sans);
-  font-size: 12px;
+  font-size: 11.5px;
+  font-weight: 500;
   padding: 4px 11px;
   border-radius: var(--tl-r-pill, 999px);
-  border: 1px solid var(--tl-line);
+  border: 1px solid var(--tl-line-strong);
   background: transparent;
   color: var(--tl-muted);
   cursor: pointer;
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
-.tl-lenschip:hover { color: var(--tl-ink); border-color: var(--tl-ink-10, var(--tl-line)); }
+.tl-lenschip:hover { color: var(--tl-ink); border-color: var(--tl-ink); }
+/* Active lens = outline + accent text + 5px dot — NEVER a fill (Save is the card's
+   only filled control). */
 .tl-lenschip.is-active {
-  background: var(--tl-accent);
   border-color: var(--tl-accent);
-  color: var(--tl-accent-ink, #fff);
+  color: var(--tl-accent);
   font-weight: 600;
 }
+.tl-lenschip.is-active::before {
+  content: "";
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--tl-accent);
+}
 
-/* secondary / ghost button used inside the tutor card */
+/* ── footer: one full-bleed hairline; the card's one fill + privacy microline ── */
+.tl-tutor-foot {
+  margin: 12px -16px 0;
+  padding: 10px 16px 0;
+  border-top: 1px solid var(--tl-line);
+}
+.tl-tutor-foot-row { display: flex; align-items: center; gap: var(--tl-2); }
+.tl-tutor-foot-sp { flex: 1 1 auto; }
+.tl-tutor-foot-note {
+  font-family: var(--tl-sans);
+  font-size: 10.5px;
+  color: var(--tl-faint);
+  white-space: nowrap;
+}
+/* Save as note / Save — the ONLY accent-filled control in the card. */
+.tl-tutor-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-family: var(--tl-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--tl-accent-ink);
+  background: var(--tl-accent);
+  border: 0;
+  border-radius: 7px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.tl-tutor-save:hover { opacity: 0.92; }
+.tl-tutor-save:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Privacy microline: permanent, faint, at the card's very bottom. */
+.tl-tutor-privacy {
+  margin: 8px 0 0;
+  font-family: var(--tl-sans);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--tl-faint);
+}
+
+/* ── save form: replaces the lens row + footer (never two action areas) ── */
+.tl-tutor-saveform { display: flex; flex-direction: column; }
+.tl-tutor-takeaway {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 52px;
+  font-family: var(--tl-sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--tl-ink);
+  background: var(--tl-paper);
+  border: 1px solid var(--tl-line-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.tl-tutor-takeaway::placeholder { color: var(--tl-faint); }
+.tl-tutor-takeaway:focus { outline: none; border-color: var(--tl-accent); }
+.tl-tutor-saverow {
+  display: flex;
+  align-items: center;
+  gap: var(--tl-2);
+  margin-top: 8px;
+}
+/* Cancel: a ghost text link (no border) — quiet beside the one fill. */
+.tl-tutor-ghost-link {
+  flex: 0 0 auto;
+  font-family: var(--tl-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--tl-muted);
+  background: none;
+  border: 0;
+  padding: 6px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.tl-tutor-ghost-link:hover { background: var(--tl-accent-soft); color: var(--tl-ink); }
+.tl-tutor-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--tl-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--tl-accent);
+}
+
+/* secondary / ghost button used elsewhere in the tutor card (consent / error /
+   cap-hit doors) — outlined, quiet. */
 .tl-tutor-ghost {
   display: inline-flex;
   align-items: center;
@@ -344,39 +497,6 @@
 }
 .tl-tutor-ghost:hover { background: var(--tl-ink-04, transparent); border-color: var(--tl-ink-10, var(--tl-line)); }
 
-/* ── save box ── */
-.tl-tutor-savebox { display: flex; flex-direction: column; gap: var(--tl-2); }
-.tl-tutor-takeaway {
-  width: 100%;
-  box-sizing: border-box;
-  resize: vertical;
-  min-height: 56px;
-  font-family: var(--tl-sans);
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--tl-ink);
-  background: var(--tl-paper);
-  border: 1px solid var(--tl-line);
-  border-radius: var(--tl-r-md, 8px);
-  padding: 8px 10px;
-}
-.tl-tutor-takeaway:focus { outline: none; border-color: var(--tl-accent); }
-.tl-tutor-saverow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--tl-2);
-}
-.tl-tutor-saved {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--tl-sans);
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--tl-accent);
-}
-
 /* ── focus-visible rings on every control ── */
 .tl-tutor button:focus-visible,
 .tl-quotechip:focus-visible,
@@ -385,16 +505,31 @@
   box-shadow: var(--tl-focus-ring, 0 0 0 3px var(--tl-accent-soft));
   border-radius: var(--tl-r-sm, 6px);
 }
-/* ring variant for controls sitting on the accent fill */
-.tl-lenschip.is-active:focus-visible {
+/* Pill chips keep a rounded focus ring matching their shape. */
+.tl-lenschip:focus-visible { border-radius: var(--tl-r-pill, 999px); }
+/* The one accent fill (Save) gets a ring that reads on the accent. */
+.tl-tutor-save:focus-visible {
   box-shadow: 0 0 0 2px var(--tl-paper), 0 0 0 4px var(--tl-accent);
 }
 
-/* ── company-mode tutor fuel: thin strip, nudges at 75%/90% used ── */
-.tl-tutorfuel { margin-top: var(--tl-3); }
-.tl-tutorfuel .tl-fuel-bar { display: block; width: 100%; height: 4px; border-radius: 999px; background: var(--tl-line); overflow: hidden; }
-.tl-tutorfuel .fill { display: block; height: 100%; border-radius: 999px; background: var(--tl-accent); opacity: 0.45; }
-.tl-tutorfuel.nudge .fill, .tl-tutorfuel.low .fill { background: #b8860b; opacity: 1; }
+/* ── low-allowance strip (company mode, only-when-low): a 3px --warn track + a
+   nowrap "Running low — about N left" label. Sits above the privacy microline in
+   the footer — the card's one legitimate warning moment. ── */
+.tl-tutorfuel { display: flex; align-items: center; gap: var(--tl-2); margin-top: 10px; }
+.tl-tutorfuel .tl-fuel-bar {
+  flex: 1; display: block; height: 3px; border-radius: 2px;
+  background: var(--tl-line); overflow: hidden;
+}
+.tl-tutorfuel .fill { display: block; height: 100%; border-radius: 2px; background: var(--tl-warn); }
+.tl-fuel-label {
+  flex: 0 0 auto;
+  font-family: var(--tl-sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--tl-warn);
+  white-space: nowrap;
+}
+/* The cap-hit checkout / outage note (a different surface) keeps its quiet look. */
 .tl-tutorfuel-note {
   margin: var(--tl-2) 0 0;
   font-family: var(--tl-sans);
@@ -424,8 +559,10 @@
   cursor: pointer;
 }
 
-/* ── reduced motion: no blink, no pulse (text still appears progressively) ── */
+/* ── reduced motion: no blink, no pulse (text still appears progressively, the
+   static caret + "thinking" word still convey the working state) ── */
 @media (prefers-reduced-motion: reduce) {
   .tl-caret { animation: none; opacity: 1; }
   .tl-tutor-livedot { animation: none; opacity: 1; }
+  .tl-tutor-thinking i { animation: none; opacity: 1; }
 }

@@ -5,6 +5,18 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.5.3] - 2026-06-10
+
+### Changed
+
+- **A calmer tutor card.** The card beside the text is recomposed around what it's
+  for — keeping a note. **Save** is now the one highlighted action; **Go deeper**
+  reads as a quiet link that continues the answer, like "continued…" in a book;
+  the four ways to re-ask (Explain · Context · Define · Ask) sit in one tidy row;
+  Regenerate moves up next to the close button; and a small line at the bottom
+  always tells you where the answer came from. It's lighter, reads top to bottom,
+  and the page no longer jumps while an answer is being written.
+
 ## [0.5.2] - 2026-06-10
 
 ### Fixed

@@ -3,11 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import type { CompanyCredits } from "../types";
 
 /**
- * Company-mode "tutor fuel" strip for the margin tutor card. Quiet by design:
- * below 75% used it is just a thin bar; at 75%+ it adds a gentle nudge, at 90%+
- * a clearer one — both pointing at the free path (BYO key / local model), never
- * blocking, never naming a dollar amount. The actual switch happens at the cap
- * (the three-door screen), so the nudges inform without stranding paid allowance.
+ * Company-mode "low allowance" strip for the margin tutor card footer. Quiet by
+ * design: it is ABSENT entirely until the included AI runs low, then it shows the
+ * card's one legitimate warning — a thin --warn track + "Running low — about N
+ * left", sitting just above the privacy microline. The actual switch happens at
+ * the cap (the three-door screen); this only informs, never blocks.
  */
 export type FuelTone = "quiet" | "nudge" | "low";
 
@@ -17,11 +17,6 @@ export function fuelTone(usedFraction: number): FuelTone {
   if (usedFraction >= 0.75) return "nudge";
   return "quiet";
 }
-
-export const FUEL_NUDGE_75 =
-  "About a quarter of your included AI left. When it runs out, you can keep going free with your own key or a local model.";
-export const FUEL_NUDGE_90 =
-  "Your included AI is almost done. Keep going free afterward — your own key or LM Studio on this Mac, about two minutes to set up.";
 
 export default function TutorFuel({ provider }: { provider: string | null }) {
   const [credits, setCredits] = useState<CompanyCredits | null>(null);
@@ -37,20 +32,18 @@ export default function TutorFuel({ provider }: { provider: string | null }) {
 
   const remaining = Math.max(0, Math.min(1, credits.remaining_fraction));
   const tone = fuelTone(1 - remaining);
+  // Only-when-low: nothing renders until the allowance is actually running low.
+  if (tone === "quiet") return null;
+
   const pct = Math.round(remaining * 100);
+  const left = Math.max(0, Math.round(credits.approx_questions_left));
 
   return (
-    <div
-      className={`tl-tutorfuel ${tone}`}
-      role="status"
-      aria-label={`Throughline AI: about ${pct}% left`}
-    >
+    <div className="tl-tutorfuel" role="status" aria-label={`Throughline AI running low — about ${left} left`}>
       <span className="tl-fuel-bar" aria-hidden="true">
         <span className="fill" style={{ width: `${pct}%` }} />
       </span>
-      {tone !== "quiet" && (
-        <p className="tl-tutorfuel-note">{tone === "low" ? FUEL_NUDGE_90 : FUEL_NUDGE_75}</p>
-      )}
+      <span className="tl-fuel-label">Running low — about {left} left</span>
     </div>
   );
 }

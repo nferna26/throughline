@@ -130,8 +130,8 @@ describe("TextReader — part-divider page", () => {
   it("centers a near-empty divider section (just a part title)", async () => {
     mockText("Part I. Thesis");
     const { container } = render(<TextReader today={card()} onExit={() => {}} />);
-    await waitFor(() => expect(container.querySelector(".tl-sheet")).not.toBeNull());
-    expect(container.querySelector(".tl-sheet.is-divider")).not.toBeNull();
+    // Wait for is-divider directly — it only applies once the section text loads.
+    await waitFor(() => expect(container.querySelector(".tl-sheet.is-divider")).not.toBeNull());
   });
   it("does not center a full content section", async () => {
     mockText("This is a real chapter with plenty of flowing prose to read. ".repeat(8));
