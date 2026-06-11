@@ -87,7 +87,13 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
     insert_plan(&conn, &p)?;
     // Make the freshly imported book the active one on the Today screen.
     bump_last_opened_at(&conn, &result.book.id)?;
-    if let Ok(path) = export::export_book(&export::root_for(&conn), &result.book) {
+    let now_export = chrono::Utc::now().to_rfc3339();
+    if let Ok(path) = export::export_book_literature_note(
+        &conn,
+        &export::root_for(&conn),
+        &result.book.id,
+        &now_export,
+    ) {
         log::log_export("book", &path.to_string_lossy());
     }
     log::log_import(

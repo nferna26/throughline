@@ -5,6 +5,30 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.6.0] - 2026-06-11
+
+The notes you keep are now first-class — and your library is safe.
+
+### Added
+
+- **Export your library.** One click in Settings → Files writes a clean Markdown
+  file for every book — a single "page" per book with your highlights, notes,
+  tutor explanations, and takeaways grouped by chapter, each clearly labelled.
+  Run it as often as you like: it updates the files in place and **never touches
+  edits you've made yourself** in the exported notes.
+- **Automatic backups.** Your library (your books, plans, and notes) is now backed
+  up on this Mac every time you open the app, and if the database is ever damaged,
+  Throughline restores from the last good backup instead of starting over — so a
+  glitch can't quietly erase what you've built.
+
+### Changed
+
+- **Highlights you save now show the passage you highlighted** in the export
+  (they used to come out blank), kept to a short quote.
+- Exported notes read in plain language — "Note", "Tutor", "Takeaway" — instead of
+  internal labels, and each book file states plainly that only short quotes are
+  included and the full text is never reproduced.
+
 ## [0.5.3] - 2026-06-10
 
 ### Changed

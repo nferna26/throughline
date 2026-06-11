@@ -281,7 +281,11 @@ pub fn set_export_path(conn: &Connection, raw: &str) -> Result<PathBuf> {
         std::fs::create_dir_all(&expanded)?;
     }
     // Create the canonical Markdown subdirs so the user can write right away.
-    for sub in ["Books", "Sessions", "Notes", "Reviews", "_indexes"] {
+    // Only the literature-note model's dirs (`Books/`, `Sessions/`) — the
+    // per-note `Notes/` files and the empty `Reviews/`/`_indexes/` trees are
+    // obsolete after the per-book literature note, so we no longer plant them.
+    // Mirrors `export::ensure_export_dirs`.
+    for sub in ["Books", "Sessions"] {
         let _ = std::fs::create_dir_all(expanded.join(sub));
     }
     conn.execute(

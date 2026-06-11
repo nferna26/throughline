@@ -359,6 +359,14 @@ export interface ExportPathStatus {
   message: string | null;
 }
 
+/** Result of exporting the whole library to Markdown (cmd_export_library):
+ *  one literature note per book under the export root's Books/ folder.
+ *  `exported` is the number of books written; `root` is the export folder path. */
+export interface LibraryExportResult {
+  exported: number;
+  root: string;
+}
+
 /** A pickable cloud model + its published per-Mtok price (cmd_model_catalog). */
 export interface ModelInfo {
   id: string;

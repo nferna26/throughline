@@ -11,6 +11,7 @@ import {
   type AiRequest,
   type CompanyCredits,
   type ConnTestResult,
+  type LibraryExportResult,
   type SettingsDto,
 } from "../types";
 import "../tl-settings.css";
@@ -74,6 +75,14 @@ function lensLabel(mode: string): string {
   return LENS_LABEL[mode] ?? mode.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 }
 
+/** The trailing folder name of a path, for reader-facing copy — never the
+ *  full path. Returns "" when there's nothing meaningful to show. */
+function folderDisplayName(path: string | null | undefined): string {
+  const trimmed = (path ?? "").replace(/[/\\]+$/, "");
+  const name = trimmed.split(/[/\\]/).pop();
+  return name && name.length ? name : "";
+}
+
 function fmtWhen(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
@@ -111,6 +120,9 @@ export default function Settings() {
   // Files
   const [savingExport, setSavingExport] = useState(false);
   const [exportMsg, setExportMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  // Export your library (one Markdown file per book under the chosen folder).
+  const [exportingLib, setExportingLib] = useState(false);
+  const [libExportMsg, setLibExportMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   // Allowance meter (real, from cmd_company_credits)
   const [credits, setCredits] = useState<CompanyCredits | null>(null);
@@ -256,6 +268,31 @@ export default function Settings() {
     }
   }
 
+  // Export the whole library to clean Markdown — one literature note per book.
+  // Names the folder, never a raw path; every error says what happened + what to do.
+  async function exportLibrary() {
+    setExportingLib(true);
+    setLibExportMsg(null);
+    try {
+      const r = await invoke<LibraryExportResult>("cmd_export_library");
+      const folder = folderDisplayName(r.root) || exportFolderName;
+      setLibExportMsg({
+        kind: "ok",
+        text:
+          r.exported === 0
+            ? `No books to export yet — add a book first, then export to your ${folder} folder.`
+            : `Exported ${r.exported} book${r.exported === 1 ? "" : "s"} to your ${folder} folder.`,
+      });
+    } catch (e: any) {
+      setLibExportMsg({
+        kind: "err",
+        text: `Couldn't export your library: ${String(e?.message ?? e)}. Your books are unchanged — try again, or pick a different export folder above.`,
+      });
+    } finally {
+      setExportingLib(false);
+    }
+  }
+
   function toggleTutor() {
     const next = !tutorOn;
     setTutorEnabled(next);
@@ -390,12 +427,10 @@ export default function Settings() {
 
   // Display name for the export folder (FT: a chip shows the folder's name,
   // not a full path).
-  const exportFolderName = useMemo(() => {
-    const p = dto?.export_path ?? "";
-    const trimmed = p.replace(/[/\\]+$/, "");
-    const name = trimmed.split(/[/\\]/).pop();
-    return name && name.length ? name : "Reading";
-  }, [dto?.export_path]);
+  const exportFolderName = useMemo(
+    () => folderDisplayName(dto?.export_path) || "Reading",
+    [dto?.export_path],
+  );
 
   return (
     <div className="tl-body tl-settings2">
@@ -809,8 +844,32 @@ export default function Settings() {
             </div>
             <div className="row row-flex">
               <div className="row-main">
+                <p className="row-title">Export your library</p>
+                <p className="row-desc">
+                  Save a clean Markdown copy of every book's notes — your reflections and short
+                  quotes — to your export folder. Run it again anytime; your own edits are kept.
+                </p>
+                {libExportMsg && <p className={`set-msg ${libExportMsg.kind}`}>{libExportMsg.text}</p>}
+              </div>
+              <div className="row-control">
+                <button
+                  type="button"
+                  className="btn btn-accent"
+                  disabled={exportingLib}
+                  onClick={exportLibrary}
+                >
+                  <Icon d={ICON.up} size={15} />
+                  {exportingLib ? "Exporting…" : "Export your library"}
+                </button>
+              </div>
+            </div>
+            <div className="row row-flex">
+              <div className="row-main">
                 <p className="row-title">Your library</p>
-                <p className="row-desc">Your books live on this Mac and stay here.</p>
+                <p className="row-desc">
+                  Your books live on this Mac and stay here, backed up automatically so you never
+                  lose your place.
+                </p>
               </div>
               <div className="row-control">
                 <span className="quiet-line">

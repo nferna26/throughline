@@ -87,7 +87,12 @@ fn main() -> anyhow::Result<()> {
             params![plan_row.id, plan_row.book_id, plan_row.start_date, plan_row.target_finish_date, plan_row.daily_target_units, plan_row.days_per_week, plan_row.catchup_mode],
         )?;
 
-        let _ = export::export_book(&export::root_for(&conn), &result.book);
+        let _ = export::export_book_literature_note(
+            &conn,
+            &export::root_for(&conn),
+            &result.book.id,
+            &chrono::Utc::now().to_rfc3339(),
+        );
 
         // ── Day 1 assignment ──────────────────────────────────────────────
         let computed = plan::compute(&plan_row, &result.sections, &[])?;
@@ -193,7 +198,12 @@ fn main() -> anyhow::Result<()> {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL)",
             params![note.id, note.book_id, note.session_id, note.note_type, note.locator, note.chapter_label, note.body, note.short_quote, note.created_at, note.updated_at],
         )?;
-        let note_md = export::export_note(&export::root_for(&conn), &result.book, &note)?;
+        let note_md = export::export_book_literature_note(
+            &conn,
+            &export::root_for(&conn),
+            &result.book.id,
+            &chrono::Utc::now().to_rfc3339(),
+        )?;
         conn.execute(
             "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
             params![note_md.to_string_lossy().to_string(), note.id],

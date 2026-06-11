@@ -218,8 +218,10 @@ fn main() -> anyhow::Result<()> {
         params![note.id, note.book_id, note.session_id, note.note_type, note.locator, note.chapter_label, note.body, note.short_quote, note.created_at, note.updated_at, note.anchor_start, note.anchor_end, note.anchored_text],
     )?;
 
-    // ── 6. Export safe Markdown + assert the frontmatter contract ──────────
-    let md_path = export::export_note(&export::root_for(&conn), &book, &note)?;
+    // ── 6. Export the per-book LITERATURE NOTE + assert the frontmatter contract ─
+    let now_export = now.clone();
+    let md_path =
+        export::export_book_literature_note(&conn, &export::root_for(&conn), &book.id, &now_export)?;
     let md = std::fs::read_to_string(&md_path)?;
     println!("    note exported → {}", md_path.display());
 
@@ -232,17 +234,18 @@ fn main() -> anyhow::Result<()> {
         sys_temp
     );
 
-    // The five required frontmatter fields from the goal.
+    // The required frontmatter fields of the literature-note contract.
     for needle in [
-        "type: reading_note",
+        "type: reading-source",
         "source_private: true",
         "source_sha256: ",
-        "locator: ",
-        "chapter: ",
+        "throughline_book_id: ",
+        "note_count: 1",
+        "last_export: ",
     ] {
         assert!(
             md.contains(needle),
-            "exported note frontmatter is missing `{}`:\n----\n{}\n----",
+            "exported literature note frontmatter is missing `{}`:\n----\n{}\n----",
             needle,
             md
         );
@@ -251,6 +254,18 @@ fn main() -> anyhow::Result<()> {
     assert!(
         md.contains(&format!("source_sha256: {}", book.source_sha256)),
         "frontmatter source_sha256 must equal the imported book hash"
+    );
+    // The note's chapter became a `## {chapter}` heading, and its fence + block id
+    // are present (re-export keys on the stable `tl-n-{note.id}` id).
+    assert!(
+        md.contains(&format!("## {}", today_sec.label)),
+        "the note's chapter must become a `## {{chapter}}` heading:\n{}",
+        md
+    );
+    assert!(
+        md.contains(&format!("tl-n-{}", note.id)),
+        "the note's stable fence id must be present:\n{}",
+        md
     );
     // Safe export: the raw source body must NOT be dumped wholesale into the note.
     assert!(
@@ -261,7 +276,7 @@ fn main() -> anyhow::Result<()> {
     println!("\n==> SHOT 1 ACCEPTANCE OK");
     println!("    import → 30-day plan → today's section → complete → note → export");
     println!(
-        "    frontmatter: type ✓  source_private:true ✓  source_sha256 ✓  locator ✓  chapter ✓"
+        "    literature note: type:reading-source ✓  source_private:true ✓  source_sha256 ✓  chapter heading ✓  fence id ✓"
     );
     Ok(())
 }

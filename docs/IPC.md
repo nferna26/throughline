@@ -2,7 +2,7 @@
 
 The Rust backend exposes commands to the React frontend via Tauri's `invoke` bridge. This document is the binding contract: argument names, types, return shapes, error shapes, and the semver commitment for changes.
 
-The current API version is **5**. Read it at runtime from the frontend via `invoke("cmd_api_version")`.
+The current API version is **6**. Read it at runtime from the frontend via `invoke("cmd_api_version")`.
 
 > **1 → 2:** `cmd_import_book` now returns `ImportOutcome { book, created }` instead of a bare `Book`. Return-shape change → major bump.
 >
@@ -11,6 +11,8 @@ The current API version is **5**. Read it at runtime from the frontend via `invo
 > **3 → 4:** plan lifecycle — migration v008 added the lifecycle axis (`active` | `paused` | `completed` | `archived` | `superseded`) to the plan rows JS receives, and the plan-management command family landed against it (`cmd_list_plans_for_book`, `cmd_get_active_plan`, pause / resume / archive / delete).
 >
 > **4 → 5:** plans frontispiece — migration v009 added `name`, `deleted_at` (soft-delete window), and `reached_percent` to `reading_plans`; plan rows and the plans list reshaped around naming + let-go semantics.
+>
+> **5 → 6:** notes export reshaped from one Markdown file **per note** (`Notes/{book}_{note}.md`) to one per-book **literature note** (`Books/{slug}.md`) that re-exports idempotently in place. `cmd_save_note` / `cmd_update_note` / `cmd_save_ai_preview_as_note` / `cmd_save_ai_response_as_note` now write that shared book file (each note's `exported_markdown_path` points at it); delete-note re-merges the file (dropping the note's fence) rather than removing a per-note file; and the new `cmd_export_library` regenerates every book file. The on-disk export contract a JS caller observes changed.
 
 ---
 
@@ -49,7 +51,7 @@ type AppError =
 
 #### `cmd_api_version`
 - args: none
-- returns: `number` — the value of `COMMAND_API_VERSION` (currently `5`)
+- returns: `number` — the value of `COMMAND_API_VERSION` (currently `6`)
 - errors: never
 
 Use this from the frontend on startup to detect a backend that has moved to a major version your build doesn't understand.
@@ -199,14 +201,14 @@ Recovery action — clears `section_progress` for one section.
 - returns: `Note`
 - errors: `Db`, `Io` (export failure non-fatal)
 
-Side effects: inserts a `notes` row, exports Markdown to `{export_root}/Notes/`.
+Side effects: inserts a `notes` row, then regenerates the book's **literature note** at `{export_root}/Books/{slug}.md` (one Markdown file per book; the note becomes an atomic, fenced unit inside it). The returned note's `exported_markdown_path` points at that shared book file.
 
 #### `cmd_update_note`
 - args: `{ noteId: string; noteType?: string; body?: string; shortQuote?: string; anchoredText?: string; clearShortQuote?: boolean; clearAnchoredText?: boolean }`
 - returns: `Note` — the updated row
 - errors: `NotFound` (note), `Db`, `Io` (re-export failure)
 
-COALESCE semantics: an absent field is left unchanged, so autosave can PATCH just the `body` without clobbering type/quote. Because absent means "unchanged", the `clearShortQuote` / `clearAnchoredText` booleans are the only way to NULL `short_quote` / `anchored_text` once set — the clears apply AFTER the COALESCE patch, even in the same call (CORE-1023). Both flags are **additive/optional** (a minor change — no version bump). Re-exports to the SAME stable file so the Markdown mirror updates rather than duplicates.
+COALESCE semantics: an absent field is left unchanged, so autosave can PATCH just the `body` without clobbering type/quote. Because absent means "unchanged", the `clearShortQuote` / `clearAnchoredText` booleans are the only way to NULL `short_quote` / `anchored_text` once set — the clears apply AFTER the COALESCE patch, even in the same call (CORE-1023). Both flags are **additive/optional** (a minor change — no version bump). Re-merges the book's `Books/{slug}.md` literature note idempotently — the note's fenced block is replaced in place and any reader edits OUTSIDE the fences survive.
 
 #### `cmd_list_notes`
 - args: `{ bookId: string }`
@@ -217,6 +219,13 @@ COALESCE semantics: an absent field is left unchanged, so autosave can PATCH jus
 - args: `{ quote: string }`
 - returns: `boolean` — true if the quote exceeds the ~300 char fair-use threshold
 - errors: never
+
+#### `cmd_export_library`
+- args: none
+- returns: `{ exported: number; root: string }` — how many book literature notes were (re)generated and the export root they landed under
+- errors: `Db`
+
+Regenerates EVERY book's literature note (`{export_root}/Books/{slug}.md`) idempotently — the "Export library" action. Each book file is re-merged in place, so reader edits outside the note fences survive. New in `COMMAND_API_VERSION` 6.
 
 ---
 
@@ -236,7 +245,7 @@ COALESCE semantics: an absent field is left unchanged, so autosave can PATCH jus
 - returns: `Note`
 - errors: `Validation` (empty body); `NotFound` (ai_request); `Db`, `Io`
 
-Side effects: writes the Note's Markdown mirror under `…/Notes/` and flips `ai_requests.wrote_to_memory` to 1.
+Side effects: regenerates the book's literature note at `…/Books/{slug}.md` (the saved card becomes a fenced `> [!abstract] Tutor` unit inside it) and flips `ai_requests.wrote_to_memory` to 1.
 
 The four optional fields are **additive** (a minor change — no integer API bump): legacy callers that send only the first five args still work (absent options deserialize to `null`). When present, `anchorStart`/`anchorEnd`/`anchoredText` pin the saved card in the Companion Margin — this is the path the text reader's margin **tutor card** uses, saving a `noteType: "TutorNote"` anchored to the selected passage.
 
@@ -274,7 +283,7 @@ The call is fronted by a circuit breaker (3 failures / 60s window / 30s cool-dow
 - returns: `Note`
 - errors: same as `cmd_save_ai_preview_as_note`
 
-Like `cmd_save_ai_preview_as_note`, the four trailing fields are **additive/optional**; when present they anchor the saved card in the Companion Margin. Privacy note: the saved `body` is user-authored text — neither this command nor `export_note` writes the AI prompt or the raw selected passage to Markdown (`anchored_text` is stored in the DB only, never exported).
+Like `cmd_save_ai_preview_as_note`, the four trailing fields are **additive/optional**; when present they anchor the saved card in the Companion Margin. Privacy note: the saved `body` is user-authored text — the literature-note export writes only that body for non-highlight notes (the AI prompt and the raw selected passage `anchored_text` are stored in the DB only, never exported; `anchored_text` reaches Markdown only as the content of a `Highlight` note, hard-capped at ~300 chars).
 
 #### `cmd_list_ai_requests`
 - args: none
@@ -360,7 +369,7 @@ Recommended startup pattern:
 ```ts
 import { invoke } from "@tauri-apps/api/core";
 
-const FRONTEND_EXPECTED_API_VERSION = 5;
+const FRONTEND_EXPECTED_API_VERSION = 6;
 
 async function checkBackend() {
   try {
