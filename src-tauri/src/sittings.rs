@@ -199,6 +199,13 @@ pub fn rebuild_if_stale(
     sitting_minutes: i64,
     now: &str,
 ) -> rusqlite::Result<bool> {
+    // An empty body means the source could NOT be read (a transient IO error, a
+    // missing file). Never wipe a good sittings cache on an empty read — preserve
+    // what's there and try again next open. A genuinely empty book also has no
+    // sittings, which is the same no-op outcome.
+    if body.trim().is_empty() {
+        return Ok(false);
+    }
     let fingerprint = content_fingerprint(body);
     let current: Option<(String, i64, i64)> = conn
         .query_row(
@@ -490,6 +497,43 @@ mod tests {
         assert_eq!(locate(&b, Some(399)), Position::At(2), "last byte is still reading");
         assert_eq!(locate(&b, Some(400)), Position::Finished, "furthest at content end → finished");
         assert_eq!(locate(&b, Some(99999)), Position::Finished, "past the end → finished");
+    }
+
+    /// A transient source-read failure (empty body) must NOT wipe a good sittings
+    /// cache — Today would otherwise render broken until the read recovered.
+    #[test]
+    fn rebuild_if_stale_preserves_sittings_when_the_body_read_fails() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO books (id,title,source_type,source_path,source_sha256,created_at)
+             VALUES ('b','T','txt','/x','h','2026-01-01')",
+            [],
+        )
+        .unwrap();
+        let (body, sections) = make_body();
+        for s in &sections {
+            conn.execute(
+                "INSERT INTO book_sections (id,book_id,label,start_locator,end_locator,estimated_units,sort_order,assignable)
+                 VALUES (?1,'b',?2,?3,?4,?5,?6,1)",
+                rusqlite::params![s.id, s.label, s.start_locator, s.end_locator, s.estimated_units, s.sort_order],
+            )
+            .unwrap();
+        }
+
+        // First build with the real body.
+        assert!(rebuild_if_stale(&conn, "b", &body, &sections, 1, "t0").unwrap(), "first build runs");
+        let n1: i64 = conn
+            .query_row("SELECT count(*) FROM sittings WHERE book_id='b'", [], |r| r.get(0))
+            .unwrap();
+        assert!(n1 > 0, "sittings were built");
+
+        // Transient read failure: an empty body must be a no-op, not a wipe.
+        assert!(!rebuild_if_stale(&conn, "b", "", &sections, 1, "t1").unwrap(), "empty body does not rebuild");
+        let n2: i64 = conn
+            .query_row("SELECT count(*) FROM sittings WHERE book_id='b'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n2, n1, "the cache is preserved on an empty-body read");
     }
 
     #[test]
