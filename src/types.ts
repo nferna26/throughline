@@ -32,37 +32,19 @@ export type PlanStatus =
   | "completed"
   | "paused";
 
+/** Mirrors the Rust `ReadingPlan` (Stage 1): a plan is a start date, a chosen
+ *  sitting length, and a lifecycle — the engine derives everything else from
+ *  `reading_position`. Finish dates, days-per-week, and catch-up modes are gone. */
 export interface ReadingPlan {
   id: string;
   book_id: string;
   start_date: string;
-  target_finish_date: string;
-  daily_target_units: number | null;
-  days_per_week: number;
-  catchup_mode: string;
   /** Lifecycle state — see PlanStatus. Defaults to "active" for legacy rows. */
   status: string;
   /** When the plan was activated (first reading session). null while plan_ready. */
   activated_at: string | null;
-  /** The original target_finish_date, captured the first time a rebalance moved
-   *  the goalpost. null if never rebalanced. */
-  original_finish_date: string | null;
-}
-
-/** Forward-looking finish projection. Replaces the punitive "N days behind"
- *  linear deficit with an honest forecast: where the *current* reading rate
- *  lands you relative to the target finish date. Only present once a plan is
- *  active (null while plan_ready / done). */
-export type FinishForecastState =
-  | "on_track"
-  | "slightly_off_pace"
-  | "needs_rebalance"
-  | "plan_unrealistic";
-
-export interface FinishForecast {
-  state: string;
-  projected_finish_date: string | null;
-  days_late: number;
+  /** The reader's chosen sitting length, in minutes. null on legacy plans. */
+  sitting_length_minutes: number | null;
 }
 
 /** Result of cmd_import_book. `created` is false when the import deduped onto a
@@ -144,37 +126,6 @@ export interface AiRequest {
   provider: string | null;
   created_at: string;
   wrote_to_memory: boolean;
-}
-
-export type PaceState =
-  | { kind: "on_pace" }
-  | { kind: "behind"; days_behind: number }
-  | { kind: "recovery" }
-  | { kind: "not_started" }
-  | { kind: "done" };
-
-export type RecoveryOption =
-  | { kind: "ResumeToday" }
-  | { kind: "GentleCatchup"; extra_minutes: number; for_sessions: number }
-  | { kind: "WeekendCatchup"; weekend_starts_in_days: number }
-  | { kind: "ExtendFinish"; add_days: number; new_finish: string };
-
-export interface RecoveryBundle {
-  headline: string;
-  days_behind: number;
-  options: RecoveryOption[];
-}
-
-export interface StreakSummary {
-  days_read_last_7: number;
-  minutes_last_7: number;
-}
-
-export interface RecomputedPlan {
-  new_target_finish_date: string;
-  new_daily_target_units: number | null;
-  remaining_sections: number;
-  remaining_days: number;
 }
 
 export interface TodayCard {

@@ -32,7 +32,7 @@ const section: BookSection = {
 function card(): TodayCard {
   return {
     book: { id: "b1", title: "Test Book", author: null, source_type: "txt", source_path: "", source_sha256: "x", created_at: "2026-05-29", last_opened_at: null },
-    plan: { id: "p1", book_id: "b1", start_date: "2026-05-01", target_finish_date: "2026-06-01", daily_target_units: 1, days_per_week: 5, catchup_mode: "gentle", status: "active", activated_at: "2026-05-01T08:00:00Z", original_finish_date: null },
+    plan: { id: "p1", book_id: "b1", start_date: "2026-05-01", status: "active", activated_at: "2026-05-01T08:00:00Z", sitting_length_minutes: 25 },
     state: "reading",
     chapter_label: "Chapter 1",
     phrase: null,

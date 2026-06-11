@@ -1,432 +1,254 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import Today from "./Today";
 import type { TodayCard } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-function card(): TodayCard {
+// The old Today asserted pace chips, forecasts, streak dots, recovery panels,
+// day counters, percent-complete stats, a rescue button, the "Last time"
+// memory surface, and resume-percent copy. The Stage-2 screen deletes ALL of
+// that by design: a TodayCard is one of five states (day_one / reading /
+// returning / finished / no_plan) and "behind" is unrepresentable in the
+// contract itself. The replacements below assert the new behaviors those
+// tests were protecting readers from (or with): every state reads calm
+// (no shame vocabulary can render), position is a silent hairline length
+// (never a number), and the one obvious action per state still works.
+
+function card(state: TodayCard["state"] = "reading"): TodayCard {
   return {
-    book: {
-      id: "b1",
-      title: "The Cold Start Problem",
-      author: "Andrew Chen",
-      source_type: "epub",
-      source_path: "",
-      source_sha256: "x",
-      created_at: "2026-01-01",
-      last_opened_at: null,
-    },
-    plan: {
-      id: "p1",
-      book_id: "b1",
-      start_date: "2026-05-01",
-      target_finish_date: "2026-05-31",
-      daily_target_units: 1,
-      days_per_week: 6,
-      catchup_mode: "gentle",
-      status: "active",
-      activated_at: "2026-05-01T08:00:00Z",
-      original_finish_date: null,
-    },
-    section: {
-      id: "s1",
-      book_id: "b1",
-      label: "Chapter 1",
-      href: null,
-      start_locator: "char:0",
-      end_locator: "char:9000",
-      estimated_units: 9000,
-      sort_order: 0,
-    },
-    section_completed: false,
-    estimated_minutes: 18,
-    session_minutes: 25,
-    monthly_pct: 12,
-    pace: { kind: "on_pace" },
-    day_index: 3,
-    total_days: 30,
-    streak: { days_read_last_7: 4, minutes_last_7: 80 },
-    recovery: null,
-    resume_locator: null,
+    book: { id: "b1", title: "The Confessions", author: "Augustine", source_type: "txt", source_path: "", source_sha256: "x", created_at: "2026-05-29", last_opened_at: null },
+    plan: { id: "p1", book_id: "b1", start_date: "2026-05-01", status: "active", activated_at: "2026-05-01T08:00:00Z", sitting_length_minutes: 25 },
+    state,
+    chapter_label: "Chapter II",
+    phrase: null,
+    estimated_minutes: 8,
+    fraction_complete: 0.3,
+    next_label: null,
+    section: { id: "s1", book_id: "b1", label: "Chapter II", href: null, start_locator: "0", end_locator: "1000", estimated_units: 1000, sort_order: 0 },
+    sitting_start_locator: 0,
+    sitting_end_locator: 1000,
+    resume_locator: "120",
     resume_percent: null,
-    plan_status: "active",
-    forecast: { state: "on_track", projected_finish_date: "2026-05-28", days_late: 0 },
     memory: { last_capture: null, highlight_count: 0, note_count: 0 },
+    teaser: null,
   };
 }
 
 const noop = () => {};
 
-describe("Today", () => {
+function renderToday(today: TodayCard | null, over: Partial<Parameters<typeof Today>[0]> = {}) {
+  return render(
+    <Today
+      today={today}
+      onDiscover={noop}
+      onImport={noop}
+      onStart={noop}
+      onRefresh={noop}
+      onNewPlan={noop}
+      onReviewNotes={noop}
+      {...over}
+    />,
+  );
+}
+
+beforeEach(() => {
+  vi.mocked(invoke).mockReset();
+  vi.mocked(invoke).mockResolvedValue([]);
+});
+
+describe("Today — welcome (no book yet)", () => {
   it("renders the welcome card with find + import actions when there is no book", () => {
-    render(<Today today={null} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.getByText(/Welcome to Throughline/i)).toBeInTheDocument();
-    // Primary path is the public-domain catalogue; importing a local file is secondary.
+    renderToday(null);
+    expect(screen.getByText("Welcome to Throughline")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Find a book to read/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Import a file instead/i })).toBeInTheDocument();
   });
 
-  // REVIEW P1-4 / CORE-1002: the first screen must not overpromise. Since the
-  // AI pivot, an opted-in tutor sends the reader's SELECTED PASSAGE to a cloud
-  // provider — so the welcome promise names exactly what stays and what can go,
-  // mirroring the Settings trust card and the consent sheet.
-  it("welcome promise is truthful about the tutor (no absolute 'never leaves' claim)", () => {
-    render(<Today today={null} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(
-      screen.getByText(/Your books stay on this Mac\. If you ask the tutor, only the passage you select is sent — never the book\./),
-    ).toBeInTheDocument();
-    // The pre-pivot absolute claim is gone…
-    expect(screen.queryByText(/never leave this Mac/i)).toBeNull();
-    // …and the two promises that are still literally true stay.
-    expect(screen.getByText(/Markdown that outlives the app/i)).toBeInTheDocument();
+  it("welcome promise is truthful about the tutor: the selection is sent, never the book", () => {
+    renderToday(null);
+    expect(screen.getByText(/only the passage you select is sent, never the book/i)).toBeInTheDocument();
     expect(screen.getByText(/No account, no cloud, no tracking/i)).toBeInTheDocument();
+    // The old absolute claim is gone — asking the tutor does leave the Mac.
+    expect(screen.queryByText(/never leaves? this Mac/i)).toBeNull();
   });
 
   it("welcome primary opens Discover, secondary opens the file picker", () => {
     const onDiscover = vi.fn();
     const onImport = vi.fn();
-    render(<Today today={null} onDiscover={onDiscover} onImport={onImport} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
+    renderToday(null, { onDiscover, onImport });
     fireEvent.click(screen.getByRole("button", { name: /Find a book to read/i }));
-    expect(onDiscover).toHaveBeenCalledTimes(1);
+    expect(onDiscover).toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /Import a file instead/i }));
-    expect(onImport).toHaveBeenCalledTimes(1);
+    expect(onImport).toHaveBeenCalled();
   });
+});
 
-  it("renders today's section, pace, and Start Reading for an active book", () => {
-    render(<Today today={card()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.getByRole("heading", { name: /The Cold Start Problem/ })).toBeInTheDocument();
-    expect(screen.getByText("Chapter 1")).toBeInTheDocument();
-    expect(screen.getByText(/On pace/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Start 25-minute session/i })).toBeInTheDocument();
-  });
-
-  it("stays quiet about 'Last time' when nothing has been captured", () => {
-    render(<Today today={card()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.queryByLabelText("Last time")).toBeNull();
-  });
-
-  it("brings forward the reader's last takeaway with calm, no-shame copy", () => {
-    const t = card();
-    t.memory = {
-      last_capture: { note_type: "Takeaway", body: "grace precedes effort", chapter_label: "Book I", created_at: "2026-05-30T10:00:00Z" },
-      highlight_count: 2,
-      note_count: 3,
-    };
-    render(<Today today={t} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.getByLabelText("Last time")).toBeInTheDocument();
-    expect(screen.getByText(/grace precedes effort/)).toBeInTheDocument();
-    expect(screen.getByText(/You noted/)).toBeInTheDocument();
-    expect(screen.getByText(/2 highlights · 3 notes/)).toBeInTheDocument();
-    // No shame language anywhere in the surface.
-    expect(screen.queryByText(/behind|streak|lost|missed/i)).toBeNull();
-  });
-
-  it("frames a last Question with 'You asked'", () => {
-    const t = card();
-    t.memory = {
-      last_capture: { note_type: "Question", body: "can you seek what you don't know?", chapter_label: null, created_at: "2026-05-30T10:00:00Z" },
-      highlight_count: 0,
-      note_count: 1,
-    };
-    render(<Today today={t} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.getByText(/You asked/)).toBeInTheDocument();
-    expect(screen.getByText(/can you seek what you don't know\?/)).toBeInTheDocument();
-  });
-
-  it("offers a timed session and an always-present 10-minute rescue", () => {
+describe("Today — the book on the desk (five states)", () => {
+  it("day_one: 'Beginning today', two calm lines, a bare hairline, Begin reading", () => {
     const onStart = vi.fn();
-    const onStartRescue = vi.fn();
-    render(<Today today={card()} onDiscover={noop} onImport={noop} onStart={onStart} onStartRescue={onStartRescue} onRefresh={noop} />);
-    // Primary action names the reading-rhythm length, not the section estimate.
-    const primary = screen.getByRole("button", { name: /Start 25-minute session/i });
-    fireEvent.click(primary);
-    expect(onStart).toHaveBeenCalledTimes(1);
-    // The rescue is always offered and routes to the calm 10-minute mode.
-    const rescue = screen.getByRole("button", { name: /I only have 10 minutes/i });
-    fireEvent.click(rescue);
-    expect(onStartRescue).toHaveBeenCalledTimes(1);
+    const c = card("day_one");
+    const { container } = renderToday(c, { onStart });
+
+    expect(screen.getByText("Beginning today")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "The Confessions" })).toBeInTheDocument();
+    expect(screen.getByText("Augustine")).toBeInTheDocument();
+    expect(screen.getByText("We've set an unhurried pace.")).toBeInTheDocument();
+    expect(screen.getByText("There's no clock but your own.")).toBeInTheDocument();
+    // Day one's hairline is bare: no fill yet, whatever fraction_complete says.
+    const fill = container.querySelector(".tl-hairline .fill") as HTMLElement;
+    expect(fill.style.width).toBe("0px");
+
+    fireEvent.click(screen.getByRole("button", { name: "Begin reading" }));
+    expect(onStart).toHaveBeenCalledWith(c);
   });
 
-  it("surfaces a calm forecast line when slightly off pace", () => {
-    const c = card();
-    c.forecast = { state: "slightly_off_pace", projected_finish_date: "2026-06-03", days_late: 2 };
-    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.getByText(/Slightly off your original pace/i)).toBeInTheDocument();
-    // Still calm — no recovery panel, no accusatory chip.
-    expect(screen.queryByText(/A little behind/)).toBeNull();
+  it("reading: time-of-day kicker, the chapter line, minutes as reassurance, Continue reading", () => {
+    const onStart = vi.fn();
+    const c = card("reading");
+    renderToday(c, { onStart });
+
+    expect(screen.getByText(/^This (morning|afternoon|evening)$/)).toBeInTheDocument();
+    expect(screen.getByText("Chapter II")).toBeInTheDocument();
+    expect(screen.getByText("About eight minutes.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Continue reading" }));
+    expect(onStart).toHaveBeenCalledWith(c);
   });
 
-  // PRIORITY 0: a freshly imported book (plan_ready) must NEVER read as behind.
-  it("reassures and never shows 'behind' for a freshly imported plan_ready book", () => {
-    const c = card();
-    c.plan_status = "plan_ready";
-    c.plan.status = "plan_ready";
-    c.plan.activated_at = null;
-    c.pace = { kind: "not_started" };
-    c.forecast = null;
-    c.recovery = null;
-    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.getByText(/Plan ready\. You are not behind/i)).toBeInTheDocument();
-    // FT-19 (CORE-1052): the plan-ready fact is stated exactly once — no kicker
-    // echo, no meta chip repeat. One calm statement is the bar.
-    expect((document.body.textContent ?? "").match(/plan ready/gi)).toHaveLength(1);
-    // The accusatory pace chip ("Behind · N days") and the recovery panel must
-    // not appear for a not-yet-started plan.
-    expect(screen.queryByText(/Behind ·/)).toBeNull();
-    expect(screen.queryByText(/A little behind/)).toBeNull();
-    expect(screen.queryByText(/Recovery/)).toBeNull();
+  it("the hairline binds fraction_complete as a length — never a number on screen", () => {
+    const c = card("reading");
+    c.fraction_complete = 0.3;
+    const { container } = renderToday(c);
+    const fill = container.querySelector(".tl-hairline .fill") as HTMLElement;
+    expect(fill.style.width).toBe("30%");
+    // Position is qualitative: no percentage (or any progress arithmetic) renders.
+    expect(container.textContent).not.toMatch(/\d+\s*%/);
+    expect(container.textContent).not.toMatch(/Day \d+/i);
   });
 
-  // FT-34 (CORE-1067): a not-yet-started book has monthly_pct 0 — a true but
-  // useless "0% complete" stat at the exact moment the app should feel like an
-  // invitation. Hide it until there is progress; the meta row must not then show
-  // two separators in a row.
-  it("hides the progress stat until there is progress", () => {
-    const c = card();
-    c.plan_status = "plan_ready";
-    c.plan.status = "plan_ready";
-    c.pace = { kind: "not_started" };
-    c.forecast = null;
-    c.recovery = null;
-    c.monthly_pct = 0;
-    const { container } = render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.queryByText(/0% complete/)).toBeNull();
-    // No double separator left behind where the stat was.
-    expect(container.querySelectorAll(".tl-meta .sep").length).toBe(1);
+  it("the hairline clamps out-of-range fractions instead of overflowing", () => {
+    const over = card("reading");
+    over.fraction_complete = 1.4;
+    const { container: c1, unmount } = renderToday(over);
+    expect((c1.querySelector(".tl-hairline .fill") as HTMLElement).style.width).toBe("100%");
+    unmount();
+
+    const under = card("reading");
+    under.fraction_complete = -0.4;
+    const { container: c2 } = renderToday(under);
+    expect((c2.querySelector(".tl-hairline .fill") as HTMLElement).style.width).toBe("0%");
   });
 
-  it("still shows the progress stat for an in-progress book", () => {
-    render(<Today today={card()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.getByText(/12% complete/)).toBeInTheDocument();
+  it("the phrase slot is carried by the chapter label until Stage 3 fills it (pure text swap)", () => {
+    const bare = card("reading");
+    const { container: c1, unmount } = renderToday(bare);
+    const slot1 = c1.querySelector(".tl-desk-orient .line.phrase") as HTMLElement;
+    expect(slot1.textContent).toBe("Chapter II");
+    unmount();
+
+    const withPhrase = card("reading");
+    withPhrase.phrase = "the pear tree and the gang";
+    const { container: c2 } = renderToday(withPhrase);
+    const slot2 = c2.querySelector(".tl-desk-orient .line.phrase") as HTMLElement;
+    // Same slot, same node — the phrase appends into the label's own line.
+    expect(slot2.textContent).toBe("Chapter II, the pear tree and the gang");
   });
 
-  // FT-20 (CORE-1053): a brand-new install must not meet a zero-count ledger.
-  // Before the first session the streak row (the seven dots + "You read 0 of the
-  // last 7 days.") stays silent — mirroring LastTime's fresh-book quiet.
-  it("stays silent about the last 7 days before the first session", () => {
-    const c = card();
-    c.plan_status = "plan_ready";
-    c.plan.status = "plan_ready";
-    c.pace = { kind: "not_started" };
-    c.forecast = null;
-    c.recovery = null;
-    c.streak = { days_read_last_7: 0, minutes_last_7: 0 };
-    const { container } = render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.queryByText(/You read 0 of the last 7 days/)).toBeNull();
-    expect(container.querySelector(".tl-dots")).toBeNull();
+  it("spells out small minute counts and keeps digits for large ones", () => {
+    const one = card("reading");
+    one.estimated_minutes = 1;
+    const { unmount } = renderToday(one);
+    expect(screen.getByText("About one minute.")).toBeInTheDocument();
+    unmount();
+
+    const many = card("reading");
+    many.estimated_minutes = 25;
+    renderToday(many);
+    expect(screen.getByText("About 25 minutes.")).toBeInTheDocument();
   });
 
-  it("still shows the 7-day count once the reader has read", () => {
-    render(<Today today={card()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.getByText(/You read 4 of the last 7 days/)).toBeInTheDocument();
+  it("returning: 'Welcome back', the story kept your place — and no tally of the gap, ever", () => {
+    const onStart = vi.fn();
+    const c = card("returning");
+    const { container } = renderToday(c, { onStart });
+
+    expect(screen.getByText("Welcome back")).toBeInTheDocument();
+    expect(screen.getByText("The story kept your place.")).toBeInTheDocument();
+    expect(screen.getByText("Chapter II is waiting where you left it.")).toBeInTheDocument();
+    // However long the reader was away, the screen never counts the absence.
+    expect(container.textContent).not.toMatch(/\d+\s*(day|week|month)s?\b/i);
+    fireEvent.click(screen.getByRole("button", { name: "Continue reading" }));
+    expect(onStart).toHaveBeenCalledWith(c);
   });
 
-  // CORE-1004: a book whose last plan was let go gets a plan-less Today card
-  // (plan_status "no_plan") — the book header stays reachable and the one
-  // obvious action is starting a plan, wired to the existing onNewPlan flow.
-  it("offers 'Start a plan' for a plan-less (no_plan) book", () => {
+  it("finished: a check ring, notes review, a gentle forward pull — and no reading button", () => {
+    const onReviewNotes = vi.fn();
+    const onDiscover = vi.fn();
+    const c = card("finished");
+    c.next_label = "Book XIII";
+    const { container } = renderToday(c, { onReviewNotes, onDiscover });
+
+    expect(container.querySelector(".tl-check-ring")).not.toBeNull();
+    expect(screen.getByText(/You finished The Confessions\./)).toBeInTheDocument();
+    expect(screen.getByText(/Book XIII was the last of it/)).toBeInTheDocument();
+    // No primary reading action remains in the finished state.
+    expect(screen.queryByRole("button", { name: /Continue reading|Begin reading/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Review your notes" }));
+    expect(onReviewNotes).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Find another book" }));
+    expect(onDiscover).toHaveBeenCalled();
+  });
+
+  it("no_plan: the book still owns Today, with one calm action — Start a plan", () => {
     const onNewPlan = vi.fn();
-    const c = card();
-    c.plan_status = "no_plan";
-    c.plan.status = "no_plan";
+    const c = card("no_plan");
+    const { container } = renderToday(c, { onNewPlan });
+
+    expect(screen.getByText("On your desk")).toBeInTheDocument();
+    expect(screen.getByText(/There's no plan right now/)).toBeInTheDocument();
+    // The hairline rests empty rather than disappearing.
+    expect((container.querySelector(".tl-hairline .fill") as HTMLElement).style.width).toBe("0px");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start a plan" }));
+    expect(onNewPlan).toHaveBeenCalledWith(c.book);
+  });
+
+  it("'behind' is unrepresentable: every state reads calm — no shame vocabulary can render", () => {
+    // The old contract carried pace/recovery/streak/forecast fields the screen
+    // had to be tested NOT to weaponize. The new contract cannot express them;
+    // this pins that none of the five states smuggles the vocabulary back in.
+    const states: Array<TodayCard["state"]> = ["day_one", "reading", "returning", "finished", "no_plan"];
+    for (const s of states) {
+      const { container, unmount } = renderToday(card(s));
+      expect(container.textContent).not.toMatch(/behind|streak|missed|catch.?up|recovery|lost/i);
+      expect(container.textContent).not.toMatch(/Day \d+ of \d+/i);
+      unmount();
+    }
+  });
+
+  it("disables the reading button when there is no section to open", () => {
+    const c = card("reading");
     c.section = null;
-    c.pace = { kind: "not_started" };
-    c.forecast = null;
-    c.recovery = null;
-    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} onNewPlan={onNewPlan} />);
-    // The book is still the headline — not the first-run welcome card.
-    expect(screen.getByRole("heading", { name: /The Cold Start Problem/ })).toBeInTheDocument();
-    expect(screen.queryByText(/Welcome to Throughline/i)).toBeNull();
-    // Calm empty-state copy teaches the next step…
-    expect(screen.getByText(/Set a gentle pace whenever you're ready/i)).toBeInTheDocument();
-    // …and the one obvious action starts a plan via the existing flow.
-    fireEvent.click(screen.getByRole("button", { name: /Start a plan/i }));
-    expect(onNewPlan).toHaveBeenCalledTimes(1);
-    expect(onNewPlan.mock.calls[0][0]).toMatchObject({ id: "b1" });
-    // No day counter, no pace pressure for a plan-less book.
-    expect(screen.queryByText(/day 3 of 30/i)).toBeNull();
-    expect(screen.queryByText(/Behind ·/)).toBeNull();
+    renderToday(c);
+    expect(screen.getByRole("button", { name: "Continue reading" })).toBeDisabled();
   });
 
-  // CORE-1003: a PAUSED plan must read calmly — never the day-counter kicker
-  // (whose clock keeps running) and never a "Behind" chip.
-  it("reads calmly when the plan is paused — no day counter, no behind chip", () => {
-    const c = card();
-    c.plan_status = "paused";
-    c.plan.status = "paused";
-    c.pace = { kind: "not_started" };
-    c.forecast = null;
-    c.recovery = null;
-    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.getByText(/Paused — resume whenever you're ready/i)).toBeInTheDocument();
-    expect(screen.queryByText(/day 3 of 30/i)).toBeNull();
-    expect(screen.queryByText(/Behind ·/)).toBeNull();
-    expect(screen.queryByText(/A little behind/)).toBeNull();
-    // The pace chip must agree with the kicker: "Paused", not "Not started".
-    expect(screen.getByLabelText("Pace: Paused")).toBeInTheDocument();
-    expect(screen.queryByText(/Not started/)).toBeNull();
-  });
-
-  // REGRESSION: "Restart current chapter" was removed as a recovery option —
-  // throwing away read progress is a punishment, not a recovery. It must never
-  // render, even when the recovery panel IS shown for a genuinely-behind book.
-  it("never renders a 'Restart current chapter' recovery option", () => {
-    const c = card();
-    // Force the recovery panel to render with the full real option set.
-    c.recovery = {
-      headline: "Next smallest step: 10 minutes.",
-      days_behind: 3,
-      options: [
-        { kind: "ResumeToday" },
-        { kind: "GentleCatchup", extra_minutes: 10, for_sessions: 3 },
-        { kind: "ExtendFinish", add_days: 3, new_finish: "2026-06-04" },
-      ],
-    };
-    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    // The recovery panel is present…
-    expect(screen.getByText(/A little behind/)).toBeInTheDocument();
-    // …but offers no restart/start-over affordance in any casing.
-    expect(screen.queryByText(/restart/i)).toBeNull();
-    expect(screen.queryByText(/start over/i)).toBeNull();
-    expect(screen.queryByText(/current chapter/i)).toBeNull();
-  });
-});
-
-// CORE-1007: GentleCatchup / WeekendCatchup were placebo buttons — they read
-// as commitments ("Plan: add 10 min…") but changed no state and persisted
-// nothing. They are now honest advice; ExtendFinish stays the one option that
-// actually mutates the plan.
-describe("Today — recovery options are honest", () => {
-  function behindCard(): TodayCard {
-    const c = card();
-    c.recovery = {
-      headline: "Next smallest step: 10 minutes.",
-      days_behind: 3,
-      options: [
-        { kind: "GentleCatchup", extra_minutes: 10, for_sessions: 3 },
-        { kind: "WeekendCatchup", weekend_starts_in_days: 0 },
-        { kind: "ExtendFinish", add_days: 3, new_finish: "2026-06-04" },
-      ],
-    };
-    return c;
-  }
-
-  it("GentleCatchup and WeekendCatchup read as advice — no 'Plan:' claim, no backend call", () => {
-    render(<Today today={behindCard()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    // Ignore the mount-time cmd_list_plans_for_book lookup; from here on,
-    // clicking an advice option must never reach the backend.
-    vi.mocked(invoke).mockClear();
-
-    fireEvent.click(screen.getByRole("button", { name: /add(ing)? 10 min/i }));
-    // No fabricated commitment — nothing was persisted, so nothing may claim "Plan:".
-    expect(screen.queryByText(/^Plan:/)).toBeNull();
-    expect(
-      screen.getByText(/Try adding 10 minutes to your next few sittings — no setting to change, just sit a little longer\./),
-    ).toBeInTheDocument();
-    expect(invoke).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: /Catch up this weekend/i }));
-    expect(screen.queryByText(/^Plan:/)).toBeNull();
-    expect(screen.getByText(/no weekday pressure, nothing to change/i)).toBeInTheDocument();
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("ExtendFinish stays the one real option: it calls cmd_extend_finish_date", async () => {
-    const onRefresh = vi.fn();
-    vi.mocked(invoke).mockReset();
-    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
-      cmd === "cmd_extend_finish_date"
-        ? { new_target_finish_date: "2026-06-04", new_daily_target_units: 1, remaining_sections: 4, remaining_days: 4 }
-        : [],
+  it("mentions earlier attempts only when the book has more than one plan", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === "cmd_list_plans_for_book" ? [{}, {}, {}] : []),
     );
-    render(<Today today={behindCard()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={onRefresh} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /Re-pace to finish by 2026-06-04/i }));
-    expect(await screen.findByText(/Finish date is now 2026-06-04/)).toBeInTheDocument();
-    expect(invoke).toHaveBeenCalledWith("cmd_extend_finish_date", { bookId: "b1", addDays: 3 });
-    expect(onRefresh).toHaveBeenCalled();
-    vi.mocked(invoke).mockReset();
+    renderToday(card("reading"));
+    await waitFor(() => expect(screen.getByText(/2 earlier attempts/)).toBeInTheDocument());
   });
 
-  it("a failed re-pace announces an alert in the app's voice, not calm green (FT-39)", async () => {
-    vi.mocked(invoke).mockReset();
-    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
-      if (cmd === "cmd_extend_finish_date") return Promise.reject({ message: "Could not re-pace the plan." });
-      return [];
-    });
-    render(<Today today={behindCard()} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /Re-pace to finish by 2026-06-04/i }));
-
-    // The failure is announced (screen readers must hear it)…
-    const alert = await screen.findByRole("alert");
-    // …routed through errorMessage — no raw "Failed:" prefix, no "[object Object]"…
-    expect(alert.textContent).not.toMatch(/^Failed:/);
-    expect(alert.textContent).not.toMatch(/\[object Object\]/);
-    expect(alert.textContent).toMatch(/couldn.t update the plan/i);
-    // …and it must not wear the success-green ok tone.
-    expect(alert.getAttribute("style") ?? "").not.toMatch(/--tl-ok/);
-    vi.mocked(invoke).mockReset();
-  });
-});
-
-// FT-16 (CORE-1049): the new-section teaser only re-prints the section's own
-// opening the reader meets the instant they tap Start — redundant by design. We
-// keep ONLY the resume "Where you left off" variant; a fresh section pre-prints
-// nothing above the Start button.
-describe("Today — teaser shows only the resume variant", () => {
-  it("does not re-print the section's opening for a fresh section", () => {
-    const c = card();
-    c.teaser = {
-      excerpt: "It is very seldom that mere ordinary people…",
-      prompt: "Read for the image — what picture does this section leave behind?",
-      locator: "char:0",
-      is_resume_excerpt: false,
-    };
-    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.queryByText(/It is very seldom/)).toBeNull();
-    expect(screen.queryByRole("note", { name: /Before you read/i })).toBeNull();
-  });
-
-  it("still shows the resume teaser as 'Where you left off'", () => {
-    const c = card();
-    c.teaser = {
-      excerpt: "Now the middle paragraph the reader is returning to begins here.",
-      prompt: "Read for the thread — what is this paragraph carrying forward?",
-      locator: "char:240",
-      is_resume_excerpt: true,
-    };
-    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.getByText(/Where you left off/i)).toBeInTheDocument();
-    expect(screen.getByText(/Now the middle paragraph/)).toBeInTheDocument();
-  });
-});
-
-describe("Today — continue where you left off", () => {
-  it("surfaces resume position when the reader stopped mid-section", () => {
-    const c = card();
-    c.resume_percent = 42;
-    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    // Primary action names the resume, and a calm note explains it.
-    expect(screen.getByRole("button", { name: /Continue — 42% into this section/i })).toBeInTheDocument();
-    expect(screen.getByText(/left off about 42% into Chapter 1/i)).toBeInTheDocument();
-    expect(screen.getByText(/opens right where you stopped/i)).toBeInTheDocument();
-  });
-
-  it("does NOT show resume for a fresh start (0%) — just the normal session button", () => {
-    const c = card();
-    c.resume_percent = 0;
-    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.queryByText(/Continue —/)).toBeNull();
-    expect(screen.getByRole("button", { name: /Start 25-minute session/i })).toBeInTheDocument();
-  });
-
-  it("does NOT show resume on a near-finished section (≥97%) — that reads as done, not mid-thought", () => {
-    const c = card();
-    c.resume_percent = 98;
-    render(<Today today={c} onDiscover={noop} onImport={noop} onStart={noop} onStartRescue={noop} onRefresh={noop} />);
-    expect(screen.queryByText(/Continue —/)).toBeNull();
+  it("stays quiet about plans when this is the book's only one", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === "cmd_list_plans_for_book" ? [{}] : []),
+    );
+    renderToday(card("reading"));
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("cmd_list_plans_for_book", { bookId: "b1" }));
+    expect(screen.queryByText(/earlier attempt/)).toBeNull();
   });
 });
