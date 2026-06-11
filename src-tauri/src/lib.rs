@@ -48,6 +48,7 @@ pub mod paths;
 pub mod plan;
 pub mod recovery;
 pub mod settings;
+pub mod sittings;
 
 use std::sync::Mutex;
 
