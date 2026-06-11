@@ -3,7 +3,7 @@
 // synthesized fixture. This is the closest a headless agent can get to the live
 // app: it drives the SAME command-layer functions the Tauri UI invokes
 // (import::import_txt, plan::build_default_plan/compute, commands::books::
-// read_txt_section, export::export_note) end-to-end and asserts the real-world
+// read_txt_section, export::export_book_literature_note) end-to-end and asserts the real-world
 // behavior the manual QA checklist (docs/SHOT1_RC.md M1–M11) describes.
 //
 // It exercises, against the real file:

@@ -439,8 +439,17 @@ struct FenceSpan {
 
 /// Find every `<!-- tl:note id=tl-n-X type=... -->` … `<!-- /tl:note -->` fence
 /// in `text`, returning their export ids and byte spans, in file order.
-fn find_fences(text: &str) -> Vec<FenceSpan> {
+/// Locate the app-managed note fences in `text`. Returns (matched spans, every id
+/// seen as an OPEN marker — matched or not). The close marker for a fence MUST come
+/// before the next open marker; if it doesn't (a reader hand-deleted a fence's
+/// close comment in the raw source), this open is treated as malformed and skipped
+/// rather than greedily paired with a LATER fence's close — which would swallow the
+/// reader's own prose written between the two notes. The orphaned region is left
+/// verbatim by the merge, and `open_ids` keeps the merge from re-inserting it as a
+/// duplicate.
+fn find_fences(text: &str) -> (Vec<FenceSpan>, std::collections::HashSet<String>) {
     let mut spans = Vec::new();
+    let mut open_ids = std::collections::HashSet::new();
     let open_marker = "<!-- tl:note id=";
     let close_marker = "<!-- /tl:note -->";
     let mut search_from = 0;
@@ -453,19 +462,30 @@ fn find_fences(text: &str) -> Vec<FenceSpan> {
             .map(|i| after_id + i)
             .unwrap_or(text.len());
         let id = text[after_id..id_end].to_string();
-        // Find the matching close marker after this open.
-        let Some(close_rel) = text[id_end..].find(close_marker) else {
-            break;
-        };
-        let close_end = id_end + close_rel + close_marker.len();
-        spans.push(FenceSpan {
-            id,
-            start: open_start,
-            end: close_end,
-        });
-        search_from = close_end;
+        open_ids.insert(id.clone());
+        // The matching close must appear BEFORE the next open marker.
+        let next_open = text[id_end..]
+            .find(open_marker)
+            .map(|i| id_end + i)
+            .unwrap_or(text.len());
+        match text[id_end..next_open].find(close_marker) {
+            Some(close_rel) => {
+                let close_end = id_end + close_rel + close_marker.len();
+                spans.push(FenceSpan {
+                    id,
+                    start: open_start,
+                    end: close_end,
+                });
+                search_from = close_end;
+            }
+            None => {
+                // Malformed (no close before the next open): skip this open without
+                // consuming the gap. Resume scanning right after the id.
+                search_from = id_end;
+            }
+        }
     }
-    spans
+    (spans, open_ids)
 }
 
 /// IDEMPOTENT merge: rewrite `existing` so that
@@ -480,12 +500,11 @@ fn merge_into_existing(existing: &str, book: &Book, notes: &[Note], now: &str) -
     let body = &existing[body_start..];
 
     // Map current notes by export id for quick lookup, and track which got placed.
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     let by_id: HashMap<String, &Note> =
         notes.iter().map(|n| (note_export_id(n), n)).collect();
 
-    let fences = find_fences(body);
-    let mut placed: HashSet<String> = HashSet::new();
+    let (fences, open_ids) = find_fences(body);
 
     // Rebuild the body, fence by fence, preserving the inter-fence text verbatim.
     let mut rebuilt = String::new();
@@ -496,7 +515,6 @@ fn merge_into_existing(existing: &str, book: &Book, notes: &[Note], now: &str) -
         if let Some(note) = by_id.get(&f.id) {
             // REPLACE this fence's whole block with the freshly rendered one.
             rebuilt.push_str(&render_note_fence(note));
-            placed.insert(f.id.clone());
         }
         // else: fence id no longer in the DB → REMOVE (skip emitting it). We also
         // drop a single trailing blank line that followed it, to avoid blank pileup.
@@ -512,12 +530,13 @@ fn merge_into_existing(existing: &str, book: &Book, notes: &[Note], now: &str) -
     // Verbatim tail after the last fence.
     rebuilt.push_str(&body[cursor..]);
 
-    // INSERT any current notes that had no fence yet, grouped under the correct
-    // chapter heading (appended in document order). New notes append at the end of
-    // their chapter section if it exists, else a new chapter section is added.
+    // INSERT any current notes that have NO open marker in the file yet, grouped
+    // under the correct chapter heading. Filtering on `open_ids` (not just the
+    // matched fences) means a note whose fence the reader hand-broke is left
+    // verbatim rather than re-inserted as a duplicate.
     let new_notes: Vec<&Note> = notes
         .iter()
-        .filter(|n| !placed.contains(&note_export_id(n)))
+        .filter(|n| !open_ids.contains(&note_export_id(n)))
         .collect();
     if !new_notes.is_empty() {
         for note in new_notes {
@@ -934,6 +953,40 @@ mod tests {
         assert!(!after.contains("first body"), "old fence content replaced");
         // App-owned key refreshed.
         assert!(after.contains("last_export: 2026-06-11T00:00:00Z"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A reader who hand-deletes a fence's raw `<!-- /tl:note -->` close comment in
+    /// the source must NOT lose any prose they wrote between that note and the next:
+    /// the broken fence is left verbatim, never greedily paired with a later close
+    /// (which would swallow the gap), and never re-inserted as a duplicate.
+    #[test]
+    fn a_hand_broken_fence_does_not_swallow_prose_between_notes() {
+        let conn = migrated_with_book();
+        insert_note(&conn, "n1", "Takeaway", "char:120", Some("Book I"), "first body", None, None);
+        insert_note(&conn, "n2", "Takeaway", "char:200", Some("Book I"), "second body", None, None);
+        let root = std::env::temp_dir().join(format!("tl-litnote-broken-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        let path = export_book_literature_note(&conn, &root, "b1", NOW).unwrap();
+
+        // Reader deletes n1's CLOSE comment (the first one) and writes prose where it was.
+        let original = std::fs::read_to_string(&path).unwrap();
+        let broken = original.replacen("<!-- /tl:note -->", "MY PROSE BETWEEN THE NOTES.", 1);
+        assert!(broken.contains("MY PROSE BETWEEN THE NOTES."));
+        std::fs::write(&path, &broken).unwrap();
+
+        // A re-export (e.g. n2 gets edited).
+        conn.execute("UPDATE notes SET body='second UPDATED' WHERE id='n2'", []).unwrap();
+        export_book_literature_note(&conn, &root, "b1", NOW).unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+
+        // The reader's interposed prose survives; n2 updates; nothing duplicates.
+        assert!(after.contains("MY PROSE BETWEEN THE NOTES."), "broken fence must not swallow reader prose:\n{after}");
+        assert!(after.contains("first body"), "the broken n1 region is preserved verbatim:\n{after}");
+        assert!(after.contains("second UPDATED"), "n2 still updates:\n{after}");
+        assert_eq!(after.matches("id=tl-n-n2").count(), 1, "n2 must not be duplicated:\n{after}");
+        assert_eq!(after.matches("id=tl-n-n1").count(), 1, "n1 must not be duplicated:\n{after}");
         std::fs::remove_dir_all(&root).ok();
     }
 
