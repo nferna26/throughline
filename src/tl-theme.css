@@ -726,6 +726,18 @@
   box-shadow: var(--tl-sheet-shadow);
   padding: clamp(48px, 6vw, 88px) clamp(36px, 5vw, 80px) 96px;
 }
+/* A part / half-title divider page (just a title): center it on the page so the
+   spareness reads as a deliberate divider, not a title stranded at the top. The
+   sheet is stretched to the viewport by the spread, so justify-content centers
+   the title vertically; the title gets a touch more presence. */
+.tl-sheet.is-divider { display: flex; flex-direction: column; justify-content: center; }
+.tl-sheet.is-divider .tl-ch-title,
+.tl-sheet.is-divider .tl-h1,
+.tl-sheet.is-divider .tl-h2,
+.tl-sheet.is-divider .tl-tp-title {
+  font-size: 1.85em; letter-spacing: 0.02em; text-align: center; margin: 0;
+  border-bottom: none; padding-bottom: 0;
+}
 /* THE READING COLUMN (the book text). Serif; the measure-preserving clamp grows
    the page on big screens (more px, same ~66ch) so it fills a maximized window
    without breaking the comfort band. The −T+ control overrides font-size inline,
@@ -749,6 +761,12 @@
    slide so its content never reflows (the inner stays a fixed 340px). */
 .tl-margin-rail {
   flex: 0 0 0; width: 0; opacity: 0; overflow: hidden;
+  /* Sticky so the margin stays beside the text as the book scrolls — and its top
+     (the card header / quote) is always reachable. align-self:flex-start stops it
+     stretching to the full page height, which sticky needs. The rail's own
+     overflow:hidden (the width-animation clip) doesn't affect its stickiness,
+     which is relative to the scrolling desk (.tl-reader-main). */
+  position: sticky; top: 0; align-self: flex-start;
   transition: flex-basis 300ms cubic-bezier(0.3, 0, 0.2, 1), opacity 220ms ease 60ms;
 }
 .tl-spread[data-margin="open"] .tl-margin-rail {

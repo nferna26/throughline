@@ -5,6 +5,17 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.5.2] - 2026-06-10
+
+### Fixed
+
+- **Part-divider pages look intentional.** A page that holds only a part title
+  (like "Part I. Thesis") is now centered on the page instead of stranded at the
+  top of a mostly-blank sheet.
+- **The margin stays reachable while you read.** Scrolling down through a book no
+  longer carries the top of an open tutor card out of reach — the margin keeps its
+  place beside the text.
+
 ## [0.5.1] - 2026-06-10
 
 ### Changed

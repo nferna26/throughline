@@ -112,6 +112,35 @@ describe("TextReader Companion Margin", () => {
   });
 });
 
+// A part / half-title divider section (just a title, no body) is centered on its
+// page so it reads as a deliberate divider — not a heading stranded at the top.
+describe("TextReader — part-divider page", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+  function mockText(t: string) {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(t);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+  }
+  it("centers a near-empty divider section (just a part title)", async () => {
+    mockText("Part I. Thesis");
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-sheet")).not.toBeNull());
+    expect(container.querySelector(".tl-sheet.is-divider")).not.toBeNull();
+  });
+  it("does not center a full content section", async () => {
+    mockText("This is a real chapter with plenty of flowing prose to read. ".repeat(8));
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")).not.toBeNull());
+    expect(container.querySelector(".tl-sheet.is-divider")).toBeNull();
+  });
+});
+
 // FT-32: the margin card's X is a soft delete — it shows an Undo toast and only
 // calls cmd_delete_note after the 6-second timer lapses. Undo cancels it entirely.
 describe("TextReader margin note delete — Undo (FT-32)", () => {

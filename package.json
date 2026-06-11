@@ -1,7 +1,7 @@
 {
   "name": "throughline",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Local-first macOS reading app for serious readers — import a book, see today's section, capture durable notes, export to Markdown.",
   "license": "MIT",
   "author": "Nick Fernandez",

@@ -68,6 +68,15 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     if (tagged) return tagged.offset;
     return firstProseDropCapOffset(paragraphs, structure);
   }, [paragraphs, structure]);
+  // A near-empty section — a part / half-title divider page that holds only a
+  // title, no body (common in EPUBs: "Part I. Thesis") — is centered on its page
+  // so it reads as an intentional divider, not a heading stranded at the top of a
+  // tall, mostly-blank sheet.
+  const isDivider = useMemo(() => {
+    if (paragraphs.length === 0 || paragraphs.length > 3) return false;
+    const chars = paragraphs.reduce((n, p) => n + p.text.trim().length, 0);
+    return chars > 0 && chars <= 220;
+  }, [paragraphs]);
   const [session, setSession] = useState<ReadingSession | null>(null);
   const [visited, setVisited] = useState<Set<string>>(new Set());
   // Sections whose END the reader's viewport actually reached this sitting
@@ -874,7 +883,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
           className="tl-spread"
           data-margin={marginIsVisible ? "open" : "closed"}
         >
-          <article className="tl-sheet">
+          <article className={isDivider ? "tl-sheet is-divider" : "tl-sheet"}>
             {rescue && (
               <div className="tl-rescue-banner" style={{ maxWidth: `${lineWidth}px` }} role="note">
                 <TLIcon name="clock" size={15} />
