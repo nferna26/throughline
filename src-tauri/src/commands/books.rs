@@ -16,9 +16,9 @@ use crate::commands::db_helpers::*;
 use crate::db::DbState;
 use crate::error::AppError;
 use crate::models::{
-    Book, BookSection, ImportOutcome, PaceState, ReadingPlan, StyleRange, TodayCard, TodayTeaser,
+    Book, BookSection, ImportOutcome, ReadingPlan, StyleRange, TodayCard, TodayTeaser,
 };
-use crate::{epub_classify, export, import, log, models, paths, plan, recovery, settings};
+use crate::{chunker, epub_classify, export, import, log, models, paths, plan, settings, sittings};
 
 #[tauri::command]
 pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<ImportOutcome, AppError> {
@@ -83,7 +83,7 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
     for s in &result.sections {
         insert_section(&conn, s)?;
     }
-    let p = plan::build_default_plan(&result.book.id, &result.sections);
+    let p = plan::build_default_plan(&result.book.id);
     insert_plan(&conn, &p)?;
     // Make the freshly imported book the active one on the Today screen.
     bump_last_opened_at(&conn, &result.book.id)?;
@@ -120,39 +120,14 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
 #[tauri::command]
 pub fn cmd_configure_plan(
     book_id: String,
-    target_finish_date: String,
-    days_per_week: i64,
-    session_minutes: i64,
-    margin_help: Option<String>,
+    sitting_length_minutes: i64,
     name: Option<String>,
     state: State<DbState>,
 ) -> Result<ReadingPlan, AppError> {
     let conn = state.0.lock()?;
     let plan = fetch_plan_for_book(&conn, &book_id)?
         .ok_or_else(|| AppError::not_found("plan", Some(book_id.clone())))?;
-
-    let finish =
-        chrono::NaiveDate::parse_from_str(target_finish_date.trim(), "%Y-%m-%d").map_err(|_| {
-            AppError::validation(format!(
-                "invalid finish date: {target_finish_date:?} (expected YYYY-MM-DD)"
-            ))
-        })?;
-    let today = plan::app_today();
-    if finish < today {
-        return Err(AppError::validation(
-            "finish date cannot be in the past".to_string(),
-        ));
-    }
-    let dpw = days_per_week.clamp(1, 7);
-    let mins = session_minutes.clamp(5, 120);
-
-    // Recompute the daily section target against the chosen window. Completed
-    // sections (normally 0 for a fresh import) are preserved.
-    let sections = list_sections(&conn, &book_id)?;
-    let assignable = sections.iter().filter(|s| s.assignable).count() as i64;
-    let completed = list_completed_section_ids(&conn, &book_id)?.len() as i64;
-    let remaining = (assignable - completed).max(0);
-    let daily_target = plan::daily_target_for(remaining, today, finish);
+    let mins = sitting_length_minutes.clamp(5, 120);
 
     // Name the plan: the reader's name wins; else keep an existing one; else a
     // friendly default by attempt order ("First attempt", …).
@@ -167,23 +142,9 @@ pub fn cmd_configure_plan(
     let default_label = plan::default_plan_label(attempt);
     let provided = name.as_deref().map(str::trim).filter(|s| !s.is_empty());
     conn.execute(
-        "UPDATE reading_plans SET target_finish_date = ?1, days_per_week = ?2, daily_target_units = ?3, name = COALESCE(?4, name, ?5) WHERE id = ?6",
-        params![finish.to_string(), dpw, daily_target, provided, default_label, plan.id],
+        "UPDATE reading_plans SET sitting_length_minutes = ?1, name = COALESCE(?2, name, ?3) WHERE id = ?4",
+        params![mins, provided, default_label, plan.id],
     )?;
-    settings::set_string(
-        &conn,
-        settings::KEY_READING_RHYTHM_MINUTES,
-        &mins.to_string(),
-    )
-    .map_err(|e| AppError::internal(e.to_string()))?;
-    if let Some(help) = margin_help
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        settings::set_string(&conn, settings::KEY_MARGIN_HELP, help)
-            .map_err(|e| AppError::internal(e.to_string()))?;
-    }
 
     fetch_plan_for_book(&conn, &book_id)?.ok_or_else(|| AppError::not_found("plan", Some(book_id)))
 }
@@ -194,97 +155,109 @@ pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
     today_card(&conn)
 }
 
+/// A gap of this many days since the last reading makes the next open a calm
+/// "Welcome back" rather than the normal greeting. Never a tally, just a warmer line.
+const LAPSE_DAYS: i64 = 4;
+
 /// `cmd_today`'s actual body, extracted so it is testable against an in-memory
 /// DB (the `#[tauri::command]` wrapper above just locks and delegates).
+///
+/// Position-based: "today" is the sitting that contains the reader's furthest
+/// position. There is no schedule and no end date, so "behind" is unrepresentable.
 pub(crate) fn today_card(conn: &Connection) -> Result<Option<TodayCard>, AppError> {
     let Some(book) = fetch_active_book(conn)? else {
         return Ok(None);
     };
     let Some(plan) = fetch_plan_for_book(conn, &book.id)? else {
-        // CORE-1004: a book with zero (non-deleted) plans — its last plan was
-        // "let go" — must still reach Today. Returning None here strands an
-        // existing book on the first-run welcome card (no switcher, no Notes
-        // tab) and even a re-import dedups straight back onto it. Synthesize a
-        // plan-less card instead: book header + notes memory stay reachable,
-        // the pace clock is off, and the UI offers "Start a plan".
+        // CORE-1004: a book whose last plan was "let go" must still reach Today.
         return Ok(Some(plan_less_card(conn, book)?));
     };
+
     let sections = list_sections(conn, &book.id)?;
-    let completed = list_completed_section_ids(conn, &book.id)?;
-    let computed = plan::compute(&plan, &sections, &completed)?;
+    let sitting_minutes = plan
+        .sitting_length_minutes
+        .unwrap_or(plan::DEFAULT_SITTING_MINUTES);
 
-    let section = computed
-        .assigned_section_index
-        .and_then(|i| sections.get(i).cloned());
-    let section_completed = section
-        .as_ref()
-        .map(|s| completed.contains(&s.id))
-        .unwrap_or(false);
-    let est_minutes = section
-        .as_ref()
-        .and_then(|s| s.estimated_units)
-        .map(|u| import::estimate_minutes_for_chars(u as usize))
-        .unwrap_or(20);
+    // Ensure the sittings cache is built and matches the chosen sitting length.
+    // Reading the whole body is exactly what the reader path loads; an offline
+    // import has it on disk, so this never touches the network.
+    let body = read_txt_section(&book.id, 0, None).unwrap_or_default();
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = sittings::rebuild_if_stale(conn, &book.id, &body, &sections, sitting_minutes, &now);
 
-    // Resume locator: per-section last position (if any)
-    let (resume_locator, resume_percent): (Option<String>, Option<f64>) = if let Some(s) = &section
-    {
-        conn.query_row(
-            "SELECT last_locator, last_percent FROM section_progress WHERE book_id = ?1 AND section_id = ?2",
-            params![book.id, s.id],
-            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<f64>>(1)?)),
-        ).unwrap_or((None, None))
-    } else {
-        (None, None)
+    let sits = sittings::load_sittings(conn, &book.id)?;
+    let global_start = |s: &sittings::SittingRow| {
+        sittings::to_global(&sections, &s.start_section_id, s.start_offset)
+    };
+    let content_end = sits.last().map(|s| global_start(s) + s.char_count).unwrap_or(0);
+
+    let furthest = sittings::furthest_global(conn, &book.id, &sections)?;
+    let (last_read_global, last_read_ts) = sittings::last_read(conn, &book.id, &sections)?;
+
+    // Which sitting is "today", and what state is the screen in?
+    let (state, current_idx): (&str, Option<usize>) = match furthest {
+        None => ("day_one", if sits.is_empty() { None } else { Some(0) }),
+        Some(f) if content_end > 0 && f >= content_end => ("finished", None),
+        Some(f) => {
+            let idx = sits
+                .iter()
+                .position(|s| {
+                    let gs = global_start(s);
+                    f >= gs && f < gs + s.char_count
+                })
+                .unwrap_or_else(|| sits.len().saturating_sub(1));
+            let returning = last_read_ts
+                .as_deref()
+                .and_then(plan::local_day_of)
+                .map(|d| (plan::app_today() - d).num_days() >= LAPSE_DAYS)
+                .unwrap_or(false);
+            (if returning { "returning" } else { "reading" }, Some(idx))
+        }
     };
 
-    let streak = compute_streak(conn, &book.id)?;
-    let session_minutes = crate::settings::get_reading_rhythm_minutes(conn);
-
-    // Recovery options ONLY when the plan is active and the forecast says a real
-    // rebalance is warranted — never for a plan-ready/just-started book. The
-    // forecast (observed rate vs target) is the single source of "are we slipping",
-    // replacing the old should-have-done linear deficit.
-    let needs_recovery = computed
-        .forecast
-        .as_ref()
-        .is_some_and(|f| matches!(f.state.as_str(), "needs_rebalance" | "plan_unrealistic"));
-    let days_behind = computed.forecast.as_ref().map_or(0, |f| f.days_late).max(0);
-    let recovery = if needs_recovery {
-        let today = plan::app_today();
-        let finish = chrono::NaiveDate::parse_from_str(&plan.target_finish_date, "%Y-%m-%d")
-            .unwrap_or(today);
-        Some(recovery::build_bundle(days_behind.max(1), today, finish))
+    let cur = current_idx.and_then(|i| sits.get(i));
+    let chapter_label = cur
+        .map(|s| s.chapter_label.clone())
+        .unwrap_or_else(|| "Reading".to_string());
+    let phrase = cur.and_then(|s| s.phrase.clone());
+    let estimated_minutes = cur
+        .map(|s| chunker::minutes_for_chars(s.char_count as usize))
+        .unwrap_or(0);
+    let fraction_complete = if content_end > 0 {
+        (furthest.unwrap_or(0) as f64 / content_end as f64).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    // Finished-state forward pull: name the last thing read.
+    let next_label = if state == "finished" {
+        sits.last().map(|s| s.chapter_label.clone())
     } else {
         None
     };
 
-    // Build the "Last time" memory before `book` is moved into the card.
-    let memory = today_memory(conn, &book.id)?;
+    // The section to open for "Continue reading" and where to resume within it.
+    let section = cur.and_then(|s| sections.iter().find(|sec| sec.id == s.start_section_id).cloned());
+    let resume_global = match state {
+        "day_one" => cur.map(global_start),
+        _ => last_read_global.or(furthest),
+    };
+    let resume_locator = resume_global.map(|g| g.to_string());
 
-    // "Before you read" teaser — the book's own first (or resume-adjacent)
-    // sentences plus a hand-written reading prompt. Sourced from the same local
-    // section text the reader path loads; never AI, never network. None when the
-    // section text can't be read (the front-end shows a calm fallback then).
+    let memory = today_memory(conn, &book.id)?;
     let teaser = build_teaser(&book.id, section.as_ref(), resume_locator.as_deref());
 
     Ok(Some(TodayCard {
         book,
         plan,
+        state: state.to_string(),
+        chapter_label,
+        phrase,
+        estimated_minutes,
+        fraction_complete,
+        next_label,
         section,
-        section_completed,
-        estimated_minutes: est_minutes,
-        session_minutes,
-        monthly_pct: computed.monthly_pct,
-        pace: computed.pace,
-        day_index: computed.day_index,
-        total_days: computed.total_days,
-        streak,
-        recovery,
         resume_locator,
-        resume_percent,
-        plan_status: computed.plan_status.clone(),
-        forecast: computed.forecast.clone(),
+        resume_percent: None,
         memory,
         teaser,
     }))
@@ -295,39 +268,27 @@ pub(crate) fn today_card(conn: &Connection) -> Result<Option<TodayCard>, AppErro
 /// is the recognizable marker the frontend branches on — and nothing here
 /// touches the pace clock, forecast, or recovery machinery.
 fn plan_less_card(conn: &Connection, book: Book) -> Result<TodayCard, AppError> {
-    let streak = compute_streak(conn, &book.id)?;
-    let session_minutes = crate::settings::get_reading_rhythm_minutes(conn);
     let memory = today_memory(conn, &book.id)?;
-    let today = plan::app_today().to_string();
     let placeholder = ReadingPlan {
         id: String::new(),
         book_id: book.id.clone(),
-        start_date: today.clone(),
-        target_finish_date: today,
-        daily_target_units: None,
-        days_per_week: 0,
-        catchup_mode: "gentle".to_string(),
+        start_date: plan::app_today().to_string(),
         status: "no_plan".to_string(),
         activated_at: None,
-        original_finish_date: None,
+        sitting_length_minutes: None,
     };
     Ok(TodayCard {
         book,
         plan: placeholder,
-        section: None,
-        section_completed: false,
+        state: "no_plan".to_string(),
+        chapter_label: "Reading".to_string(),
+        phrase: None,
         estimated_minutes: 0,
-        session_minutes,
-        monthly_pct: 0,
-        pace: PaceState::NotStarted,
-        day_index: 0,
-        total_days: 0,
-        streak,
-        recovery: None,
+        fraction_complete: 0.0,
+        next_label: None,
+        section: None,
         resume_locator: None,
         resume_percent: None,
-        plan_status: "no_plan".to_string(),
-        forecast: None,
         memory,
         teaser: None,
     })
@@ -710,50 +671,6 @@ fn today_memory(
     })
 }
 
-fn compute_streak(conn: &Connection, book_id: &str) -> rusqlite::Result<models::StreakSummary> {
-    // Streak days are the reader's *local* calendar days (CORE-1014): both the
-    // 7-day window boundary AND each session's day bucket. `started_at` stays a
-    // UTC timestamp in the DB, and SQL's DATE() of it is the UTC day — a 9pm-ET
-    // session would land on "tomorrow", and an evening + next-morning pair
-    // would collapse into one day — so each stamp converts through
-    // `plan::local_day_of` and the window math runs in Rust on explicit dates.
-    let mut stmt = conn.prepare(
-        "SELECT started_at, COALESCE(minutes, 0) FROM reading_sessions WHERE book_id = ?1",
-    )?;
-    let mut sessions: Vec<(chrono::NaiveDate, i64)> = Vec::new();
-    let mut rows = stmt.query(params![book_id])?;
-    while let Some(row) = rows.next()? {
-        let started: String = row.get(0)?;
-        if let Some(day) = plan::local_day_of(&started) {
-            sessions.push((day, row.get(1)?));
-        }
-    }
-    Ok(summarize_streak(&sessions, plan::app_today()))
-}
-
-/// Pure 7-day-window aggregation over already-localized `(day, minutes)`
-/// pairs: distinct days read and total minutes from `today - 6` onward. Split
-/// from `compute_streak` so the bucketing logic is tested with explicit dates
-/// (the repo's no-wall-clock test discipline).
-fn summarize_streak(
-    sessions: &[(chrono::NaiveDate, i64)],
-    today: chrono::NaiveDate,
-) -> models::StreakSummary {
-    let week_start = today - chrono::Duration::days(6);
-    let mut days = std::collections::BTreeSet::new();
-    let mut minutes = 0i64;
-    for (day, mins) in sessions {
-        if *day >= week_start {
-            days.insert(*day);
-            minutes += *mins;
-        }
-    }
-    models::StreakSummary {
-        days_read_last_7: days.len() as i64,
-        minutes_last_7: minutes,
-    }
-}
-
 #[tauri::command]
 pub fn cmd_read_section_text(
     book_id: String,
@@ -1125,49 +1042,6 @@ pub fn cmd_set_active_book(book_id: String, state: State<DbState>) -> Result<(),
 mod tests {
     use super::*;
 
-    fn d(y: i32, m: u32, day: u32) -> chrono::NaiveDate {
-        chrono::NaiveDate::from_ymd_opt(y, m, day).unwrap()
-    }
-
-    /// CORE-1014: an evening session and the next morning's session are TWO
-    /// distinct reading days (UTC bucketing collapsed them whenever the
-    /// evening stamp crossed the UTC midnight), and two sittings on the same
-    /// local day stay ONE day. Explicit injected dates — no wall clock.
-    #[test]
-    fn streak_counts_distinct_local_days() {
-        let today = d(2026, 6, 10);
-        let sessions = vec![
-            (d(2026, 6, 9), 30),  // last night
-            (d(2026, 6, 10), 20), // this morning
-            (d(2026, 6, 10), 10), // second sitting today — same day
-        ];
-        let s = summarize_streak(&sessions, today);
-        assert_eq!(s.days_read_last_7, 2, "evening + morning are two days");
-        assert_eq!(s.minutes_last_7, 60);
-    }
-
-    /// The window is the last 7 local days inclusive: `today - 6` is in,
-    /// `today - 7` is out (its minutes don't count either).
-    #[test]
-    fn streak_window_is_seven_local_days_inclusive() {
-        let today = d(2026, 6, 10);
-        let sessions = vec![
-            (d(2026, 6, 4), 15), // exactly today - 6 → inside
-            (d(2026, 6, 3), 45), // today - 7 → outside
-        ];
-        let s = summarize_streak(&sessions, today);
-        assert_eq!(s.days_read_last_7, 1);
-        assert_eq!(s.minutes_last_7, 15);
-    }
-
-    /// No sessions → a calm zero, not an error.
-    #[test]
-    fn streak_is_zero_with_no_sessions() {
-        let s = summarize_streak(&[], d(2026, 6, 10));
-        assert_eq!(s.days_read_last_7, 0);
-        assert_eq!(s.minutes_last_7, 0);
-    }
-
     /// CORE-1004: a book whose last plan was "let go" (soft-deleted) must still
     /// reach Today. `cmd_today` returning None for an existing book strands the
     /// reader on the first-run welcome card with no book switcher and no Notes
@@ -1182,8 +1056,8 @@ mod tests {
             "INSERT INTO books (id,title,author,source_type,source_path,source_sha256,created_at,last_opened_at)
                VALUES ('b1','Confessions','Augustine','txt','/p','h','2026-01-01','2026-06-01T00:00:00Z');
              -- The only plan was let go (soft-deleted): invisible to fetch_plan_for_book.
-             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle,deleted_at)
-               VALUES ('p_gone','b1','2026-01-01','2026-02-01','active','active',datetime('now'));",
+             INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle,deleted_at)
+               VALUES ('p_gone','b1','2026-01-01','active','active',datetime('now'));",
         )
         .unwrap();
 
@@ -1191,18 +1065,9 @@ mod tests {
             .expect("compose")
             .expect("a plan-less book must still produce a Today card");
         assert_eq!(card.book.id, "b1");
-        assert_eq!(
-            card.plan_status, "no_plan",
-            "the card must be recognizably plan-less"
-        );
+        assert_eq!(card.state, "no_plan", "the card must be recognizably plan-less");
         assert!(card.section.is_none(), "no section without a plan");
-        assert!(
-            matches!(card.pace, crate::models::PaceState::NotStarted),
-            "pace clock off without a plan, got {:?}",
-            card.pace
-        );
-        assert!(card.forecast.is_none());
-        assert!(card.recovery.is_none());
+        assert_eq!(card.fraction_complete, 0.0);
     }
 
     /// The book switcher's contract: activating a book makes it the active book

@@ -1,9 +1,8 @@
 //! Session and section-progress commands. `cmd_start_session`/`cmd_end_session`
 //! bracket a reading sitting; `cmd_save_section_progress` records mid-session
-//! position; `cmd_restart_current_section` clears progress for a section.
-//! `cmd_extend_finish_date` lives here too — it adjusts plan dates which are
-//! plan-domain, but it's also the recovery action a user takes after a session
-//! ends behind pace, so logically it belongs with the reading-progress flow.
+//! position; `cmd_restart_current_section` clears progress for a section. Reading
+//! progress also advances the position-based `reading_position` (furthest + last
+//! read), which is what Today's "what's next" derives from.
 
 use chrono::Utc;
 use rusqlite::{params, Connection};
@@ -14,7 +13,7 @@ use crate::commands::db_helpers::*;
 use crate::db::DbState;
 use crate::error::AppError;
 use crate::models::{Book, ReadingSession};
-use crate::{export, log, recovery};
+use crate::{export, log, sittings};
 
 #[tauri::command]
 pub fn cmd_save_section_progress(
@@ -35,42 +34,13 @@ pub fn cmd_save_section_progress(
            updated_at = excluded.updated_at",
         params![book_id, section_id, locator, percent, now],
     )?;
+    // Advance the durable, position-based progress (furthest is MAX-clamped,
+    // last_read is exact). `locator` is a global body offset.
+    if let Ok(global) = locator.trim().parse::<i64>() {
+        let sections = list_sections(&conn, &book_id)?;
+        let _ = sittings::record_progress(&conn, &book_id, &sections, global, &now);
+    }
     Ok(())
-}
-
-#[tauri::command]
-pub fn cmd_extend_finish_date(
-    book_id: String,
-    add_days: i64,
-    state: State<DbState>,
-) -> Result<recovery::RecomputedPlan, AppError> {
-    let conn = state.0.lock()?;
-    let plan = fetch_plan_for_book(&conn, &book_id)?
-        .ok_or_else(|| AppError::not_found("plan", Some(book_id.clone())))?;
-    let sections = list_sections(&conn, &book_id)?;
-    let completed = list_completed_section_ids(&conn, &book_id)?;
-    let today = crate::plan::app_today();
-    let recomputed = recovery::extend_finish_date(
-        &plan,
-        sections.len() as i64,
-        completed.len() as i64,
-        today,
-        add_days,
-    )?;
-    conn.execute(
-        "UPDATE reading_plans
-           SET target_finish_date = ?1, daily_target_units = ?2,
-               status = 'rebalanced',
-               original_finish_date = COALESCE(original_finish_date, ?3)
-         WHERE id = ?4",
-        params![
-            recomputed.new_target_finish_date,
-            recomputed.new_daily_target_units,
-            plan.target_finish_date,
-            plan.id
-        ],
-    )?;
-    Ok(recomputed)
 }
 
 #[tauri::command]
@@ -167,6 +137,19 @@ pub fn cmd_end_session(
         }
     }
 
+    // Advance the durable, position-based progress to where the session ended, so
+    // tomorrow's Today resumes at the next sitting. `end_locator` is a global offset.
+    if let Some(global) = end_locator.as_deref().and_then(|l| l.trim().parse::<i64>().ok()) {
+        if let Ok(book_id) = conn.query_row(
+            "SELECT book_id FROM reading_sessions WHERE id = ?1",
+            params![session_id],
+            |r| r.get::<_, String>(0),
+        ) {
+            let sections = list_sections(&conn, &book_id)?;
+            let _ = sittings::record_progress(&conn, &book_id, &sections, global, &now);
+        }
+    }
+
     let mut stmt = conn.prepare(
         "SELECT id, book_id, started_at, ended_at, start_locator, end_locator, minutes, completed_assignment, subjective_difficulty
          FROM reading_sessions WHERE id = ?1",
@@ -242,12 +225,12 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO books (id,title,author,source_type,source_path,source_sha256,created_at,last_opened_at)
                VALUES ('b1','T',NULL,'txt','/x','sha','2026-01-01',NULL);
-             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle)
-               VALUES ('p_live','b1','2026-01-01','2026-02-01','active','active');
-             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle)
-               VALUES ('p_old','b1','2026-01-01','2026-02-01','active','archived');
-             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle,deleted_at)
-               VALUES ('p_gone','b1','2026-01-01','2026-02-01','active','active',datetime('now'));
+             INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle)
+               VALUES ('p_live','b1','2026-01-01','active','active');
+             INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle)
+               VALUES ('p_old','b1','2026-01-01','active','archived');
+             INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle,deleted_at)
+               VALUES ('p_gone','b1','2026-01-01','active','active',datetime('now'));
              INSERT INTO book_sections (id,book_id,label,sort_order,assignable)
                VALUES ('s1','b1','S1',0,1);
              INSERT INTO section_progress (book_id,section_id,completed_at,last_locator)

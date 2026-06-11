@@ -46,7 +46,6 @@ pub mod migrations;
 pub mod models;
 pub mod paths;
 pub mod plan;
-pub mod recovery;
 pub mod settings;
 pub mod sittings;
 
@@ -267,7 +266,6 @@ pub fn run() {
             commands::sessions::cmd_start_session,
             commands::sessions::cmd_end_session,
             commands::sessions::cmd_save_section_progress,
-            commands::sessions::cmd_extend_finish_date,
             commands::sessions::cmd_restart_current_section,
             // ── notes ──
             commands::notes::cmd_save_note,
@@ -332,7 +330,6 @@ mod tests {
     use rusqlite::params;
 
     use crate::import::{estimate_minutes_for_chars, sectionize};
-    use crate::plan::assigned_section_index;
     use crate::{ai_client, db, export, paths};
 
     #[test]
@@ -363,13 +360,6 @@ mod tests {
     #[test]
     fn test_estimate_minutes() {
         assert!(estimate_minutes_for_chars(10_000) >= 1);
-    }
-
-    #[test]
-    fn test_assigned_section_index() {
-        assert_eq!(assigned_section_index(30, 30, 1), Some(0));
-        assert_eq!(assigned_section_index(30, 30, 30), Some(29));
-        assert_eq!(assigned_section_index(0, 30, 1), None);
     }
 
     #[test]

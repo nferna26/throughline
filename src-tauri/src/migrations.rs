@@ -438,6 +438,34 @@ fn v010_sitting_engine(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "reading_plans", "sitting_length_minutes", "INTEGER")?;
 
     seed_reading_position(conn)?;
+
+    // Drop the dead pacing columns now that no code reads them. The seed above
+    // already moved progress to reading_position; pre-launch, nothing else depends
+    // on these. Dropped (not stranded) so a future change can't accidentally rewire
+    // a fixed end date or daily target back into the silent, position-based model.
+    for col in [
+        "target_finish_date",
+        "daily_target_units",
+        "days_per_week",
+        "catchup_mode",
+        "original_finish_date",
+    ] {
+        drop_column_if_exists(conn, "reading_plans", col)?;
+    }
+    Ok(())
+}
+
+/// Idempotent ALTER DROP COLUMN: only drops when the column is present, so the
+/// migration is safe on a DB that never had it.
+fn drop_column_if_exists(conn: &Connection, table: &str, column: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|c| c.ok())
+        .collect();
+    if cols.iter().any(|c| c == column) {
+        conn.execute(&format!("ALTER TABLE {table} DROP COLUMN {column}"), [])?;
+    }
     Ok(())
 }
 
@@ -610,10 +638,10 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO books (id,title,source_type,source_path,source_sha256,created_at)
                VALUES ('b1','T','txt','/p','h','2026-01-01');
-             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date)
-               VALUES ('p_old','b1','2026-01-01','2026-02-01');
-             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date)
-               VALUES ('p_new','b1','2026-03-01','2026-04-01');
+             INSERT INTO reading_plans (id,book_id,start_date)
+               VALUES ('p_old','b1','2026-01-01');
+             INSERT INTO reading_plans (id,book_id,start_date)
+               VALUES ('p_new','b1','2026-03-01');
              INSERT INTO reading_sessions (id,book_id,started_at) VALUES ('s1','b1','2026-03-02');",
         )
         .unwrap();

@@ -248,6 +248,129 @@ pub fn rebuild_if_stale(
     Ok(true)
 }
 
+/// A persisted sitting joined to its phrase (if one is cached).
+#[derive(Clone, Debug)]
+pub struct SittingRow {
+    pub sort_order: i64,
+    pub start_section_id: String,
+    pub start_offset: i64,
+    pub char_count: i64,
+    pub chapter_label: String,
+    pub phrase: Option<String>,
+}
+
+/// All sittings for a book, in reading order, each LEFT-JOINed to its phrase.
+pub fn load_sittings(conn: &Connection, book_id: &str) -> rusqlite::Result<Vec<SittingRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.sort_order, s.start_section_id, s.start_offset, s.char_count, s.chapter_label, p.phrase
+         FROM sittings s LEFT JOIN phrases p ON p.opening_hash = s.opening_hash
+         WHERE s.book_id = ?1 ORDER BY s.sort_order ASC",
+    )?;
+    let rows = stmt.query_map(params![book_id], |r| {
+        Ok(SittingRow {
+            sort_order: r.get(0)?,
+            start_section_id: r.get(1)?,
+            start_offset: r.get(2)?,
+            char_count: r.get(3)?,
+            chapter_label: r.get(4)?,
+            phrase: r.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Resolve a (section_id, offset) anchor to a global body offset via the section
+/// backbone. Unknown section → offset alone (best effort).
+pub fn to_global(sections: &[BookSection], section_id: &str, offset: i64) -> i64 {
+    sections
+        .iter()
+        .find(|s| s.id == section_id)
+        .and_then(|s| parse_loc(s.start_locator.as_deref()))
+        .map(|g| g as i64)
+        .unwrap_or(0)
+        + offset
+}
+
+/// The reader's furthest global position (None = never read = day one).
+pub fn furthest_global(
+    conn: &Connection,
+    book_id: &str,
+    sections: &[BookSection],
+) -> rusqlite::Result<Option<i64>> {
+    let row: Option<(Option<String>, Option<i64>)> = conn
+        .query_row(
+            "SELECT furthest_section_id, furthest_offset FROM reading_position WHERE book_id = ?1",
+            params![book_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(row.and_then(|(sid, off)| match (sid, off) {
+        (Some(s), Some(o)) => Some(to_global(sections, &s, o)),
+        _ => None,
+    }))
+}
+
+/// The reader's exact last-read global position + when it was recorded (for the
+/// returning-after-a-lapse signal and scroll resume).
+pub fn last_read(
+    conn: &Connection,
+    book_id: &str,
+    sections: &[BookSection],
+) -> rusqlite::Result<(Option<i64>, Option<String>)> {
+    let row: Option<(Option<String>, Option<i64>, String)> = conn
+        .query_row(
+            "SELECT last_read_section_id, last_read_offset, updated_at FROM reading_position WHERE book_id = ?1",
+            params![book_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    Ok(match row {
+        Some((Some(s), Some(o), ts)) => (Some(to_global(sections, &s, o)), Some(ts)),
+        Some((_, _, ts)) => (None, Some(ts)),
+        None => (None, None),
+    })
+}
+
+/// Record reading progress: advance `furthest` monotonically (MAX-clamped in
+/// reading order) and set the exact `last_read` resume point. `global` is a body
+/// offset; it is stored section-relative against `sections`.
+pub fn record_progress(
+    conn: &Connection,
+    book_id: &str,
+    sections: &[BookSection],
+    global: i64,
+    now: &str,
+) -> rusqlite::Result<()> {
+    // Map the global offset to (section_id, offset): the latest section starting
+    // at or before it.
+    let mut sec_id = sections.first().map(|s| s.id.clone()).unwrap_or_default();
+    let mut sec_start = 0i64;
+    for s in sections {
+        if let Some(g) = parse_loc(s.start_locator.as_deref()) {
+            if (g as i64) <= global {
+                sec_id = s.id.clone();
+                sec_start = g as i64;
+            }
+        }
+    }
+    let offset = (global - sec_start).max(0);
+    let existing = furthest_global(conn, book_id, sections)?.unwrap_or(i64::MIN);
+    let advance = global > existing;
+    conn.execute(
+        "INSERT INTO reading_position
+           (book_id, furthest_section_id, furthest_offset, last_read_section_id, last_read_offset, updated_at)
+         VALUES (?1, ?2, ?3, ?2, ?3, ?4)
+         ON CONFLICT(book_id) DO UPDATE SET
+           last_read_section_id = ?2,
+           last_read_offset     = ?3,
+           furthest_section_id  = CASE WHEN ?5 THEN ?2 ELSE furthest_section_id END,
+           furthest_offset      = CASE WHEN ?5 THEN ?3 ELSE furthest_offset END,
+           updated_at           = ?4",
+        params![book_id, sec_id, offset, now, advance],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
