@@ -1,278 +1,182 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import TLIcon from "../components/TLIcon";
 import type { Book, BookSection } from "../types";
+import { errorMessage } from "../types";
 
 interface Props {
   book: Book;
-  /** Proceed to Today — called after the plan is configured OR deferred. */
-  onDone: () => void;
+  /** Proceed once the plan is configured. `begin` = go straight into the first
+   *  sitting ("Begin reading"); false = land on Today ("I'll decide as I go"). */
+  onDone: (begin: boolean) => void;
 }
 
-type FinishMode = "week" | "month" | "date";
-
-// Words-per-minute band the spec calls for. We decide feasibility on the
-// midpoint and show the range as an honest "about X–Y" estimate.
-const WPM_SLOW = 180;
-const WPM_FAST = 220;
+// Reading-speed midpoint for the length line and the horizon sentence. The
+// numbers stay backstage: everything the reader sees is plain words.
 const WPM_MID = 200;
 const CHARS_PER_WORD = 5;
 
-const MINUTE_PRESETS = [15, 25, 45, 60];
-const DAY_PRESETS = [3, 4, 5, 6, 7];
+// The one question's three answers. Names are reused VERBATIM in the horizon
+// sentence, so they must read naturally after "At …".
+const SITTINGS = [
+  { minutes: 10, name: "A few pages", sub: "about ten minutes" },
+  { minutes: 25, name: "A steady sitting", sub: "about twenty-five" },
+  { minutes: 60, name: "A long read", sub: "about an hour" },
+] as const;
+const DEFAULT_SITTING = 25;
 
-function isoDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-function addDays(n: number): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + n);
-  return d;
-}
-function humanHours(minutes: number): string {
-  if (minutes < 60) return `${Math.max(1, Math.round(minutes))} min`;
-  const h = minutes / 60;
-  if (h < 10) return `${h.toFixed(1).replace(/\.0$/, "")} hours`;
-  return `${Math.round(h)} hours`;
-}
+const SMALL = [
+  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+  "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+  "nineteen", "twenty",
+];
+const TENS = ["", "ten", "twenty", "thirty", "forty", "fifty"];
 
-/** One unified segmented-pill control for every choice group (the design
- *  handoff's .tl-choice). Single-select, so it keeps radio semantics
- *  (role=radiogroup / aria-checked) for WCAG-AA, not the handoff's aria-pressed.
- *  Module-level so its identity is stable across renders (a nested definition
- *  would remount the subtree and strand element refs). */
-function Choice<T extends string | number>(props: {
-  label: string;
-  value: T;
-  set: (v: T) => void;
-  options: Array<{ v: T; l: string }>;
-  compact?: boolean;
-}) {
-  return (
-    <div className={"tl-choice" + (props.compact ? " compact" : "")} role="radiogroup" aria-label={props.label}>
-      {props.options.map((o) => (
-        <button
-          type="button"
-          key={String(o.v)}
-          role="radio"
-          aria-checked={props.value === o.v}
-          onClick={() => props.set(o.v)}
-        >
-          {o.l}
-        </button>
-      ))}
-    </div>
-  );
+/** Whole-book length in plain words ("about two hours of reading") — never
+ *  decimals, never numerals-as-data. Exported for tests. */
+export function lengthPhrase(totalMinutes: number): string {
+  if (totalMinutes < 8) return "a few minutes of reading";
+  if (totalMinutes < 55) {
+    const tens = Math.min(5, Math.max(1, Math.round(totalMinutes / 10)));
+    return `about ${TENS[tens]} minutes of reading`;
+  }
+  if (totalMinutes < 90) return "about an hour of reading";
+  const h = Math.round(totalMinutes / 60);
+  const word = h <= 20 ? SMALL[h] : String(h);
+  return `about ${word} hours of reading`;
 }
 
+/** The horizon sentence: the chosen card's name verbatim, qualitative cadence,
+ *  always "around early/mid/late {month}", conditional mood. Null when the
+ *  book's length is unknown — better silent than invented. Exported for tests. */
+export function horizonSentence(name: string, totalMinutes: number | null, sittingMinutes: number): string | null {
+  if (!totalMinutes || totalMinutes <= 0 || sittingMinutes <= 0) return null;
+  const days = Math.max(1, Math.ceil(totalMinutes / sittingMinutes));
+  const finish = new Date();
+  finish.setHours(0, 0, 0, 0);
+  finish.setDate(finish.getDate() + days);
+  const d = finish.getDate();
+  const bucket = d <= 10 ? "early" : d <= 20 ? "mid" : "late";
+  const month = finish.toLocaleString("en-US", { month: "long" });
+  const nextYear = finish.getFullYear() > new Date().getFullYear();
+  const when = nextYear ? `${bucket} ${month} next year` : `${bucket} ${month}`;
+  const cardName = name.charAt(0).toLowerCase() + name.slice(1);
+  return `At ${cardName} most evenings, you'd finish around ${when}.`;
+}
+
+/**
+ * The plan screen, shown once right after a book arrives: one question (how
+ * much feels right at a sitting?), three quiet cards, one primary action.
+ * No finish date, no days-a-week, no margin help (that lives in Settings),
+ * no plan name — the plan paces and silently re-paces itself forever after.
+ */
 export default function BookSetupSheet({ book, onDone }: Props) {
   const [sections, setSections] = useState<BookSection[]>([]);
-  const [finishMode, setFinishMode] = useState<FinishMode>("month");
-  const [customDate, setCustomDate] = useState<string>(isoDate(addDays(30)));
-  const [sessionMinutes, setSessionMinutes] = useState<number>(25);
-  const [daysPerWeek, setDaysPerWeek] = useState<number>(5);
-  const [marginHelp, setMarginHelp] = useState<"guided" | "quiet" | "deep_study">("guided");
+  const [sitting, setSitting] = useState<number>(DEFAULT_SITTING);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Optional reader-given plan name (blank → the backend's friendly default).
-  const [planName, setPlanName] = useState("");
+  const cardRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
     let cancelled = false;
     invoke<BookSection[]>("cmd_assignable_sections", { bookId: book.id })
-      .then((list) => { if (!cancelled) setSections(list); })
+      .then((list) => { if (!cancelled) setSections(Array.isArray(list) ? list : []); })
       .catch(() => { if (!cancelled) setSections([]); });
     return () => { cancelled = true; };
   }, [book.id]);
 
-  const targetDate = useMemo(() => {
-    if (finishMode === "week") return isoDate(addDays(7));
-    if (finishMode === "month") return isoDate(addDays(30));
-    return customDate;
-  }, [finishMode, customDate]);
+  // Whole-book minutes from captured per-section lengths (estimated_units is
+  // the same char unit for txt and epub). Unknown → the length line and the
+  // horizon simply stay silent.
+  const totalMinutes = useMemo(() => {
+    const chars = sections.reduce((sum, s) => sum + (s.estimated_units ?? 0), 0);
+    if (chars <= 0) return null;
+    return chars / CHARS_PER_WORD / WPM_MID;
+  }, [sections]);
 
-  // Length estimate from captured per-section lengths (estimated_units is the
-  // same char unit for txt and epub). If we have no lengths, hide the estimate
-  // rather than guess.
-  const est = useMemo(() => {
-    const totalChars = sections.reduce((sum, s) => sum + (s.estimated_units ?? 0), 0);
-    if (totalChars <= 0) return null;
-    const words = totalChars / CHARS_PER_WORD;
-    const minsSlow = words / WPM_SLOW;
-    const minsFast = words / WPM_FAST;
-    const minsMid = words / WPM_MID;
+  const selected = SITTINGS.find((s) => s.minutes === sitting) ?? SITTINGS[1];
+  const horizon = horizonSentence(selected.name, totalMinutes, sitting);
+  const metaParts = [
+    book.author,
+    totalMinutes != null ? lengthPhrase(totalMinutes) : null,
+  ].filter(Boolean);
 
-    const today = addDays(0).getTime();
-    const finish = new Date(targetDate + "T00:00:00").getTime();
-    const daysUntil = Math.max(1, Math.round((finish - today) / 86_400_000) + 1);
-    const sessionsAvail = Math.max(0, Math.floor((daysUntil * daysPerWeek) / 7));
-    const capacityMin = sessionsAvail * sessionMinutes;
-    const feasible = sessionsAvail > 0 && capacityMin >= minsMid;
-    const neededPerSession = sessionsAvail > 0 ? Math.ceil(minsMid / sessionsAvail) : Math.ceil(minsMid);
-    // Weeks to finish at the chosen rhythm: total minutes / weekly minutes.
-    const weeklyMin = daysPerWeek * sessionMinutes;
-    const weeks = Math.max(1, Math.ceil(minsMid / Math.max(1, weeklyMin)));
-
-    return { minsSlow, minsFast, feasible, neededPerSession, weeks };
-  }, [sections, targetDate, daysPerWeek, sessionMinutes]);
-
-  // Configure the book's current plan (a fresh import's, or the new one created by
-  // the "start a new plan" flow). The "you already have a plan" decision moment is
-  // handled before we get here (Today → RePlanDialog), so this just sets the pace.
-  async function startPlan() {
+  // Configure the book's current plan and proceed. The question never blocks:
+  // the quiet link confirms with the default sitting and moves on.
+  async function confirm(begin: boolean, minutes: number) {
     setSubmitting(true);
     setError(null);
     try {
       await invoke("cmd_configure_plan", {
         bookId: book.id,
-        targetFinishDate: targetDate,
-        daysPerWeek,
-        sessionMinutes,
-        marginHelp,
-        name: planName.trim() || null,
+        sittingLengthMinutes: minutes,
+        name: null,
       });
-      onDone();
-    } catch (e: any) {
-      setError(e?.message ?? String(e));
+      onDone(begin);
+    } catch (e) {
+      setError(errorMessage(e));
       setSubmitting(false);
     }
+  }
+
+  // Roving radio focus: arrows move the selection (WAI-ARIA radio pattern).
+  function onCardKey(e: React.KeyboardEvent, idx: number) {
+    let next: number | null = null;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (idx + 1) % SITTINGS.length;
+    if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (idx + SITTINGS.length - 1) % SITTINGS.length;
+    if (next == null) return;
+    e.preventDefault();
+    setSitting(SITTINGS[next].minutes);
+    cardRefs.current[next]?.focus();
   }
 
   return (
     <div className="tl-plan-screen">
       <div className="tl-plan-scroll">
-        <div className="tl-col tl-plan">
-          <div className="tl-kicker"><span className="dot" />New book</div>
+        <div className="tl-plan-col">
+          <div className="tl-kicker"><span className="dot" />New on your desk</div>
           <h1 className="tl-plan-title">{book.title}</h1>
-          {book.author && <div className="tl-plan-author">{book.author}</div>}
-          <p className="tl-plan-lead">
-            Your plan is ready — you are not behind. Set a rhythm, or decide later. The pace clock
-            only starts when you begin reading.
-          </p>
+          {metaParts.length > 0 && <p className="tl-plan-meta">{metaParts.join(" · ")}</p>}
 
-          <div className="tl-plan-card">
-            <div className="tl-plan-row">
-              <span className="tl-plan-rowlabel">Finish by</span>
-              <Choice<FinishMode>
-                label="Finish by"
-                value={finishMode}
-                set={setFinishMode}
-                options={[
-                  { v: "week", l: "This week" },
-                  { v: "month", l: "This month" },
-                  { v: "date", l: "Pick a date" },
-                ]}
-              />
-            </div>
-            {finishMode === "date" && (
-              <div className="tl-plan-row">
-                <span className="tl-plan-rowlabel" />
-                <input
-                  type="date"
-                  className="tl-input"
-                  style={{ maxWidth: 200 }}
-                  value={customDate}
-                  min={isoDate(addDays(1))}
-                  onChange={(e) => setCustomDate(e.target.value)}
-                  aria-label="Target finish date"
-                />
-              </div>
-            )}
-            <div className="tl-plan-row">
-              <span className="tl-plan-rowlabel">Session</span>
-              <Choice<number>
-                label="Session length in minutes"
-                value={sessionMinutes}
-                set={setSessionMinutes}
-                options={MINUTE_PRESETS.map((m) => ({ v: m, l: `${m} min` }))}
-              />
-            </div>
-            <div className="tl-plan-row">
-              <span className="tl-plan-rowlabel">Days a week</span>
-              <Choice<number>
-                label="Reading days per week"
-                value={daysPerWeek}
-                set={setDaysPerWeek}
-                compact
-                options={DAY_PRESETS.map((d) => ({ v: d, l: String(d) }))}
-              />
-            </div>
-            <div className="tl-plan-row">
-              <span className="tl-plan-rowlabel">Margin help</span>
-              <Choice<"guided" | "quiet" | "deep_study">
-                label="Margin help"
-                value={marginHelp}
-                set={setMarginHelp}
-                options={[
-                  { v: "guided", l: "Guided" },
-                  { v: "quiet", l: "Quiet" },
-                  { v: "deep_study", l: "Deep study" },
-                ]}
-              />
-            </div>
+          <p className="tl-q-prompt">How much feels right at a sitting?</p>
+
+          <div className="tl-q-cards" role="radiogroup" aria-label="How much feels right at a sitting?">
+            {SITTINGS.map((s, i) => {
+              const on = s.minutes === sitting;
+              return (
+                <button
+                  type="button"
+                  key={s.minutes}
+                  ref={(el) => { cardRefs.current[i] = el; }}
+                  className={on ? "tl-q-card on" : "tl-q-card"}
+                  role="radio"
+                  aria-checked={on}
+                  tabIndex={on ? 0 : -1}
+                  onClick={() => setSitting(s.minutes)}
+                  onKeyDown={(e) => onCardKey(e, i)}
+                >
+                  <span className="tl-qc-name">{s.name}</span>
+                  <span className="tl-qc-sub">{s.sub}</span>
+                  <span className="tl-qc-dot" aria-hidden="true" />
+                </button>
+              );
+            })}
           </div>
 
-          {est && (
-            <div className={"tl-estimate" + (est.feasible ? "" : " tight")} role="note">
-              <TLIcon name={est.feasible ? "clock" : "behind"} size={16} />
-              <div className="tl-estimate-body">
-                <span>
-                  About <span className="num">{humanHours(est.minsFast)}–{humanHours(est.minsSlow)}</span> of reading.{" "}
-                  {est.feasible
-                    ? <>At {sessionMinutes} min × {daysPerWeek} days, that is roughly <span className="num">{est.weeks} week{est.weeks === 1 ? "" : "s"}</span> — comfortably before {targetDate}.</>
-                    : null}
-                </span>
-                {!est.feasible && (
-                  <div className="soft-note">
-                    <TLIcon name="behind" size={13} />
-                    <span>
-                      Finishing by {targetDate} would mean about {est.neededPerSession} min per session. At this
-                      rhythm it is closer to {est.weeks} week{est.weeks === 1 ? "" : "s"} — give it more time, longer
-                      sittings, or more days. Or leave it; nothing is lost.
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+          {/* Updates with the selection; describes, never commits. */}
+          <p className="tl-plan-horizon" aria-live="polite">{horizon}</p>
 
-          <label className="tl-plan-name" style={{ display: "block", marginTop: "var(--tl-5)" }}>
-            <span style={{ display: "block", fontSize: 13, color: "var(--tl-muted)", marginBottom: 4 }}>
-              Name this plan <span style={{ opacity: 0.7 }}>(optional)</span>
-            </span>
-            <input
-              className="tl-input"
-              type="text"
-              value={planName}
-              onChange={(e) => setPlanName(e.target.value)}
-              placeholder="e.g. Slow mornings"
-              maxLength={60}
-              spellCheck={false}
-              aria-label="Plan name"
-              style={{ maxWidth: 320 }}
-            />
-          </label>
+          {error && <p className="tl-warn-text" role="alert">Couldn't save the plan: {error}</p>}
 
-          {error && <p className="tl-warn-text" role="alert" style={{ marginTop: "var(--tl-4)" }}>Couldn't save the plan: {error}</p>}
-        </div>
-      </div>
-
-      <div className="tl-actionbar">
-        <div className="tl-actionbar-inner">
-          <span className="reassure">No streak to break.</span>
-          <span className="right">
-            <button className="tl-btn tl-btn-ghost" disabled={submitting} onClick={onDone}>Decide later</button>
-            <button className="tl-btn tl-btn-primary" disabled={submitting} onClick={startPlan}>
-              {submitting ? "Saving…" : "Start this plan"}
+          <div className="tl-plan-actions">
+            <button className="tl-btn tl-btn-primary" disabled={submitting} onClick={() => confirm(true, sitting)}>
+              Begin reading
             </button>
-          </span>
+            <button className="tl-link-quiet" disabled={submitting} onClick={() => confirm(false, DEFAULT_SITTING)}>
+              I'll decide as I go
+            </button>
+          </div>
         </div>
       </div>
-
     </div>
   );
 }

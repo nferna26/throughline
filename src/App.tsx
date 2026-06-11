@@ -230,9 +230,23 @@ export default function App() {
     setView(outcome.created ? { kind: "setup", book: outcome.book } : { kind: "today" });
   }
 
-  function finishSetup() {
-    setView({ kind: "today" });
-    refreshToday();
+  // Leaving the setup sheet: "Begin reading" goes straight into the first
+  // sitting (the design's promise — no plan-summary detour); the quiet link
+  // lands on Today. Either way the fresh card is fetched first.
+  async function finishSetup(begin: boolean) {
+    let t: TodayCard | null = null;
+    try {
+      t = (await invoke<TodayCard | null>("cmd_today")) ?? null;
+      setToday(t);
+      setLoadError(null);
+    } catch (e) {
+      setLoadError(errorMessage(e));
+    }
+    if (begin && t && t.section) {
+      setView({ kind: "reader", today: t });
+    } else {
+      setView({ kind: "today" });
+    }
   }
 
   async function switchBook(bookId: string) {
