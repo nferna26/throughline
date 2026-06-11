@@ -15,7 +15,7 @@ function wire(
   opts: { credits?: CompanyCredits | null; requests?: AiRequest[] } = {},
 ) {
   const full: SettingsDto = {
-    export_path: "/Users/x/GBrain/Reading",
+    export_path: "/Users/x/Documents/Reading",
     export_path_is_default: true,
     app_data_path: "/Users/x/Library/Application Support/Throughline",
     ai_posture: "Local-only mode: ON",
@@ -243,7 +243,7 @@ describe("Settings — 4-section redesign", () => {
   // FT-35: the read-only filesystem path is gone; replaced by a calm action /
   // plain line that the library stays on this Mac — without printing the path.
   it("does not print the library filesystem path, and shows the export folder by name", async () => {
-    wire({ ai_provider: "company", export_path: "/Users/x/GBrain/Reading", app_data_path: "/Users/x/Library/Application Support/Throughline" });
+    wire({ ai_provider: "company", export_path: "/Users/x/Documents/Reading", app_data_path: "/Users/x/Library/Application Support/Throughline" });
     const { container } = render(<Settings />);
     await waitFor(() => expect(screen.getByText("Files")).toBeInTheDocument());
     const text = container.textContent ?? "";
@@ -252,7 +252,7 @@ describe("Settings — 4-section redesign", () => {
     expect(text).not.toMatch(/Local storage path/i);
     // The export chip shows the folder's display name, not the full path.
     expect(screen.getByText("Reading")).toBeInTheDocument();
-    expect(text).not.toMatch(/\/Users\/x\/GBrain/);
+    expect(text).not.toMatch(/\/Users\/x\/Documents\/Reading/);
     // The library line stays reassuring without a path.
     expect(
       screen.getByText(/Your books live on this Mac and stay here, backed up automatically/i),
@@ -322,12 +322,12 @@ describe("Settings — 4-section redesign", () => {
   // Export your library: a deliberate reader action that writes one Markdown
   // file per book, then confirms in plain words with the count + folder name.
   it("exports the library and confirms with the book count and folder name", async () => {
-    wire({ ai_provider: "company", export_path: "/Users/x/GBrain/Reading" });
+    wire({ ai_provider: "company", export_path: "/Users/x/Documents/Reading" });
     mockInvoke.mockImplementation((cmd: string) => {
       switch (cmd) {
         case "cmd_get_settings":
           return Promise.resolve({
-            export_path: "/Users/x/GBrain/Reading",
+            export_path: "/Users/x/Documents/Reading",
             export_path_is_default: true,
             app_data_path: "/Users/x/Library/Application Support/Throughline",
             ai_posture: "Local-only mode: ON",
@@ -352,7 +352,7 @@ describe("Settings — 4-section redesign", () => {
         case "cmd_list_ai_requests":
           return Promise.resolve([]);
         case "cmd_export_library":
-          return Promise.resolve({ exported: 3, root: "/Users/x/GBrain/Reading" });
+          return Promise.resolve({ exported: 3, root: "/Users/x/Documents/Reading" });
         default:
           return Promise.resolve(undefined);
       }
@@ -366,16 +366,16 @@ describe("Settings — 4-section redesign", () => {
     // Calm confirmation: the count + the folder name, never a raw path.
     const msg = await screen.findByText(/Exported 3 books to your Reading folder\./i);
     expect(msg).toBeInTheDocument();
-    expect(msg.textContent).not.toMatch(/\/Users\/x\/GBrain/);
+    expect(msg.textContent).not.toMatch(/\/Users\/x\/Documents\/Reading/);
   });
 
   it("singularizes the export confirmation for a single book", async () => {
-    wire({ ai_provider: "company", export_path: "/Users/x/GBrain/Reading" });
+    wire({ ai_provider: "company", export_path: "/Users/x/Documents/Reading" });
     mockInvoke.mockImplementation((cmd: string) => {
       switch (cmd) {
         case "cmd_get_settings":
           return Promise.resolve({
-            export_path: "/Users/x/GBrain/Reading",
+            export_path: "/Users/x/Documents/Reading",
             export_path_is_default: true,
             app_data_path: "/Users/x/Library/Application Support/Throughline",
             ai_posture: "Local-only mode: ON",
@@ -400,7 +400,7 @@ describe("Settings — 4-section redesign", () => {
         case "cmd_list_ai_requests":
           return Promise.resolve([]);
         case "cmd_export_library":
-          return Promise.resolve({ exported: 1, root: "/Users/x/GBrain/Reading" });
+          return Promise.resolve({ exported: 1, root: "/Users/x/Documents/Reading" });
         default:
           return Promise.resolve(undefined);
       }
@@ -411,12 +411,12 @@ describe("Settings — 4-section redesign", () => {
   });
 
   it("shows a calm, blame-free message when the library export fails", async () => {
-    wire({ ai_provider: "company", export_path: "/Users/x/GBrain/Reading" });
+    wire({ ai_provider: "company", export_path: "/Users/x/Documents/Reading" });
     mockInvoke.mockImplementation((cmd: string) => {
       switch (cmd) {
         case "cmd_get_settings":
           return Promise.resolve({
-            export_path: "/Users/x/GBrain/Reading",
+            export_path: "/Users/x/Documents/Reading",
             export_path_is_default: true,
             app_data_path: "/Users/x/Library/Application Support/Throughline",
             ai_posture: "Local-only mode: ON",

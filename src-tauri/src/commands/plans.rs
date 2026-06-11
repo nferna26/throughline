@@ -422,7 +422,7 @@ mod tests {
         // CORE-1033: purged notes take their exported Markdown mirrors with
         // them (same contract as cmd_delete_note — no orphan files once the
         // row is gone). The mirrors live in an isolated export dir so the test
-        // never touches the user's real GBrain; env vars are process-global,
+        // never touches the user's real export folder; env vars are process-global,
         // so serialize against other env-touching tests.
         let _g = crate::paths::lock_env_for_test();
         let export_dir =

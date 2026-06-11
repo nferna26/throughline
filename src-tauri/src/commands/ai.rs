@@ -1528,13 +1528,13 @@ mod tests {
     /// Saving a margin **tutor** preview persists the selection anchors + session,
     /// exports a Markdown mirror, and flips the audit row to `wrote_to_memory = 1`
     /// — the contract the Companion-Margin tutor card relies on. Runs against an
-    /// isolated temp export dir so it never touches the user's real GBrain.
+    /// isolated temp export dir so it never touches the user's real export folder.
     #[test]
     fn save_preview_as_note_persists_anchors_and_exports_markdown() {
         // export::export_book_literature_note writes under
         // paths::default_export_root(), which honors THROUGHLINE_EXPORT_DIR —
         // point it at a temp dir and serialize against other env-touching tests
-        // so we never write into ~/GBrain.
+        // so we never write into the export folder.
         let _g = crate::paths::lock_env_for_test();
         let export_dir =
             std::env::temp_dir().join(format!("tl-tutor-save-test-{}", std::process::id()));

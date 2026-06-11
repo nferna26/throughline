@@ -17,7 +17,7 @@
 //       zero sections but still ends — "that counts")
 //
 // GUARDRAIL: runs entirely under an ISOLATED temp data + export dir, so it can
-// never touch the user's real DB or ~/GBrain.
+// never touch the user's real DB or export folder.
 //
 // Usage: cargo run --example shot1_realtext -- /path/to/confessions.txt
 //   (the real .txt is fetched out-of-band to /tmp; this binary never downloads)
@@ -52,7 +52,7 @@ fn looks_chapter_like(label: &str) -> bool {
 #[allow(unused_assignments)]
 fn main() -> anyhow::Result<()> {
     // GUARDRAIL: first line of main(). Isolates DATA + EXPORT under the OS temp
-    // dir and panics if it didn't take — the real DB / ~/GBrain stay untouched.
+    // dir and panics if it didn't take — the real DB / the export folder stay untouched.
     let isolated = bin_guardrail::init_isolated_data_dir("shot1_realtext");
 
     // Deterministic cleanup: the isolated dir is PID-scoped, so a recycled PID
@@ -309,7 +309,7 @@ fn main() -> anyhow::Result<()> {
     let md = std::fs::read_to_string(&md_path)?;
     furthest = "exported";
 
-    // Export landed in the isolated dir, never ~/GBrain.
+    // Export landed in the isolated dir, never the export folder.
     let sys_temp = std::env::temp_dir();
     assert!(
         md_path.starts_with(&sys_temp),

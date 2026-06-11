@@ -45,7 +45,7 @@ pub fn books_dir() -> Result<PathBuf> {
 /// App-private rolling-backup directory for `reading.db`.
 ///
 /// Deliberately under the app-support dir (next to `reading.db`), NEVER under
-/// the export/GBrain tree — backups are an internal recovery artifact, not
+/// the export tree — backups are an internal recovery artifact, not
 /// something the reader should ever see in their notes folder, and they must
 /// not be exported. The directory is created on demand by the backup writer,
 /// not by `ensure_dirs()`, so a launch that never reaches a clean open leaves
@@ -72,17 +72,20 @@ pub fn book_dir(book_id: &str) -> Result<PathBuf> {
 
 pub fn default_export_root() -> Result<PathBuf> {
     // Acceptance/test binaries set this via `bin_guardrail::init_isolated_data_dir`
-    // to avoid scattering stub Markdown into the user's real GBrain folder.
+    // to avoid scattering stub Markdown into the user's real export folder.
     if let Ok(override_path) = std::env::var("THROUGHLINE_EXPORT_DIR") {
         if !override_path.trim().is_empty() {
             return Ok(PathBuf::from(override_path));
         }
     }
+    // A discoverable, standard home: ~/Documents/Throughline. A branded folder (not
+    // a generic "Reading") so it can't collide with another app's folder and its
+    // ownership is obvious. The reader can change it in Settings → Files.
     let home = dirs::home_dir().context("no home dir")?;
-    Ok(home.join("GBrain").join("Reading"))
+    Ok(home.join("Documents").join("Throughline"))
 }
 
-/// App-private dirs only. The export tree (`~/GBrain/Reading/...` by default)
+/// App-private dirs only. The export tree (`~/Documents/Throughline/...` by default)
 /// is deliberately NOT created here: a first launch must not plant an
 /// unexplained folder in the reader's home. Export creates its dirs on demand
 /// (`export::ensure_export_dirs`); the launch probe (`cmd_check_export_path`)

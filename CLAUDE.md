@@ -11,7 +11,7 @@ Today's section, read, ask the tutor about a hard passage, keep durable notes, e
 clean Markdown. Tauri v2 shell; React + TypeScript + Vite frontend; Rust commands for FS,
 hashing, SQLite, and export. Operational state lives in SQLite at
 `~/Library/Application Support/Throughline/reading.db`; imported books under
-`.../Throughline/books/{book_id}/`; Markdown exports to `~/GBrain/Reading/…`
+`.../Throughline/books/{book_id}/`; Markdown exports to `~/Documents/Throughline/…`
 (user-overridable).
 
 It ships two ways, from one codebase:
@@ -81,7 +81,7 @@ crossing any line in this section, stop and ask in plain text first.
 
 Discover or drag in a book → Today shows the right section → read → select a passage and ask
 the tutor (it quotes the selection before explaining) → save the answer as a note → export
-valid Markdown with correct frontmatter to `~/GBrain/Reading/Notes/`. Canonical fixture:
+valid Markdown with correct frontmatter to `~/Documents/Throughline/Books/`. Canonical fixture:
 Project Gutenberg's Augustine, *Confessions*. Any change that breaks any link in this
 chain is a P0, no matter how much it improves something else.
 

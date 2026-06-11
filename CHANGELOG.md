@@ -5,6 +5,14 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.6.1] - 2026-06-11
+
+### Changed
+
+- **Your notes now export to `~/Documents/Throughline`** by default (a clear,
+  easy-to-find spot) instead of an obscure home-folder location. You can still
+  pick any folder in Settings → Files; if you'd set one already, it's unchanged.
+
 ## [0.6.0] - 2026-06-11
 
 The notes you keep are now first-class — and your library is safe.

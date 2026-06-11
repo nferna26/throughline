@@ -32,7 +32,7 @@ pub fn open_and_migrate() -> Result<Connection> {
 mod tests {
     use super::*;
 
-    /// A fresh launch must not plant `~/GBrain/Reading/...` in the reader's
+    /// A fresh launch must not plant `~/Documents/Throughline/...` in the reader's
     /// home before any export exists — export creates its dirs on demand
     /// (`export::ensure_export_dirs`, exercised by the export tests). Opening
     /// the DB therefore must not create the export root or its subdirs.
