@@ -87,6 +87,11 @@ pub const MIGRATIONS: &[Migration] = &[
             "reading_plans.name + deleted_at (soft-delete) + reached_percent (frontispiece)",
         up: v009_plan_name_softdelete,
     },
+    Migration {
+        version: "v010_sitting_engine",
+        description: "phrases (content-addressed) + sittings + sittings_meta + reading_position; reading_plans.sitting_length_minutes; seed furthest position from legacy progress",
+        up: v010_sitting_engine,
+    },
 ];
 
 /// Apply every migration that is not already recorded in `schema_migrations`.
@@ -358,6 +363,164 @@ fn v009_plan_name_softdelete(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// The sitting-length-driven reading engine.
+///
+/// Adds the tables the new model needs and seeds the reader's furthest position
+/// from legacy per-section progress. The dead pacing columns on `reading_plans`
+/// (`target_finish_date`, `daily_target_units`, `days_per_week`, `catchup_mode`,
+/// `original_finish_date`) are DROPPED in this same migration once the engine
+/// rewrite stops reading them — they are NOT stranded, just dropped after the code
+/// that references them is gone, so the build never breaks mid-change.
+fn v010_sitting_engine(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        -- Global, content-addressed phrase cache. No book_id by design: the same
+        -- opening slice yields the same phrase for everyone, and this key matches
+        -- the relay's KV cache so local and relay caching stay symmetric. Nothing
+        -- writes it yet (the relay phrase pipeline lands later); sittings LEFT JOIN it.
+        CREATE TABLE IF NOT EXISTS phrases (
+          opening_hash TEXT PRIMARY KEY,
+          phrase       TEXT NOT NULL,
+          model        TEXT,
+          created_at   TEXT NOT NULL
+        );
+
+        -- Materialized reading units, sized to the reader's chosen sitting length.
+        -- A DERIVED CACHE: rebuilt by DELETE + recompute whenever sittings_meta's
+        -- tuple changes. Nothing durable may reference sittings.id (notes and
+        -- position anchor to sections or locators, never to a sitting). Boundaries
+        -- are section-relative (start_section_id + start_offset) for stability;
+        -- char_count gives the span and drives est_minutes at read time, so a later
+        -- per-reader speed never forces a re-chunk.
+        CREATE TABLE IF NOT EXISTS sittings (
+          id               TEXT PRIMARY KEY,
+          book_id          TEXT NOT NULL,
+          sort_order       INTEGER NOT NULL,
+          start_section_id TEXT NOT NULL,
+          start_offset     INTEGER NOT NULL,
+          char_count       INTEGER NOT NULL CHECK (char_count > 0),
+          chapter_label    TEXT NOT NULL,
+          opening_hash     TEXT,
+          UNIQUE (book_id, sort_order),
+          FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+        );
+
+        -- Staleness tripwire. On open, if a book's current
+        -- (content_fingerprint, sitting_length_minutes, chunker_version) no longer
+        -- matches this row, its sittings are rebuilt.
+        CREATE TABLE IF NOT EXISTS sittings_meta (
+          book_id                TEXT PRIMARY KEY,
+          content_fingerprint    TEXT NOT NULL,
+          sitting_length_minutes INTEGER NOT NULL,
+          chunker_version        INTEGER NOT NULL,
+          built_at               TEXT NOT NULL,
+          FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+        );
+
+        -- Position-based progress: the durable anchor that makes "behind"
+        -- unrepresentable. Section-relative so a normalization tweak in one chapter
+        -- cannot move the reader's place in another. furthest_* is monotonic
+        -- (MAX-clamped in reading order) and drives the Today predicate and the
+        -- finished state; last_read_* is the exact, non-monotonic scroll resume.
+        CREATE TABLE IF NOT EXISTS reading_position (
+          book_id              TEXT PRIMARY KEY,
+          furthest_section_id  TEXT,
+          furthest_offset      INTEGER,
+          last_read_section_id TEXT,
+          last_read_offset     INTEGER,
+          updated_at           TEXT NOT NULL,
+          FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+        );
+        "#,
+    )?;
+
+    // The reader's one choice (about 10 / 25 / 60 minutes).
+    add_column_if_missing(conn, "reading_plans", "sitting_length_minutes", "INTEGER")?;
+
+    seed_reading_position(conn)?;
+
+    // Drop the dead pacing columns now that no code reads them. The seed above
+    // already moved progress to reading_position; pre-launch, nothing else depends
+    // on these. Dropped (not stranded) so a future change can't accidentally rewire
+    // a fixed end date or daily target back into the silent, position-based model.
+    for col in [
+        "target_finish_date",
+        "daily_target_units",
+        "days_per_week",
+        "catchup_mode",
+        "original_finish_date",
+    ] {
+        drop_column_if_exists(conn, "reading_plans", col)?;
+    }
+    Ok(())
+}
+
+/// Idempotent ALTER DROP COLUMN: only drops when the column is present, so the
+/// migration is safe on a DB that never had it.
+fn drop_column_if_exists(conn: &Connection, table: &str, column: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|c| c.ok())
+        .collect();
+    if cols.iter().any(|c| c == column) {
+        conn.execute(&format!("ALTER TABLE {table} DROP COLUMN {column}"), [])?;
+    }
+    Ok(())
+}
+
+/// Seed `reading_position.furthest_*` from legacy `section_progress`, mapping the
+/// furthest global byte offset for each book to (section_id, offset within section).
+/// Idempotent (book_id is the primary key; existing rows are left untouched).
+fn seed_reading_position(conn: &Connection) -> Result<()> {
+    use rusqlite::OptionalExtension;
+
+    // Furthest global offset per book: the max of any recorded last_locator and the
+    // end of any completed section.
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT sp.book_id,
+               MAX(MAX(
+                 COALESCE(CAST(sp.last_locator AS INTEGER), 0),
+                 CASE WHEN sp.completed_at IS NOT NULL
+                      THEN COALESCE((SELECT CAST(bs.end_locator AS INTEGER)
+                                     FROM book_sections bs WHERE bs.id = sp.section_id), 0)
+                      ELSE 0 END
+               )) AS furthest
+        FROM section_progress sp
+        GROUP BY sp.book_id
+        "#,
+    )?;
+    let books: Vec<(String, i64)> = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+
+    for (book_id, furthest) in books {
+        // The section that contains `furthest`: the latest section whose global
+        // start offset is at or before it.
+        let sect: Option<(String, i64)> = conn
+            .query_row(
+                "SELECT id, CAST(start_locator AS INTEGER) FROM book_sections
+                 WHERE book_id = ?1 AND start_locator IS NOT NULL
+                   AND CAST(start_locator AS INTEGER) <= ?2
+                 ORDER BY sort_order DESC LIMIT 1",
+                params![book_id, furthest],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        if let Some((section_id, sec_start)) = sect {
+            let offset = (furthest - sec_start).max(0);
+            conn.execute(
+                "INSERT OR IGNORE INTO reading_position
+                   (book_id, furthest_section_id, furthest_offset, updated_at)
+                 VALUES (?1, ?2, ?3, datetime('now'))",
+                params![book_id, section_id, offset],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Idempotent ALTER ADD COLUMN. Used inside migration bodies so a DB that
 /// already has the column (because it was migrated via the pre-Shot-6a
 /// `add_column_if_missing` path) doesn't error.
@@ -391,6 +554,66 @@ mod tests {
     }
 
     #[test]
+    fn v010_creates_the_sitting_engine_tables_and_column() {
+        let conn = fresh();
+        apply_pending(&conn).unwrap();
+        for t in ["phrases", "sittings", "sittings_meta", "reading_position"] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    params![t],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "table {t} should exist after v010");
+        }
+        let has_col: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('reading_plans') WHERE name='sitting_length_minutes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_col, 1, "reading_plans.sitting_length_minutes should exist");
+
+        // CHECK(char_count > 0) is enforced.
+        conn.execute("INSERT INTO books (id,title,source_type,source_path,source_sha256,created_at) VALUES ('b','T','txt','/x','h',datetime('now'))", []).unwrap();
+        let zero = conn.execute(
+            "INSERT INTO sittings (id,book_id,sort_order,start_section_id,start_offset,char_count,chapter_label)
+             VALUES ('s','b',0,'sec',0,0,'Chapter I')",
+            [],
+        );
+        assert!(zero.is_err(), "char_count > 0 CHECK must reject a zero-length sitting");
+    }
+
+    #[test]
+    fn v010_seed_maps_furthest_progress_to_section_relative_position() {
+        let conn = fresh();
+        apply_pending(&conn).unwrap();
+        conn.execute("INSERT INTO books (id,title,source_type,source_path,source_sha256,created_at) VALUES ('b','T','txt','/x','h',datetime('now'))", []).unwrap();
+        conn.execute("INSERT INTO book_sections (id,book_id,label,start_locator,end_locator,estimated_units,sort_order) VALUES ('s1','b','Chapter I','0','1000',1000,0)", []).unwrap();
+        conn.execute("INSERT INTO book_sections (id,book_id,label,start_locator,end_locator,estimated_units,sort_order) VALUES ('s2','b','Chapter II','1000','2000',1000,1)", []).unwrap();
+        // Completed chapter I; reading at global offset 1450, which is inside chapter II.
+        conn.execute("INSERT INTO section_progress (book_id,section_id,completed_at,last_locator) VALUES ('b','s1',datetime('now'),'1000')", []).unwrap();
+        conn.execute("INSERT INTO section_progress (book_id,section_id,completed_at,last_locator) VALUES ('b','s2',NULL,'1450')", []).unwrap();
+
+        super::seed_reading_position(&conn).unwrap();
+
+        let (sec, off): (String, i64) = conn
+            .query_row(
+                "SELECT furthest_section_id, furthest_offset FROM reading_position WHERE book_id='b'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(sec, "s2", "furthest global 1450 lands in chapter II");
+        assert_eq!(off, 450, "offset within chapter II is 1450 - 1000");
+
+        // Idempotent: a second run leaves the seeded row untouched, no error.
+        super::seed_reading_position(&conn).unwrap();
+    }
+
+    #[test]
     fn fresh_db_applies_all_migrations_in_order() {
         let conn = fresh();
         let applied = apply_pending(&conn).expect("apply");
@@ -415,10 +638,10 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO books (id,title,source_type,source_path,source_sha256,created_at)
                VALUES ('b1','T','txt','/p','h','2026-01-01');
-             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date)
-               VALUES ('p_old','b1','2026-01-01','2026-02-01');
-             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date)
-               VALUES ('p_new','b1','2026-03-01','2026-04-01');
+             INSERT INTO reading_plans (id,book_id,start_date)
+               VALUES ('p_old','b1','2026-01-01');
+             INSERT INTO reading_plans (id,book_id,start_date)
+               VALUES ('p_new','b1','2026-03-01');
              INSERT INTO reading_sessions (id,book_id,started_at) VALUES ('s1','b1','2026-03-02');",
         )
         .unwrap();

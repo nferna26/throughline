@@ -127,30 +127,32 @@ fn main() -> anyhow::Result<()> {
         )?;
     }
 
-    // ── 2. Generate a 30-day plan ──────────────────────────────────────────
-    let plan = plan::build_default_plan(&book.id, &sections);
+    // ── 2. Plan-ready (no dates) + build sittings ──────────────────────────
+    let plan = plan::build_default_plan(&book.id);
     conn.execute(
-        "INSERT INTO reading_plans (id, book_id, start_date, target_finish_date, daily_target_units, days_per_week, catchup_mode, status, activated_at, original_finish_date)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![plan.id, plan.book_id, plan.start_date, plan.target_finish_date, plan.daily_target_units, plan.days_per_week, plan.catchup_mode, plan.status, plan.activated_at, plan.original_finish_date],
+        "INSERT INTO reading_plans (id, book_id, start_date, status, activated_at, sitting_length_minutes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![plan.id, plan.book_id, plan.start_date, plan.status, plan.activated_at, plan.sitting_length_minutes],
     )?;
-    let total_days = plan::total_days(&plan);
-    assert_eq!(
-        total_days, 30,
-        "AGENTS.md: generate a 30-day plan, got {}",
-        total_days
-    );
-    println!(
-        "    plan: {} → {} ({} days)",
-        plan.start_date, plan.target_finish_date, total_days
-    );
+    let body = commands::books::read_txt_section(&book.id, 0, None)?;
+    sittings::rebuild_if_stale(
+        &conn,
+        &book.id,
+        &body,
+        &sections,
+        plan::DEFAULT_SITTING_MINUTES,
+        &chrono::Utc::now().to_rfc3339(),
+    )?;
+    let sits = sittings::load_sittings(&conn, &book.id)?;
+    assert!(!sits.is_empty(), "sittings are built for the book");
+    println!("    plan: {} sittings (position-based, no end date)", sits.len());
 
-    // ── 3. Open today's (day-1) text section ───────────────────────────────
-    let computed = plan::compute(&plan, &sections, &[])?;
-    let day1_idx = computed
-        .assigned_section_index
-        .expect("plan must assign a day-1 section");
-    let today_sec = sections[day1_idx].clone();
+    // ── 3. Open today's (first sitting's) text section ─────────────────────
+    let today_sec = sections
+        .iter()
+        .find(|s| s.id == sits[0].start_section_id)
+        .expect("the first sitting's section exists")
+        .clone();
     assert!(
         today_sec.assignable,
         "day 1 must be an assignable section, not front matter"

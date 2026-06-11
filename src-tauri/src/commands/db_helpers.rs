@@ -42,16 +42,11 @@ pub fn plan_from_row(row: &rusqlite::Row) -> rusqlite::Result<ReadingPlan> {
         id: row.get(0)?,
         book_id: row.get(1)?,
         start_date: row.get(2)?,
-        target_finish_date: row.get(3)?,
-        daily_target_units: row.get(4)?,
-        days_per_week: row.get(5)?,
-        catchup_mode: row.get(6)?,
-        // Columns 7-9 added in migration v005; read defensively for legacy rows.
         status: row
-            .get::<_, Option<String>>(7)?
+            .get::<_, Option<String>>(3)?
             .unwrap_or_else(|| "active".to_string()),
-        activated_at: row.get(8)?,
-        original_finish_date: row.get(9)?,
+        activated_at: row.get(4)?,
+        sitting_length_minutes: row.get(5)?,
     })
 }
 
@@ -128,9 +123,9 @@ pub fn insert_section(conn: &Connection, s: &BookSection) -> rusqlite::Result<()
 
 pub fn insert_plan(conn: &Connection, p: &ReadingPlan) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO reading_plans (id, book_id, start_date, target_finish_date, daily_target_units, days_per_week, catchup_mode, status, activated_at, original_finish_date)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![p.id, p.book_id, p.start_date, p.target_finish_date, p.daily_target_units, p.days_per_week, p.catchup_mode, p.status, p.activated_at, p.original_finish_date],
+        "INSERT INTO reading_plans (id, book_id, start_date, status, activated_at, sitting_length_minutes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![p.id, p.book_id, p.start_date, p.status, p.activated_at, p.sitting_length_minutes],
     )?;
     Ok(())
 }
@@ -202,7 +197,7 @@ pub fn fetch_plan_for_book(
     // Prefer the live (lifecycle='active'), non-soft-deleted plan; fall back to the
     // most recent. Multiple plans + "Let go" soft-delete depend on this ordering.
     let mut stmt = conn.prepare(
-        "SELECT id, book_id, start_date, target_finish_date, daily_target_units, days_per_week, catchup_mode, status, activated_at, original_finish_date
+        "SELECT id, book_id, start_date, status, activated_at, sitting_length_minutes
          FROM reading_plans WHERE book_id = ?1 AND deleted_at IS NULL
          ORDER BY (lifecycle = 'active') DESC, start_date DESC LIMIT 1",
     )?;

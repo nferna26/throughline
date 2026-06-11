@@ -80,11 +80,11 @@ fn main() -> anyhow::Result<()> {
             )?;
         }
 
-        let plan_row = plan::build_default_plan(&result.book.id, &result.sections);
+        let plan_row = plan::build_default_plan(&result.book.id);
         conn.execute(
-            "INSERT INTO reading_plans (id, book_id, start_date, target_finish_date, daily_target_units, days_per_week, catchup_mode)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![plan_row.id, plan_row.book_id, plan_row.start_date, plan_row.target_finish_date, plan_row.daily_target_units, plan_row.days_per_week, plan_row.catchup_mode],
+            "INSERT INTO reading_plans (id, book_id, start_date, status, activated_at, sitting_length_minutes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![plan_row.id, plan_row.book_id, plan_row.start_date, plan_row.status, plan_row.activated_at, plan_row.sitting_length_minutes],
         )?;
 
         let _ = export::export_book_literature_note(
@@ -94,12 +94,21 @@ fn main() -> anyhow::Result<()> {
             &chrono::Utc::now().to_rfc3339(),
         );
 
-        // ── Day 1 assignment ──────────────────────────────────────────────
-        let computed = plan::compute(&plan_row, &result.sections, &[])?;
-        let day1 = computed
-            .assigned_section_index
-            .and_then(|i| result.sections.get(i))
-            .ok_or_else(|| anyhow::anyhow!("plan produced no day-1 assignment"))?;
+        // ── Day 1 assignment (first sitting's section) ─────────────────────
+        let body = commands::books::read_txt_section(&result.book.id, 0, None)?;
+        sittings::rebuild_if_stale(
+            &conn,
+            &result.book.id,
+            &body,
+            &result.sections,
+            plan::DEFAULT_SITTING_MINUTES,
+            &chrono::Utc::now().to_rfc3339(),
+        )?;
+        let sits = sittings::load_sittings(&conn, &result.book.id)?;
+        let day1 = sits
+            .first()
+            .and_then(|st| result.sections.iter().find(|s| s.id == st.start_section_id))
+            .ok_or_else(|| anyhow::anyhow!("no first sitting was built"))?;
         println!(
             "\n    DAY 1 → '{}' (spine idx {}, assignable={})",
             day1.label, day1.sort_order, day1.assignable

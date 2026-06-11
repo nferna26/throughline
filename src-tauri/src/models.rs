@@ -53,40 +53,22 @@ pub struct ReadingPlan {
     pub id: String,
     pub book_id: String,
     pub start_date: String,
-    pub target_finish_date: String,
-    pub daily_target_units: Option<i64>,
-    pub days_per_week: i64,
-    pub catchup_mode: String,
-    /// Plan lifecycle: "plan_ready" (imported, not started yet) | "active" |
-    /// "rebalanced" | "completed" | "paused". Defaults to "active" for plans
-    /// created before this field existed (migration v005 column default).
+    /// Plan lifecycle: "plan_ready" (imported, sitting length not chosen yet) |
+    /// "active" | "completed" | "paused". The pace clock is gone; this only marks
+    /// whether the reader has begun. Defaults to "active" for legacy rows.
     #[serde(default = "default_active")]
     pub status: String,
-    /// Stamped when the first reading session starts. None = not yet activated;
-    /// the pace clock and forecast only run once this is set.
+    /// Stamped when the first reading session starts. None = not yet begun.
     #[serde(default)]
     pub activated_at: Option<String>,
-    /// The pre-rebalance target, captured the first time the finish date moves,
-    /// so the forecast has a stable baseline. None until a rebalance occurs.
+    /// The reader's one choice: how much feels right at a sitting, in minutes
+    /// (about 10 / 25 / 60). Drives how the book is chunked. None until chosen.
     #[serde(default)]
-    pub original_finish_date: Option<String>,
+    pub sitting_length_minutes: Option<i64>,
 }
 
 fn default_active() -> String {
     "active".to_string()
-}
-
-/// Forward-looking pace signal driven by the OBSERVED reading rate vs the
-/// target — not a punitive "should-have-done-by-now" curve. Only meaningful
-/// once a plan is `active` and at least one reading window has passed.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FinishForecast {
-    /// "on_track" | "slightly_off_pace" | "needs_rebalance" | "plan_unrealistic"
-    pub state: String,
-    /// Projected finish date at the current observed rate (YYYY-MM-DD), if estimable.
-    pub projected_finish_date: Option<String>,
-    /// Projected days past the target (negative = ahead). 0 when on track or not estimable.
-    pub days_late: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -144,22 +126,6 @@ pub struct AiRequest {
     pub wrote_to_memory: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "snake_case", tag = "kind")]
-pub enum PaceState {
-    OnPace,
-    Behind { days_behind: i64 },
-    Recovery,
-    NotStarted,
-    Done,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct StreakSummary {
-    pub days_read_last_7: i64,
-    pub minutes_last_7: i64,
-}
-
 /// Result of an import. `created` is false when the import deduped onto a book
 /// that was already present (same SHA-256) — the frontend uses it to decide
 /// whether to show the Book Setup Sheet (only for genuinely new books).
@@ -173,37 +139,37 @@ pub struct ImportOutcome {
 pub struct TodayCard {
     pub book: Book,
     pub plan: ReadingPlan,
-    pub section: Option<BookSection>,
-    pub section_completed: bool,
-    /// Estimated reading time of *today's assigned section*, in minutes.
+    /// What the screen should say: "day_one" (never read), "reading" (mid-book),
+    /// "returning" (a lapse since last read), "finished" (read to the end), or
+    /// "no_plan" (every plan let go). "behind" is deliberately unrepresentable.
+    pub state: String,
+    /// The current sitting's heuristic label — ALWAYS present, never blank or a
+    /// loading placeholder ("Chapter II", "Chapter II, continued", …).
+    pub chapter_label: String,
+    /// The AI evocative phrase for the current sitting, when one is cached locally.
+    /// None until the phrase pipeline lands; the label carries the screen meanwhile.
+    #[serde(default)]
+    pub phrase: Option<String>,
+    /// Reading time of the CURRENT SITTING, in minutes (derived from its char span).
     pub estimated_minutes: i64,
-    /// Planned length of a normal reading sitting, in minutes (the user's
-    /// "Reading rhythm"; default 25). Drives the primary "Start N-minute
-    /// session" action — distinct from `estimated_minutes` (today's section).
-    pub session_minutes: i64,
-    pub monthly_pct: i64,
-    pub pace: PaceState,
-    pub day_index: i64,
-    pub total_days: i64,
-    pub streak: StreakSummary,
-    pub recovery: Option<crate::recovery::RecoveryBundle>,
+    /// Qualitative position in the book, 0.0..=1.0, for the hairline. Rendered as a
+    /// length, never labeled with a number.
+    pub fraction_complete: f64,
+    /// The next sitting's label, for the finished state's gentle forward pull.
+    #[serde(default)]
+    pub next_label: Option<String>,
+    /// The section to open for "Continue reading", and where to resume within it.
+    pub section: Option<BookSection>,
+    #[serde(default)]
     pub resume_locator: Option<String>,
+    #[serde(default)]
     pub resume_percent: Option<f64>,
-    /// Plan lifecycle status (mirror of ReadingPlan.status) so the UI can show
-    /// "Plan ready. You are not behind." before activation instead of a pace.
-    pub plan_status: String,
-    /// Finish forecast — present only once the plan is active and a window has
-    /// passed. None before then (a fresh import is never "behind").
-    pub forecast: Option<FinishForecast>,
-    /// "Last time" memory for calm re-entry on Today. Always present; its fields
-    /// are empty/None when the reader hasn't captured anything yet.
+    /// "Last time" memory for calm re-entry. Always present; empty until the reader
+    /// has captured something.
     #[serde(default)]
     pub memory: TodayMemory,
-    /// "Before you read" teaser — the book's OWN first sentences plus a
-    /// hand-written reading prompt, so Today frames a prepared reading encounter
-    /// rather than a progress meter. None when there is no readable section text
-    /// (the front-end then shows a calm "section is ready" fallback). Sourced
-    /// entirely from the already-imported local text; no AI, no network.
+    /// "Before you read" teaser for the current sitting's section. None when the
+    /// section text can't be read.
     #[serde(default)]
     pub teaser: Option<TodayTeaser>,
 }

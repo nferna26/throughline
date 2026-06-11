@@ -147,45 +147,43 @@ fn main() -> anyhow::Result<()> {
         )?;
     }
 
-    // ── 30-day plan ────────────────────────────────────────────────────────
-    let plan = plan::build_default_plan(&book.id, &sections);
+    // ── plan-ready: no dates, no targets, no "behind" to be born ───────────
+    let plan = plan::build_default_plan(&book.id);
     conn.execute(
-        "INSERT INTO reading_plans (id, book_id, start_date, target_finish_date, daily_target_units, days_per_week, catchup_mode, status, activated_at, original_finish_date)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![plan.id, plan.book_id, plan.start_date, plan.target_finish_date, plan.daily_target_units, plan.days_per_week, plan.catchup_mode, plan.status, plan.activated_at, plan.original_finish_date],
+        "INSERT INTO reading_plans (id, book_id, start_date, status, activated_at, sitting_length_minutes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![plan.id, plan.book_id, plan.start_date, plan.status, plan.activated_at, plan.sitting_length_minutes],
     )?;
-    assert_eq!(plan::total_days(&plan), 30, "AGENTS.md: 30-day plan");
+    assert_eq!(plan.status, "plan_ready", "fresh import is plan_ready, not active");
     furthest = "planned";
 
-    // ── M3: Today is plan-ready / NOT behind before any session ────────────
-    let computed = plan::compute(&plan, &sections, &[])?;
-    assert_eq!(
-        plan.status, "plan_ready",
-        "fresh import is plan_ready, not active"
-    );
-    assert_eq!(
-        computed.plan_status, "plan_ready",
-        "computed plan_status mirrors plan_ready"
-    );
-    assert!(
-        matches!(computed.pace, models::PaceState::NotStarted),
-        "a freshly imported book must never read as behind, got {:?}",
-        computed.pace
-    );
-    assert!(
-        computed.forecast.is_none(),
-        "no slip forecast before activation"
-    );
+    // ── M3: sittings build at the default length; the position-based model has
+    //    no schedule to fall behind on — a fresh book opens to its first sitting ─
+    let body = commands::books::read_txt_section(&book.id, 0, None)?;
+    sittings::rebuild_if_stale(
+        &conn,
+        &book.id,
+        &body,
+        &sections,
+        plan::DEFAULT_SITTING_MINUTES,
+        &Utc::now().to_rfc3339(),
+    )?;
+    let sits = sittings::load_sittings(&conn, &book.id)?;
+    assert!(!sits.is_empty(), "sittings are built for the book");
+    assert!(!sits[0].chapter_label.is_empty(), "first sitting carries a heuristic label");
+    assert!(sits[0].char_count > 0, "first sitting is non-empty");
     println!(
-        "    Today: plan_status={} pace=NotStarted (calm, not behind) ✓",
-        computed.plan_status
+        "    Today: {} sittings, first = {:?} (calm, never behind) ✓",
+        sits.len(),
+        sits[0].chapter_label
     );
 
-    // ── M4: open day-1 section → real prose, no header bleed ───────────────
-    let day1_idx = computed
-        .assigned_section_index
-        .expect("plan assigns a day-1 section");
-    let day1 = sections[day1_idx].clone();
+    // ── M4: open the first sitting's section → real prose, no header bleed ──
+    let day1 = sections
+        .iter()
+        .find(|s| s.id == sits[0].start_section_id)
+        .expect("the first sitting's section exists")
+        .clone();
     assert!(day1.assignable, "day 1 must be an assignable section");
     assert!(
         looks_chapter_like(&day1.label),

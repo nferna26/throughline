@@ -17,7 +17,6 @@ pub struct PlanSummary {
     pub lifecycle: String,
     pub status: String,
     pub start_date: String,
-    pub target_finish_date: String,
     pub paused_days_total: i64,
     pub session_count: i64,
     pub note_count: i64,
@@ -27,7 +26,7 @@ pub struct PlanSummary {
 }
 
 const PLAN_SELECT: &str = "SELECT p.id, p.book_id, COALESCE(p.name, ''), p.lifecycle, p.status,
-        p.start_date, p.target_finish_date, p.paused_days_total,
+        p.start_date, p.paused_days_total,
         (SELECT COUNT(*) FROM reading_sessions s WHERE s.plan_id = p.id),
         (SELECT COUNT(*) FROM notes n WHERE n.session_id IN
            (SELECT id FROM reading_sessions s WHERE s.plan_id = p.id)),
@@ -42,11 +41,10 @@ fn row_to_summary(r: &rusqlite::Row) -> rusqlite::Result<PlanSummary> {
         lifecycle: r.get(3)?,
         status: r.get(4)?,
         start_date: r.get(5)?,
-        target_finish_date: r.get(6)?,
-        paused_days_total: r.get(7)?,
-        session_count: r.get(8)?,
-        note_count: r.get(9)?,
-        reached_percent: r.get(10)?,
+        paused_days_total: r.get(6)?,
+        session_count: r.get(7)?,
+        note_count: r.get(8)?,
+        reached_percent: r.get(9)?,
     })
 }
 
@@ -112,9 +110,7 @@ pub fn cmd_list_plans_for_book(
 #[tauri::command]
 pub fn cmd_start_new_plan(book_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
-    let sections =
-        crate::commands::db_helpers::list_sections(&conn, &book_id).map_err(AppError::from)?;
-    let plan = crate::plan::build_default_plan(&book_id, &sections);
+    let plan = crate::plan::build_default_plan(&book_id);
     crate::commands::db_helpers::insert_plan(&conn, &plan).map_err(AppError::from)?;
     Ok(())
 }
@@ -159,8 +155,6 @@ fn resume_plan_on(
 ) -> rusqlite::Result<usize> {
     conn.execute(
         "UPDATE reading_plans SET
-           target_finish_date = date(target_finish_date,
-             '+' || CAST(julianday(?2) - julianday(paused_at) AS INTEGER) || ' days'),
            paused_days_total = paused_days_total +
              CAST(julianday(?2) - julianday(paused_at) AS INTEGER),
            lifecycle = 'active',
@@ -171,11 +165,9 @@ fn resume_plan_on(
     )
 }
 
-/// Pause an active plan (its pace clock stops; resume extends the finish date).
-/// CORE-1003: pace/forecast gating keys on `status` (plan::compute), so the
-/// pause must write status='paused' too — otherwise Today keeps counting
-/// "Behind · N days" through the pause. A never-started plan keeps its
-/// `plan_ready` status (the never-behind guarantee survives a pause round-trip).
+/// Pause an active plan. The position-based model has no pace clock or finish
+/// date, so pausing simply marks the plan paused (lifecycle + status); a
+/// never-started plan keeps its `plan_ready` status.
 #[tauri::command]
 pub fn cmd_pause_plan(plan_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
@@ -184,8 +176,8 @@ pub fn cmd_pause_plan(plan_id: String, state: State<DbState>) -> Result<(), AppE
     Ok(())
 }
 
-/// Resume a paused plan: add the paused days back to the finish date (so the
-/// reader keeps the same remaining time) and to paused_days_total.
+/// Resume a paused plan: mark it active again and accumulate the paused span into
+/// paused_days_total (there is no finish date to extend now).
 #[tauri::command]
 pub fn cmd_resume_plan(plan_id: String, state: State<DbState>) -> Result<(), AppError> {
     let conn = state.0.lock()?;
@@ -289,15 +281,15 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO books (id,title,source_type,source_path,source_sha256,created_at)
                VALUES ('b1','T','txt','/p','h','2026-01-01');
-             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle)
-               VALUES ('p1','b1','2026-01-01','2026-02-01','active','active');",
+             INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle)
+               VALUES ('p1','b1','2026-01-01','active','active');",
         )
         .unwrap();
         conn
     }
 
     #[test]
-    fn pause_then_resume_extends_finish_by_paused_days() {
+    fn pause_then_resume_tracks_paused_days() {
         let conn = db();
         // Paused on Jan 5, resumed on Jan 10 — explicit dates (CORE-1014: the
         // helpers take the local day as a param; no wall clock in the test).
@@ -307,15 +299,14 @@ mod tests {
         )
         .unwrap();
         resume_plan_on(&conn, "p1", d(2026, 1, 10)).unwrap();
-        let (finish, total, lifecycle): (String, i64, String) = conn
+        let (total, lifecycle): (i64, String) = conn
             .query_row(
-                "SELECT target_finish_date, paused_days_total, lifecycle FROM reading_plans WHERE id='p1'",
+                "SELECT paused_days_total, lifecycle FROM reading_plans WHERE id='p1'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(finish, "2026-02-06", "finish extended by the 5 paused days");
-        assert_eq!(total, 5);
+        assert_eq!(total, 5, "the 5 paused days are tracked");
         assert_eq!(lifecycle, "active");
     }
 
@@ -328,12 +319,9 @@ mod tests {
         .unwrap()
     }
 
-    /// CORE-1003: pace/forecast gating keys on `status` (plan::compute), so the
-    /// pause UPDATE must write status='paused' — not just lifecycle — and the
-    /// resume UPDATE must set it back to 'active'. Otherwise a reader who pauses
-    /// their only plan watches "Behind · N days" keep growing during the pause.
-    /// Drives the real command helpers with explicit local days (pause Jan 5,
-    /// resume Jan 10 — 5 paused days for resume to add back).
+    /// Pausing marks the plan paused (lifecycle + status) and resuming restores
+    /// active; the paused span accumulates into paused_days_total. Drives the real
+    /// command helpers with explicit local days (pause Jan 5, resume Jan 10).
     #[test]
     fn pause_writes_status_paused_and_resume_restores_active() {
         let conn = db();
@@ -354,23 +342,22 @@ mod tests {
             "active",
             "resume must restart the pace clock"
         );
-        // The finish-date math still holds alongside the status writes.
-        let (finish, total): (String, i64) = conn
+        // Paused days are tracked (there is no finish date to extend now).
+        let total: i64 = conn
             .query_row(
-                "SELECT target_finish_date, paused_days_total FROM reading_plans WHERE id='p1'",
+                "SELECT paused_days_total FROM reading_plans WHERE id='p1'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(finish, "2026-02-06", "finish extended by the 5 paused days");
         assert_eq!(total, 5);
 
         // PRIORITY 0 guard: a never-started (plan_ready) plan keeps plan_ready
         // through a pause/resume round-trip — pausing must never be the thing
         // that starts a pace clock.
         conn.execute(
-            "INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle)
-               VALUES ('p_ready','b1','2026-01-01','2026-02-01','plan_ready','active')",
+            "INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle)
+               VALUES ('p_ready','b1','2026-01-01','plan_ready','active')",
             [],
         )
         .unwrap();
@@ -440,10 +427,10 @@ mod tests {
 
         let conn = db();
         conn.execute_batch(
-            "INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle,deleted_at)
-               VALUES ('p_old','b1','2026-01-01','2026-02-01','archived','archived',datetime('now','-40 days'));
-             INSERT INTO reading_plans (id,book_id,start_date,target_finish_date,status,lifecycle,deleted_at)
-               VALUES ('p_rec','b1','2026-01-01','2026-02-01','archived','archived',datetime('now','-5 days'));
+            "INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle,deleted_at)
+               VALUES ('p_old','b1','2026-01-01','archived','archived',datetime('now','-40 days'));
+             INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle,deleted_at)
+               VALUES ('p_rec','b1','2026-01-01','archived','archived',datetime('now','-5 days'));
              INSERT INTO reading_sessions (id,book_id,started_at,plan_id) VALUES ('s_old','b1','2026-01-02','p_old');
              INSERT INTO notes (id,book_id,session_id,note_type,locator,body,created_at,updated_at)
                VALUES ('n_old','b1','s_old','reflection','char:0','x','2026-01-02','2026-01-02');
