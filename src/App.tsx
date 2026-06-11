@@ -12,7 +12,7 @@ import TLIcon from "./components/TLIcon";
 import ThroughlineMark from "./components/ThroughlineMark";
 import "./App.css";
 import "./tl-theme.css";
-import type { TodayCard, ReaderMode, Book, ImportOutcome, ExportPathStatus } from "./types";
+import type { TodayCard, Book, ImportOutcome, ExportPathStatus } from "./types";
 import { errorMessage } from "./types";
 import { purgeLegacyBriefings } from "./sectionBriefing";
 import { migrateLegacyLocalStorageKeys } from "./legacyStorage";
@@ -52,7 +52,7 @@ export async function handleDroppedPaths(paths: string[]): Promise<DropResult> {
 
 type View =
   | { kind: "today" }
-  | { kind: "reader"; today: TodayCard; mode: ReaderMode }
+  | { kind: "reader"; today: TodayCard }
   | { kind: "setup"; book: Book }
   | { kind: "discover" }
   | { kind: "settings" };
@@ -248,7 +248,7 @@ export default function App() {
   }
 
   function startReading(t: TodayCard) {
-    setView({ kind: "reader", today: t, mode: "full" });
+    setView({ kind: "reader", today: t });
   }
 
   // "Start a new plan" (from the Plans view): create a fresh plan for the book —
@@ -262,12 +262,6 @@ export default function App() {
       return;
     }
     setView({ kind: "setup", book });
-  }
-
-  // The "I only have 10 minutes" path — same reader, calm framing, no pace
-  // pressure. Opens at the saved resume position (the next paragraph).
-  function startRescue(t: TodayCard) {
-    setView({ kind: "reader", today: t, mode: "rescue" });
   }
 
   function exitReader() {
@@ -376,7 +370,7 @@ export default function App() {
         {view.kind === "today" && (
           today === null ? (
             // No books yet — the welcome card owns book acquisition; no book chrome.
-            <Today today={null} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onStartRescue={startRescue} onRefresh={refreshToday} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} />
+            <Today today={null} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onRefresh={refreshToday} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} />
           ) : (
             <>
               <div className="tl-bookhead">
@@ -407,7 +401,7 @@ export default function App() {
                 aria-labelledby={tab === "today" ? "tab-today" : "tab-notes"}
               >
                 {tab === "today" ? (
-                  <Today today={today} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onStartRescue={startRescue} onRefresh={refreshToday} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} />
+                  <Today today={today} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onRefresh={refreshToday} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} />
                 ) : (
                   <NotesBrowser book={today.book} />
                 )}
@@ -416,7 +410,7 @@ export default function App() {
           )
         )}
         {view.kind === "reader" && (
-          <Reader today={view.today} mode={view.mode} onExit={exitReader} />
+          <Reader today={view.today} onExit={exitReader} />
         )}
         {view.kind === "setup" && (
           <BookSetupSheet book={view.book} onDone={finishSetup} />

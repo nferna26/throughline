@@ -146,11 +146,6 @@ export interface AiRequest {
   wrote_to_memory: boolean;
 }
 
-/** How the reader was entered. "full" = a normal planned session; "rescue" =
- *  the calm 10-minute "just stay connected to the book" mode. The mode only
- *  changes framing/copy and the recap — never the pacing or completion math. */
-export type ReaderMode = "full" | "rescue";
-
 export type PaceState =
   | { kind: "on_pace" }
   | { kind: "behind"; days_behind: number }
