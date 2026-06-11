@@ -236,6 +236,8 @@ pub(crate) fn today_card(conn: &Connection) -> Result<Option<TodayCard>, AppErro
         _ => last_read_global.or(furthest),
     };
     let resume_locator = resume_global.map(|g| g.to_string());
+    let sitting_start_locator = cur.map(global_start);
+    let sitting_end_locator = cur.map(|s| global_start(s) + s.char_count);
 
     let memory = today_memory(conn, &book.id)?;
     let teaser = build_teaser(&book.id, section.as_ref(), resume_locator.as_deref());
@@ -250,6 +252,8 @@ pub(crate) fn today_card(conn: &Connection) -> Result<Option<TodayCard>, AppErro
         fraction_complete,
         next_label,
         section,
+        sitting_start_locator,
+        sitting_end_locator,
         resume_locator,
         resume_percent: None,
         memory,
@@ -281,6 +285,8 @@ fn plan_less_card(conn: &Connection, book: Book) -> Result<TodayCard, AppError> 
         fraction_complete: 0.0,
         next_label: None,
         section: None,
+        sitting_start_locator: None,
+        sitting_end_locator: None,
         resume_locator: None,
         resume_percent: None,
         memory,

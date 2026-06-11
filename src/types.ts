@@ -185,32 +185,30 @@ export interface RecomputedPlan {
 export interface TodayCard {
   book: Book;
   plan: ReadingPlan;
-  section: BookSection | null;
-  section_completed: boolean;
-  /** Estimated reading time of today's assigned section, in minutes. */
+  /** Which state the screen renders. "behind" is deliberately unrepresentable. */
+  state: "day_one" | "reading" | "returning" | "finished" | "no_plan";
+  /** The current sitting's heuristic label — ALWAYS present, never blank/loading. */
+  chapter_label: string;
+  /** The AI evocative phrase for the current sitting when cached; null until the
+   *  phrase pipeline (Stage 3). The label carries the screen meanwhile; reserve the
+   *  slot so the phrase's arrival is a pure text swap with zero layout shift. */
+  phrase: string | null;
+  /** Reading time of the CURRENT SITTING, in minutes. */
   estimated_minutes: number;
-  /** Planned length of a normal sitting (the "Reading rhythm"; default 25).
-   *  Drives the primary "Start N-minute session" action. */
-  session_minutes: number;
-  monthly_pct: number;
-  pace: PaceState;
-  day_index: number;
-  total_days: number;
-  streak: StreakSummary;
-  recovery: RecoveryBundle | null;
+  /** Qualitative position in the book, 0..1, for the hairline. Never a number on screen. */
+  fraction_complete: number;
+  /** The next sitting's label, for the finished state's gentle forward pull. */
+  next_label: string | null;
+  /** The section to open for "Continue reading", and where to resume within it. */
+  section: BookSection | null;
+  /** The current sitting's global byte span; the reader bounds a session to it. */
+  sitting_start_locator: number | null;
+  sitting_end_locator: number | null;
   resume_locator: string | null;
   resume_percent: number | null;
-  /** Plan lifecycle state (mirrors plan.status) — drives the Today copy so a
-   *  plan_ready book reads "Plan ready. You are not behind." */
-  plan_status: string;
-  /** Honest finish projection; null while plan_ready or done. */
-  forecast: FinishForecast | null;
   /** "Last time" memory for calm re-entry; fields empty when nothing captured. */
   memory: TodayMemory;
-  /** "Where you left off" resume teaser (the resume-adjacent sentence + a prompt);
-   *  null when there's no readable section text or the reader hasn't started the
-   *  section. Optional in the type so existing TodayCard fixtures stay valid; the
-   *  frontend shows it only when `is_resume_excerpt` is true. */
+  /** "Where you left off" resume teaser; null when there's no readable text. */
   teaser?: TodayTeaser | null;
 }
 

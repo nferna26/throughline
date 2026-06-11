@@ -160,6 +160,14 @@ pub struct TodayCard {
     pub next_label: Option<String>,
     /// The section to open for "Continue reading", and where to resume within it.
     pub section: Option<BookSection>,
+    /// The current sitting's global byte span. The reader bounds a session to
+    /// `[sitting_start_locator, sitting_end_locator)` and resumes at `resume_locator`
+    /// within it; ending a session at the sitting's end advances reading_position so
+    /// Today rolls forward on its own. None in the finished / no-plan states.
+    #[serde(default)]
+    pub sitting_start_locator: Option<i64>,
+    #[serde(default)]
+    pub sitting_end_locator: Option<i64>,
     #[serde(default)]
     pub resume_locator: Option<String>,
     #[serde(default)]
