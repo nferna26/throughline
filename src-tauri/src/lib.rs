@@ -30,6 +30,7 @@ pub mod ai_stub;
 pub mod backup;
 pub mod bin_guardrail;
 pub mod book_structure;
+pub mod chunker;
 pub mod circuit_breaker;
 pub mod commands;
 pub mod db;
