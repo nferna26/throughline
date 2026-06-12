@@ -480,7 +480,9 @@ pub async fn cmd_ai_ask(
         settings::AiProvider::Local => crate::ai_providers::ProviderAuth::Local,
         settings::AiProvider::OpenAi => crate::keystore::get_key("openai")
             .map(crate::ai_providers::ProviderAuth::OpenAiKey)
-            .ok_or_else(|| AppError::config("Add your OpenAI API key in Settings → Reading assistant."))?,
+            .ok_or_else(|| {
+                AppError::config("Add your OpenAI API key in Settings → Reading assistant.")
+            })?,
         settings::AiProvider::Anthropic => crate::keystore::get_key("anthropic")
             .map(crate::ai_providers::ProviderAuth::AnthropicKey)
             .ok_or_else(|| {
@@ -489,7 +491,9 @@ pub async fn cmd_ai_ask(
         settings::AiProvider::Codex => crate::ai_providers::ProviderAuth::Codex,
         settings::AiProvider::Company => crate::keystore::get_key("company")
             .map(crate::ai_providers::ProviderAuth::CompanyLicense)
-            .ok_or_else(|| AppError::config("Activate Throughline AI in Settings → Reading assistant."))?,
+            .ok_or_else(|| {
+                AppError::config("Activate Throughline AI in Settings → Reading assistant.")
+            })?,
         _ => return Err(AppError::config("No AI provider chosen.")),
     };
 
