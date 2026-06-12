@@ -142,7 +142,7 @@ describe("App drag-and-drop import", () => {
     });
 
     // The Book Setup Sheet (same as the picker's created:true path).
-    expect(await screen.findByText("New book")).toBeInTheDocument();
+    expect(await screen.findByText("New on your desk")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Confessions" })).toBeInTheDocument();
   });
 
@@ -184,28 +184,21 @@ const NO_PLAN_TODAY: TodayCard = {
     id: "p1",
     book_id: BOOK.id,
     start_date: "2026-06-01",
-    target_finish_date: "2026-07-01",
-    daily_target_units: 1,
-    days_per_week: 7,
-    catchup_mode: "extend",
     status: "completed",
     activated_at: null,
-    original_finish_date: null,
+    sitting_length_minutes: null,
   },
-  section: null,
-  section_completed: false,
+  state: "no_plan",
+  chapter_label: "Reading",
+  phrase: null,
   estimated_minutes: 0,
-  session_minutes: 25,
-  monthly_pct: 0,
-  pace: { kind: "not_started" },
-  day_index: 0,
-  total_days: 0,
-  streak: { days_read_last_7: 0, minutes_last_7: 0 },
-  recovery: null,
+  fraction_complete: 0,
+  next_label: null,
+  section: null,
+  sitting_start_locator: null,
+  sitting_end_locator: null,
   resume_locator: null,
   resume_percent: null,
-  plan_status: "no_plan",
-  forecast: null,
   memory: { last_capture: null, highlight_count: 0, note_count: 0 },
   teaser: null,
 };

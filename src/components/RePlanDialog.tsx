@@ -76,8 +76,9 @@ export default function RePlanDialog({
       >
         <h3 id="tl-replan-title">You already have a plan for {bookTitle}</h3>
         <p className="ctx">
+          {/* progressLine is a complete phrase, e.g. "18% through". */}
           Your current plan, <b>{name}</b>
-          {progressLine ? <>, is on <b>{progressLine}</b></> : ""}. How would you like to begin?
+          {progressLine ? <>, is <b>{progressLine}</b></> : ""}. How would you like to begin?
         </p>
         <div className="tl-options" role="radiogroup" aria-label="What to do">
           {opts.map((o) => (

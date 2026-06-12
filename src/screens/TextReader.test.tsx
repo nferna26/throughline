@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import TextReader, { clampToolbarPosition, clampPanelWidth, panelDragOutcome, DEFAULT_PANEL_WIDTH, splitParagraphs, firstProseDropCapOffset } from "./TextReader";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
+import TextReader, { clampToolbarPosition, clampPanelWidth, panelDragOutcome, DEFAULT_PANEL_WIDTH, splitParagraphs, firstProseDropCapOffset, byteToU16, u16ToByte } from "./TextReader";
 import type { TodayCard, BookSection, Note } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -27,25 +27,25 @@ const section: BookSection = {
   sort_order: 0,
 };
 
+// The default sitting spans exactly the first section, [0, 1000) — tests that
+// read across both sections widen it (a merged sitting over short chapters).
 function card(): TodayCard {
   return {
     book: { id: "b1", title: "Test Book", author: null, source_type: "txt", source_path: "", source_sha256: "x", created_at: "2026-05-29", last_opened_at: null },
-    plan: { id: "p1", book_id: "b1", start_date: "2026-05-01", target_finish_date: "2026-06-01", daily_target_units: 1, days_per_week: 5, catchup_mode: "gentle", status: "active", activated_at: "2026-05-01T08:00:00Z", original_finish_date: null },
-    section,
-    section_completed: false,
+    plan: { id: "p1", book_id: "b1", start_date: "2026-05-01", status: "active", activated_at: "2026-05-01T08:00:00Z", sitting_length_minutes: 25 },
+    state: "reading",
+    chapter_label: "Chapter 1",
+    phrase: null,
     estimated_minutes: 10,
-    session_minutes: 25,
-    monthly_pct: 5,
-    pace: { kind: "on_pace" },
-    day_index: 1,
-    total_days: 30,
-    streak: { days_read_last_7: 1, minutes_last_7: 10 },
-    recovery: null,
+    fraction_complete: 0.05,
+    next_label: null,
+    section,
+    sitting_start_locator: 0,
+    sitting_end_locator: 1000,
     resume_locator: null,
     resume_percent: null,
-    plan_status: "active",
-    forecast: { state: "on_track", projected_finish_date: "2026-05-30", days_late: 0 },
     memory: { last_capture: null, highlight_count: 0, note_count: 0 },
+    teaser: null,
   };
 }
 
@@ -208,13 +208,19 @@ function mockTwoSections() {
 describe("TextReader session recap", () => {
   beforeEach(() => vi.mocked(invoke).mockReset());
 
-  it("full session: shows a recap with stat counts and a next-section preview", async () => {
+  it("shows a recap with stat counts and an honest next-time preview", async () => {
     mockTwoSections();
-    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
     // Wait until the section text has loaded (effects settled) before interacting.
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
 
-    // Full mode's close button reads "Finish".
+    // Read the sitting to its end (the default sitting spans exactly Chapter 1).
+    const main = container.querySelector(".tl-reader-main") as HTMLElement;
+    Object.defineProperty(main, "scrollTop", { value: 3200, writable: true, configurable: true });
+    Object.defineProperty(main, "clientHeight", { value: 800, configurable: true });
+    Object.defineProperty(main, "scrollHeight", { value: 4000, configurable: true });
+    fireEvent.scroll(main);
+
     fireEvent.click(screen.getByRole("button", { name: "Finish" }));
 
     // It's a recap, not a thin dialog: titled "Session recap" with stat tiles…
@@ -224,16 +230,27 @@ describe("TextReader session recap", () => {
     // empty-state hint also contains the word "highlight", so match the tile).
     expect(screen.getByText(/^highlights?$/)).toBeInTheDocument();
     expect(screen.getByText(/tutor card/)).toBeInTheDocument();
-    // …and a concrete next-section preview (Chapter 2 is the section after day-1).
+    // …and a concrete next-time preview: the sitting was completed, so the next
+    // sitting opens in Chapter 2 (the section holding the sitting's end).
     expect(screen.getByText(/Next time/)).toBeInTheDocument();
     expect(screen.getByText("Chapter 2")).toBeInTheDocument();
-    // Full mode is NOT framed as a rescue.
-    expect(screen.queryByText("That counts")).toBeNull();
+  });
+
+  it("previews the SAME chapter when the sitting wasn't read to its end", async () => {
+    mockTwoSections();
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    // No reading happened — next time resumes right here, in Chapter 1.
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    const recap = screen.getByRole("dialog");
+    expect(within(recap).getByText(/Next time/)).toBeInTheDocument();
+    expect(within(recap).getByText("Chapter 1")).toBeInTheDocument();
   });
 
   it("persists the recap takeaway as a durable Takeaway note (feeds notebook + Today memory)", async () => {
     mockTwoSections();
-    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
 
     fireEvent.click(screen.getByRole("button", { name: "Finish" }));
@@ -261,7 +278,7 @@ describe("TextReader session recap", () => {
 
   it("skipping the recap takeaway saves NO note and ends with a null summary", async () => {
     mockTwoSections();
-    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
 
     // The toolbar "Finish" opens the recap; the recap's own primary action is
@@ -280,18 +297,20 @@ describe("TextReader session recap", () => {
     expect(takeawaySaves.length).toBe(0);
   });
 
-  it("rescue session: keeps the 'That counts' framing and never forces completion", async () => {
+  it("the rescue fork is gone: every session closes through the same calm recap", async () => {
+    // The "I only have 10 minutes" mode was cut by the Stage-2 design: a short
+    // sitting is just a sitting. There is ONE close button ("Finish", never
+    // "Done"), ONE recap framing, and completion is never demanded — skipping
+    // the takeaway ends the session with nothing forced.
     mockTwoSections();
-    const { container } = render(<TextReader today={card()} mode="rescue" onExit={() => {}} />);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
 
-    // Rescue mode's close button reads "Done"; the recap header says "That counts".
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
-    expect(screen.getByText("That counts")).toBeInTheDocument();
-    expect(screen.getByText(/You stayed connected to the book/)).toBeInTheDocument();
-    // The primary action affirms the short sitting; it never demands completion.
-    expect(screen.getByRole("button", { name: /That counts — done/ })).toBeInTheDocument();
-    expect(screen.queryByText("Session recap")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    expect(screen.getByText("Session recap")).toBeInTheDocument();
+    expect(screen.queryByText("That counts")).toBeNull();
+    expect(screen.queryByText(/Ten minutes/)).toBeNull();
   });
 });
 
@@ -304,7 +323,10 @@ describe("TextReader toolbar back-exit flush (FT-29)", () => {
   it("flushes the session on the toolbar 'Today' back button before exiting", async () => {
     mockTwoSections();
     const onExit = vi.fn();
-    const { container } = render(<TextReader today={card()} mode="full" onExit={onExit} />);
+    // A merged sitting spanning both short chapters — Next stays in-span.
+    const today = card();
+    today.sitting_end_locator = 2000;
+    const { container } = render(<TextReader today={today} onExit={onExit} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
 
     // Read s1, then advance — s1 is now visited-and-passed.
@@ -325,7 +347,7 @@ describe("TextReader toolbar back-exit flush (FT-29)", () => {
 
   it("ends the session exactly once when finishing normally (no double-end)", async () => {
     mockTwoSections();
-    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
 
     fireEvent.click(screen.getByRole("button", { name: "Finish" }));
@@ -371,7 +393,7 @@ describe("TextReader section completion (endReached)", () => {
 
   it("counts the current section once the reader scrolls to its end", async () => {
     mockBackend([]);
-    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
 
     const main = container.querySelector(".tl-reader-main") as HTMLElement;
@@ -384,7 +406,7 @@ describe("TextReader section completion (endReached)", () => {
 
   it("does NOT count a long section the reader only started", async () => {
     mockBackend([]);
-    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
 
     const main = container.querySelector(".tl-reader-main") as HTMLElement;
@@ -397,7 +419,10 @@ describe("TextReader section completion (endReached)", () => {
 
   it("counts a section that fits one screen, measured once after its text paints", async () => {
     mockTwoSections();
-    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    // A merged sitting spanning both short chapters — Next stays in-span.
+    const today = card();
+    today.sitting_end_locator = 2000;
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
 
     // Chapter 2 fits the viewport outright — it will never fire a scroll event.
@@ -413,6 +438,231 @@ describe("TextReader section completion (endReached)", () => {
   });
 });
 
+// Stage 2: a session is bounded to ONE SITTING — the [sitting_start_locator,
+// sitting_end_locator) span on the TodayCard. Nothing outside the span may
+// render or persist; completing the sitting ends the session AT the sitting's
+// end (bare-digit global offset — the dialect that advances reading_position).
+describe("TextReader sitting-bounded session", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  function setGeometry(el: HTMLElement, g: { scrollTop: number; clientHeight: number; scrollHeight: number }) {
+    Object.defineProperty(el, "scrollTop", { value: g.scrollTop, writable: true, configurable: true });
+    Object.defineProperty(el, "clientHeight", { value: g.clientHeight, configurable: true });
+    Object.defineProperty(el, "scrollHeight", { value: g.scrollHeight, configurable: true });
+  }
+
+  it("renders only the sitting's slice of a split chapter, and Next/Prev stay disabled", async () => {
+    mockBackend([]);
+    // A split sitting: the first 25 chars of a 1000-char chapter.
+    const today = card();
+    today.sitting_end_locator = 25;
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("brown fox"));
+
+    // Text past the sitting end never renders.
+    expect(container.querySelector(".tl-readcol")?.textContent).not.toContain("jumps");
+    // The sitting touches one section only — navigation can't leave it.
+    expect(screen.getByRole("button", { name: /Next section/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Previous section/i })).toBeDisabled();
+  });
+
+  it("completing a split sitting ends AT the sitting end and completes no chapter", async () => {
+    mockBackend([]);
+    const today = card();
+    today.sitting_end_locator = 25;
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("brown fox"));
+
+    // Read the window to its end — the window ends exactly at the sitting end.
+    const main = container.querySelector(".tl-reader-main") as HTMLElement;
+    setGeometry(main, { scrollTop: 3200, clientHeight: 800, scrollHeight: 4000 });
+    fireEvent.scroll(main);
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    const finishButtons = screen.getAllByRole("button", { name: /^Finish$/ });
+    fireEvent.click(finishButtons[finishButtons.length - 1]);
+
+    await waitFor(() => {
+      const call = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_end_session");
+      expect(call).toBeTruthy();
+      const args = call![1] as { endLocator: string; completedSectionIds: string[] };
+      // The sitting's end, bare digits — this is what rolls Today forward.
+      expect(args.endLocator).toBe("25");
+      // The chapter's true end (1000) is beyond the sitting: it is NOT complete.
+      expect(args.completedSectionIds).toEqual([]);
+    });
+  });
+
+  it("leaving mid-sitting ends at the current position, in bare digits", async () => {
+    mockBackend([]);
+    const onExit = vi.fn();
+    const { container } = render(<TextReader today={card()} onExit={onExit} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    // The session also STARTS in the bare-digit dialect.
+    const start = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_start_session");
+    expect((start![1] as { startLocator: string }).startLocator).toMatch(/^\d+$/);
+
+    fireEvent.click(screen.getByRole("button", { name: /Today/ }));
+    await waitFor(() => {
+      const call = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_end_session");
+      expect(call).toBeTruthy();
+      // Nothing was read: the session ends where it opened — never "char:"-prefixed.
+      expect((call![1] as { endLocator: string }).endLocator).toBe("0");
+    });
+    expect(onExit).toHaveBeenCalled();
+  });
+
+  it("a sitting opening mid-chapter rebases the window: anchors still align", async () => {
+    localStorage.setItem("tl.panelOpen", "true");
+    mockBackend([note({ body: "my thought" })]);
+    // The sitting starts at char 10 — exactly where "quick" (and its note) sits.
+    const today = card();
+    today.sitting_start_locator = 10;
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+    // Text before the sitting start never renders…
+    expect(container.querySelector(".tl-readcol")?.textContent).not.toContain("0123456789");
+    // …and the char-anchored highlight still lands on its exact word.
+    await waitFor(() => {
+      const mark = container.querySelector("mark.tl-hl");
+      expect(mark).not.toBeNull();
+      expect(mark!.textContent).toBe("quick");
+    });
+  });
+
+  it("mid-session progress saves speak bare digits (the dialect that advances reading_position)", async () => {
+    mockBackend([]);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    const main = container.querySelector(".tl-reader-main") as HTMLElement;
+    fireEvent.scroll(main);
+
+    await waitFor(() => {
+      const call = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_save_section_progress");
+      expect(call).toBeTruthy();
+      expect((call![1] as { locator: string }).locator).toMatch(/^\d+$/);
+    }, { timeout: 3000 });
+  });
+
+  it("sitting bounds are BYTE offsets: a multibyte prefix still slices at the right characters", async () => {
+    // "ÀÉÎÕÜ" is 5 chars but 10 UTF-8 bytes; the sitting end of 17 bytes lands
+    // after " plain" (10 + 7 bytes). A UTF-16 reading of 17 would wrongly
+    // include part of " tail".
+    const MB_TEXT = "ÀÉÎÕÜ plain tail words beyond the sitting.";
+    const mbSection = { ...section, end_locator: String(u16ToByte(MB_TEXT, MB_TEXT.length)), estimated_units: 100 };
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([mbSection]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(MB_TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+    const today = card();
+    today.sitting_end_locator = 17; // bytes: "ÀÉÎÕÜ plain" exactly
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("plain"));
+    expect(container.querySelector(".tl-readcol")?.textContent).not.toContain("tail");
+  });
+
+  it("a chapter with no end_locator completes via the NEXT section's start (within the sitting)", async () => {
+    const open1 = { ...section, end_locator: null };
+    const next2 = { id: "s2", book_id: "b1", label: "Chapter 2", href: null, start_locator: "1000", end_locator: "2000", estimated_units: 1000, sort_order: 1 };
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([open1, next2]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+    // A merged sitting covering both chapters: chapter 1's true end falls back
+    // to chapter 2's start (1000), which the sitting covers.
+    const today = card();
+    today.sitting_end_locator = 2000;
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    const main = container.querySelector(".tl-reader-main") as HTMLElement;
+    setGeometry(main, { scrollTop: 3200, clientHeight: 800, scrollHeight: 4000 });
+    fireEvent.scroll(main);
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    const finishButtons = screen.getAllByRole("button", { name: /^Finish$/ });
+    fireEvent.click(finishButtons[finishButtons.length - 1]);
+
+    await waitFor(() => {
+      const call = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_end_session");
+      expect(call).toBeTruthy();
+      expect((call![1] as { completedSectionIds: string[] }).completedSectionIds).toContain("s1");
+    });
+  });
+
+  it("a merged sitting resumes in the chapter CONTAINING the resume point, not the first one", async () => {
+    const sec2 = { id: "s2", book_id: "b1", label: "Chapter 2", href: null, start_locator: "1000", end_locator: "2000", estimated_units: 1000, sort_order: 1 };
+    const TEXT2 = "Second chapter text that the reader is partway through reading.";
+    vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section, sec2]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "1010", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text":
+          return Promise.resolve((args as { sectionId: string }).sectionId === "s2" ? TEXT2 : TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+    // The sitting spans chapters 1-2; the reader left off inside chapter 2.
+    const today = card();
+    today.sitting_end_locator = 2000;
+    today.resume_locator = "1010";
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+
+    // The reader opens IN chapter 2 — never back at the sitting's first page.
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("Second chapter"));
+    const start = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_start_session");
+    expect((start![1] as { startLocator: string }).startLocator).toBe("1010");
+  });
+
+  it("a sitting span that matches no section drops the bounds instead of blanking the book", async () => {
+    mockBackend([]);
+    // Drifted data: the span lies entirely past every section.
+    const today = card();
+    today.sitting_start_locator = 50_000;
+    today.sitting_end_locator = 60_000;
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+    // The full section still renders — a reader with a book open can always read.
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("lazy dog"));
+  });
+});
+
+describe("byte/UTF-16 boundary helpers", () => {
+  it("round-trips offsets on ASCII (identity)", () => {
+    expect(byteToU16("hello", 3)).toBe(3);
+    expect(u16ToByte("hello", 3)).toBe(3);
+  });
+  it("converts through multibyte characters and clamps", () => {
+    const t = "Àb"; // À = 2 bytes
+    expect(u16ToByte(t, 1)).toBe(2);
+    expect(u16ToByte(t, 2)).toBe(3);
+    expect(byteToU16(t, 2)).toBe(1);
+    expect(byteToU16(t, 1)).toBe(0); // mid-character byte snaps DOWN
+    expect(byteToU16(t, 99)).toBe(2);
+    expect(byteToU16(t, 0)).toBe(0);
+  });
+  it("handles astral-plane characters (4 bytes, 2 UTF-16 units)", () => {
+    const t = "a\u{1F4D6}b"; // 📖
+    expect(u16ToByte(t, 3)).toBe(5);
+    expect(byteToU16(t, 5)).toBe(3);
+    expect(byteToU16(t, 3)).toBe(1); // inside the emoji snaps to its start
+  });
+});
+
 // FT-31: the reader's scroll container must be keyboard-pageable — Space pages
 // down, Shift+Space pages back, the most ingrained reading gesture on a Mac.
 describe("TextReader keyboard paging (FT-31)", () => {
@@ -420,7 +670,7 @@ describe("TextReader keyboard paging (FT-31)", () => {
 
   it("makes the scroll container focusable and pages with Space / Shift+Space", async () => {
     mockBackend([]);
-    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
 
     const main = container.querySelector(".tl-reader-main") as HTMLElement;
@@ -649,14 +899,27 @@ describe("TextReader New-note modal — humanized position", () => {
   beforeEach(() => vi.mocked(invoke).mockReset());
 
   it("shows the chapter and a plain position, never a raw char: locator", async () => {
-    mockBackend([]);
-    // Resume mid-section so the modal's position is meaningfully non-zero:
-    // char 320 of a 1000-char section → "32% in".
+    // A text long enough that the resume point actually exists in it: resume at
+    // char 320 of a 1000-char section → "32% in". resume_locator speaks the
+    // backend's bare-digit dialect.
+    const LONG = TEXT + " filler words to give the section real length.".repeat(20);
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "320", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(LONG);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
     const today = card();
-    today.resume_locator = "char:320";
-    today.resume_percent = 32;
+    today.resume_locator = "320";
     const { container } = render(<TextReader today={today} onExit={() => {}} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    // The session starts AT the resume point, in bare digits.
+    const start = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_start_session");
+    expect((start![1] as { startLocator: string }).startLocator).toBe("320");
 
     fireEvent.click(screen.getByRole("button", { name: "Add note" }));
     const modal = screen.getByRole("dialog");
@@ -746,7 +1009,7 @@ describe("TextReader failed session start keeps the takeaway (FT-33)", () => {
         default: return Promise.resolve(undefined);
       }
     });
-    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
 
     fireEvent.click(screen.getByRole("button", { name: "Finish" }));
@@ -807,7 +1070,10 @@ describe("TextReader Deep Study — stale-section guard", () => {
       }
     });
 
-    const { container } = render(<TextReader today={card()} mode="full" onExit={() => {}} />);
+    // A merged sitting spanning both sections, so Next can reach section B.
+    const today = card();
+    today.sitting_end_locator = 2000;
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
 
     // Section A's text resolves → it's now in state (textSectionId === s1).
     await act(async () => { resolveA(A_TEXT); });

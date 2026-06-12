@@ -104,7 +104,9 @@ export default function PlansView({
 
   const live = plans?.find((p) => p.lifecycle === "active") ?? null;
   const past = plans?.filter((p) => p.lifecycle !== "active") ?? [];
-  const behind = today?.pace?.kind === "behind";
+  // A plain percentage is fine for the manage-plans view (it is not the calm
+  // Today screen) — but it comes from the one position signal, fraction_complete.
+  const pct = Math.round(Math.max(0, Math.min(1, today?.fraction_complete ?? 0)) * 100);
 
   return (
     <div className="tl-plans-screen">
@@ -124,26 +126,14 @@ export default function PlansView({
               <StateTag lifecycle="active" />
               <div className="fp-name">{live.name || "Current plan"}</div>
               <div className="fp-sub">
-                Started {fmtDate(live.start_date)} · aiming at {fmtDate(live.target_finish_date)}
+                Started {fmtDate(live.start_date)}
               </div>
               <div className="fp-progress">
                 <div className="fp-track">
-                  <div className="fp-fill" style={{ width: `${today?.monthly_pct ?? 0}%` }} />
+                  <div className="fp-fill" style={{ width: `${pct}%` }} />
                 </div>
                 <div className="fp-progress-meta">
-                  {today && (
-                    <>
-                      <span><span className="strong">Day {today.day_index}</span> of {today.total_days}</span>
-                      <span className="sep" />
-                    </>
-                  )}
-                  <span>{today?.monthly_pct ?? 0}% through</span>
-                  {behind && (
-                    <>
-                      <span className="sep" />
-                      <span className="fp-pace"><TLIcon name="behind" size={14} /> a little behind — that's fine</span>
-                    </>
-                  )}
+                  <span>{pct}% through</span>
                 </div>
               </div>
               <div className="fp-actions">

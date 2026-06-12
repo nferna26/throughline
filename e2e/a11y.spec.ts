@@ -38,8 +38,16 @@ test("a11y: today", async ({ page }) => {
 
 test("a11y: reader", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /session/i }).first().click();
+  await page.getByRole("button", { name: "Continue reading" }).click();
   await page.locator(".tl-readcol p").first().waitFor();
+  expect(await serious(page)).toEqual([]);
+});
+
+test("a11y: plan setup (one question)", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_NO_PLAN__ = true; });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start a plan" }).click();
+  await page.getByText("How much feels right at a sitting?").waitFor();
   expect(await serious(page)).toEqual([]);
 });
 
@@ -52,14 +60,14 @@ test("a11y: settings", async ({ page }) => {
 
 test("a11y: plans view (frontispiece + back-matter)", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /see plans for this book/i }).click();
+  await page.getByRole("button", { name: /earlier attempt/i }).click();
   await page.getByText("Slow mornings").waitFor();
   expect(await serious(page)).toEqual([]);
 });
 
 test("a11y: replan decision dialog", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /see plans for this book/i }).click();
+  await page.getByRole("button", { name: /earlier attempt/i }).click();
   await page.getByRole("button", { name: /start a new plan/i }).first().click();
   await page.getByRole("dialog").waitFor();
   expect(await serious(page)).toEqual([]);
@@ -67,7 +75,7 @@ test("a11y: replan decision dialog", async ({ page }) => {
 
 test("a11y: every Today control is keyboard-reachable", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /session/i }).first().waitFor();
+  await page.getByRole("button", { name: "Continue reading" }).waitFor();
   // Tab through the document; every actionable element must be focusable.
   const reachable = await page.evaluate(() => {
     const actionable = Array.from(

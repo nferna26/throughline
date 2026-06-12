@@ -7,7 +7,7 @@ import SectionBriefingCard from "../components/SectionBriefingCard";
 import { briefingTextReady, type MarginHelp } from "../sectionBriefing";
 import { segmentParagraph, blockRoleFor, blockRoleClass, isContentsItem, openerLength, type StyleRange } from "../paragraphStructure";
 import { useDialog } from "../hooks/useDialog";
-import type { BookSection, Note, ReadingSession, TodayCard, ReaderMode, SettingsDto } from "../types";
+import type { BookSection, Note, ReadingSession, TodayCard, SettingsDto } from "../types";
 import { NOTE_TYPES, errorMessage, makeCharLocator, parseLocator } from "../types";
 import { locatorHint } from "../locatorHint";
 import { endReached } from "../sectionCompletion";
@@ -15,24 +15,55 @@ import { reduceMargin, initialMarginState, marginVisible } from "../marginPanel"
 
 interface Props {
   today: TodayCard;
-  mode?: ReaderMode;
   onExit: () => void;
 }
 
 /**
- * Text reader. One session can span many sections via Next › / ‹ Prev.
- * Section completion is derived from "did the reader advance past this section
- * during this sitting?" — no manual mark-complete gate.
+ * Text reader. A session is bounded to ONE SITTING: the global char span
+ * `[sitting_start_locator, sitting_end_locator)` on the TodayCard. The view
+ * renders only text inside that span (a sitting may be a sub-range of a long
+ * chapter, or run across several short ones — Next › / ‹ Prev move within it),
+ * so nothing outside the span can render or persist. Completing the sitting
+ * ends the session at the sitting's end, which advances `reading_position`
+ * (backend MAX-clamp) and rolls Today forward on its own. Section completion
+ * is derived from "did the reader advance past this section during this
+ * sitting?" — no manual mark-complete gate.
  */
-export default function TextReader({ today, mode = "full", onExit }: Props) {
+export default function TextReader({ today, onExit }: Props) {
   const { book, section: assignedSection } = today;
-  const rescue = mode === "rescue";
+  // The sitting span (global char offsets, half-open). Null on legacy cards —
+  // the reader then runs unbounded, exactly as before Stage 2.
+  const sittingStart = today.sitting_start_locator;
+  const sittingEnd = today.sitting_end_locator;
   // CANONICAL READING SEQUENCE: only sections marked assignable. Front/back
   // matter is filtered out by the backend (`cmd_assignable_sections`) and is
   // NEVER reachable through reader navigation. Initial position, Next/Prev,
   // and completion-tracking all index into this list.
   const [assignableSections, setAssignableSections] = useState<BookSection[]>([]);
   const [currentIdx, setCurrentIdx] = useState<number>(-1);
+  // Sections the sitting span touches: Next/Prev move within these only, so the
+  // reader can't navigate (and thus render) outside the sitting. When the span
+  // doesn't intersect the sections at all (data drift), the bounds are dropped
+  // ENTIRELY — half-applying them would slice every section to an empty window
+  // and dead-end the book.
+  const spanRange = useMemo(
+    () => spanSectionRange(assignableSections, sittingStart, sittingEnd),
+    [assignableSections, sittingStart, sittingEnd],
+  );
+  const boundStart = spanRange.intersects ? sittingStart : null;
+  const boundEnd = spanRange.intersects ? sittingEnd : null;
+  // Where the reader resumes, as a global BYTE offset clamped into the sitting
+  // span. A resume point outside the span (a re-read, stale data) opens the
+  // sitting at its start rather than rendering the wrong window.
+  const resumeBytes = useMemo(() => {
+    const parsed = parseLocator(today.resume_locator);
+    if (parsed.kind !== "char") return null;
+    const abs = parseInt(parsed.value, 10);
+    if (!Number.isFinite(abs)) return null;
+    if (boundStart != null && abs < boundStart) return boundStart;
+    if (boundEnd != null && abs >= boundEnd) return boundStart ?? null;
+    return abs;
+  }, [today.resume_locator, boundStart, boundEnd]);
   const [text, setText] = useState<string>("");
   // A failed section-text read is said out loud in the reading column (never a
   // silent blank page) with a Try again. null = no error. `loadNonce` bumps to
@@ -45,6 +76,14 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   // text while we're mid-navigation. null = text not yet loaded for the current
   // section.
   const [textSectionId, setTextSectionId] = useState<string | null>(null);
+  // The rendered window's base in the NOTE-ANCHOR dialect (the section's byte
+  // start + the window's UTF-16 offset within the section — the historical
+  // hybrid every saved "char:" anchor uses). All note/highlight/selection math
+  // is window-relative UTF-16 + winBase.
+  const [winBase, setWinBase] = useState(0);
+  // The window's base as a true global BYTE offset — what progress saves and
+  // session-end locators (which the backend parses) are composed from.
+  const [byteWinBase, setByteWinBase] = useState(0);
   // Style ranges for the current section (headings/blockquotes/emphasis), in
   // section-relative UTF-16 offsets. Empty for plain .txt books; populated for
   // EPUB-derived text so the reader can style it without mutating offsets.
@@ -97,6 +136,9 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   // the reader leaves via Finish, the toolbar back button, or anything that calls
   // onExit. Set before the awaited end so a second path can't slip past.
   const endedRef = useRef<boolean>(false);
+  // Resume is applied at most once per reader open (to the section containing
+  // the resume point), never re-fired by later navigation.
+  const resumeAppliedRef = useRef<boolean>(false);
   const [endingPrompt, setEndingPrompt] = useState(false);
   const [summary, setSummary] = useState("");
   // ── Companion Margin: anchored notes/highlights/tutor cards beside the text ──
@@ -108,6 +150,8 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const deleteTimer = useRef<number | null>(null);
   useEffect(() => () => { if (deleteTimer.current) clearTimeout(deleteTimer.current); }, []);
+  // The reader unmounting must also drop any pending trailing progress save.
+  useEffect(() => () => cancelPendingProgressSave(), []);
   // Draft tutor cards live only in component state until the reader saves one
   // (which turns it into a durable TutorNote via the existing approval path).
   const [tutorDrafts, setTutorDrafts] = useState<TutorDraft[]>([]);
@@ -174,14 +218,29 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       const list = await invoke<BookSection[]>("cmd_assignable_sections", { bookId: book.id });
       if (cancelled) return;
       setAssignableSections(list);
-      // Find the assigned section in the assignable list. If it isn't there for
-      // any reason (data drift), fall back to the first assignable item — but
-      // never to an arbitrary spine entry.
-      const fromAssigned = list.findIndex((s) => s.id === assignedSection.id);
-      const startIdx = fromAssigned >= 0 ? fromAssigned : 0;
+      // Open at the section CONTAINING the resume point — a merged sitting can
+      // resume several chapters past its first one. Fall back to the assigned
+      // section, then to the first in-span section — but never to an arbitrary
+      // spine entry.
+      const range = spanSectionRange(list, sittingStart, sittingEnd);
+      const lo = range.intersects ? range.min : 0;
+      const hi = range.intersects ? range.max : list.length - 1;
+      let startIdx = -1;
+      if (resumeBytes != null) {
+        for (let i = lo; i <= hi; i++) {
+          const s = sectionGlobalSpan(list, i);
+          if (resumeBytes >= s.start && resumeBytes < s.end) { startIdx = i; break; }
+        }
+      }
+      if (startIdx < 0) {
+        const fromAssigned = list.findIndex((s) => s.id === assignedSection.id);
+        startIdx = fromAssigned >= 0 ? fromAssigned : Math.max(0, lo);
+      }
       setCurrentIdx(startIdx);
       const baseOffset = parseInt(list[startIdx]?.start_locator || "0", 10);
-      const startLoc = today.resume_locator ?? makeCharLocator(baseOffset);
+      // Bare-digit global byte offset: the backend's progress dialect (a
+      // "char:" prefix is stored opaquely but never advances reading_position).
+      const startLoc = String(resumeBytes ?? Math.max(baseOffset, sittingStart ?? 0));
       // A failed session-start must not blank the reader OR discard a later typed
       // takeaway (FT-33): the text still loads and reads; `session` stays null, so
       // finalizeSession saves the takeaway as a session-less note and skips the end.
@@ -229,12 +288,24 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         return;
       }
       if (cancelled) return;
-      setText(t);
+      // Bound the section's text to the sitting window: a session never renders
+      // text outside its span. The slice is what makes the bound structural —
+      // selections, notes, and progress saves all derive from rendered text.
+      // `base` and the span are BYTE offsets; the slice converts to UTF-16 once.
+      const base = parseInt(sec.start_locator || "0", 10);
+      const slice = sittingSlice(t, base, boundStart, boundEnd);
+      const bounded = t.slice(slice.start, slice.end);
+      setText(bounded);
+      setWinBase(base + slice.start);
+      setByteWinBase(base + u16ToByte(t, slice.start));
       setTextSectionId(sec.id);
       // Structure ranges are a separate, optional read (EPUB-derived text only).
       // Failure or absence simply means unstyled paragraphs — never blocks reading.
+      // Ranges are section-relative; rebase them onto the bounded window.
       invoke<StyleRange[]>("cmd_read_section_structure", { bookId: book.id, sectionId: sec.id })
-        .then((ranges) => { if (!cancelled) setStructure(Array.isArray(ranges) ? ranges : []); })
+        .then((ranges) => {
+          if (!cancelled) setStructure(clipStructure(Array.isArray(ranges) ? ranges : [], slice.start, bounded.length));
+        })
         .catch(() => { if (!cancelled) setStructure([]); });
       // Mark the section as visited
       setVisited((prev) => {
@@ -243,16 +314,14 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         next.add(sec.id);
         return next;
       });
-      // Resume to saved char offset only for the section we originally landed on.
-      if (sec.id === assignedSection?.id && today.resume_locator) {
-        const baseOffset = parseInt(sec.start_locator || "0", 10);
-        const parsed = parseLocator(today.resume_locator);
-        if (parsed.kind === "char") {
-          const abs = parseInt(parsed.value, 10);
-          const within = Math.max(0, abs - baseOffset);
-          setTopOffset(within);
-          setTimeout(() => scrollToOffset(within), 30);
-        }
+      // Resume once, in the section that actually contains the resume point —
+      // a merged sitting can resume chapters past its first one.
+      const byteLen = u16ToByte(t, t.length);
+      if (!resumeAppliedRef.current && resumeBytes != null && resumeBytes >= base && resumeBytes <= base + byteLen) {
+        resumeAppliedRef.current = true;
+        const within = Math.max(0, Math.min(bounded.length, byteToU16(t, resumeBytes - base) - slice.start));
+        setTopOffset(within);
+        setTimeout(() => scrollToOffset(within), 30);
       } else {
         setTopOffset(0);
         if (containerRef.current) containerRef.current.scrollTop = 0;
@@ -339,11 +408,14 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       // a scroll event measured against the OLD text's geometry must not mark
       // the newly current section.
       if (textSectionId === sec.id && endReached(container)) markEndReached(sec.id);
-      const baseOffset = parseInt(sec.start_locator || "0", 10);
+      const secStart = parseInt(sec.start_locator || "0", 10);
       const total = (sec.estimated_units || text.length) || 1;
-      const pct = Math.min(100, Math.max(0, (off / total) * 100));
-      const locator = makeCharLocator(baseOffset + off);
-      throttledSaveProgress(book.id, sec.id, locator, pct);
+      // Bare digits, BYTE-denominated: cmd_save_section_progress only advances
+      // reading_position for a plain global byte offset. The window slice keeps
+      // the position inside the sitting span, so nothing persists beyond it.
+      const globalBytes = byteWinBase + u16ToByte(text, off);
+      const pct = Math.min(100, Math.max(0, ((globalBytes - secStart) / total) * 100));
+      throttledSaveProgress(book.id, sec.id, String(globalBytes), pct);
     }
   }
 
@@ -378,32 +450,62 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     handleScroll();
   }
 
-  const locator = useMemo(() => {
-    const sec = assignableSections[currentIdx];
-    if (!sec) return makeCharLocator(0);
-    const base = parseInt(sec.start_locator || "0", 10);
-    return makeCharLocator(base + topOffset);
-  }, [assignableSections, currentIdx, topOffset]);
+  // Anchor locator for notes (the "char:" dialect notes are stored in).
+  const locator = useMemo(() => makeCharLocator(winBase + topOffset), [winBase, topOffset]);
 
   const goNext = useCallback(() => {
-    setCurrentIdx((i) => Math.min(assignableSections.length - 1, i + 1));
-  }, [assignableSections.length]);
+    setCurrentIdx((i) => Math.min(spanRange.max, i + 1));
+  }, [spanRange.max]);
 
   const goPrev = useCallback(() => {
-    setCurrentIdx((i) => Math.max(0, i - 1));
-  }, []);
+    setCurrentIdx((i) => Math.max(spanRange.min, i - 1));
+  }, [spanRange.min]);
+
+  // True end of a section in the canonical sequence (global offset): its
+  // end_locator, else the next section's start, else unbounded.
+  const sectionTrueEnd = useCallback((id: string): number => {
+    const i = assignableSections.findIndex((s) => s.id === id);
+    if (i < 0) return Number.POSITIVE_INFINITY;
+    const own = parseInt(assignableSections[i].end_locator || "", 10);
+    if (Number.isFinite(own)) return own;
+    const next = parseInt(assignableSections[i + 1]?.start_locator || "", 10);
+    return Number.isFinite(next) ? next : Number.POSITIVE_INFINITY;
+  }, [assignableSections]);
+
+  // A section can only COMPLETE in a sitting that covers its true end: a split
+  // chapter read to the sitting boundary is progress, not a finished chapter.
+  const sectionEndsInSpan = useCallback((id: string): boolean => {
+    if (boundEnd == null) return true; // unbounded legacy session
+    return sectionTrueEnd(id) <= boundEnd;
+  }, [boundEnd, sectionTrueEnd]);
+
+  // Whether the reader has read this sitting to its end. The LAST in-span
+  // section's window is sliced to end exactly at the sitting end, so reaching
+  // ITS end is reaching the sitting's end (sticky for the rest of the sitting).
+  const lastInSpanId = assignableSections[spanRange.max]?.id ?? null;
+  const sittingComplete = lastInSpanId != null && reachedEnd.has(lastInSpanId);
+
+  // Where the session ends, in the backend's bare-digit global-BYTE dialect.
+  // Completing the sitting ends AT the sitting's end — that's what advances
+  // reading_position past this sitting so the next cmd_today rolls forward
+  // (sticky on purpose: re-reading earlier pages never un-completes a sitting).
+  // Leaving mid-sitting ends at the current position (the resume point).
+  function sessionEndLocator(): string {
+    if (boundEnd != null && sittingComplete) return String(boundEnd);
+    return String(byteWinBase + u16ToByte(text, topOffset));
+  }
 
   // Sections "completed" this sitting: every visited section we've moved past,
-  // plus the current one if the viewport reached its end. Shared by the recap
-  // preview and the actual finalize so the numbers the reader sees match what's
-  // saved.
+  // plus the current one if the viewport reached its end — and only sections
+  // whose true end the sitting actually covers. Shared by the recap preview and
+  // the actual finalize so the numbers the reader sees match what's saved.
   function completedSectionIds(): string[] {
     const sec = assignableSections[currentIdx];
     const completed: string[] = [];
     for (const v of visited) {
-      if (v !== sec?.id) completed.push(v);
+      if (v !== sec?.id && sectionEndsInSpan(v)) completed.push(v);
     }
-    if (sec && reachedEnd.has(sec.id)) completed.push(sec.id);
+    if (sec && reachedEnd.has(sec.id) && sectionEndsInSpan(sec.id)) completed.push(sec.id);
     return completed;
   }
 
@@ -413,6 +515,9 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   // When the session never started, there's nothing to end (but a takeaway may
   // still be saved by finalizeSession before this runs).
   async function flushSession() {
+    // A trailing throttled save firing AFTER the end would rewrite the resume
+    // point with a stale position — drop it before anything else.
+    cancelPendingProgressSave();
     if (endedRef.current) return;
     if (!session) return;
     endedRef.current = true;
@@ -420,7 +525,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     try {
       await invoke<ReadingSession>("cmd_end_session", {
         sessionId: session.id,
-        endLocator: locator,
+        endLocator: sessionEndLocator(),
         minutes,
         completedSectionIds: completedSectionIds(),
         summarySentence: summary.trim() ? summary.trim() : null,
@@ -429,9 +534,10 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   }
 
   // `takeaway` is passed explicitly (not read from state) so Skip can end with
-  // null without racing a setState. Rescue mode never forces a takeaway and
-  // never forces section completion — a short sitting still counts.
+  // null without racing a setState. A takeaway is never forced — a short
+  // sitting still counts.
   async function finalizeSession(takeaway: string | null) {
+    cancelPendingProgressSave();
     const tk = takeaway && takeaway.trim() ? takeaway.trim() : null;
     // The recap's "one sentence to remember" is a first-class Takeaway: it stays
     // in the session export AND becomes a durable, user-authored Takeaway note,
@@ -462,7 +568,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       try {
         await invoke<ReadingSession>("cmd_end_session", {
           sessionId: session.id,
-          endLocator: locator,
+          endLocator: sessionEndLocator(),
           minutes,
           completedSectionIds: completedSectionIds(),
           summarySentence: tk,
@@ -482,10 +588,13 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
   const targetSection = assignedSection;
   const currentSection = assignableSections[currentIdx];
 
-  // Section char range, used to scope notes and to map absolute book locators
-  // back to within-section offsets for highlight rendering.
-  const secBase = parseInt(currentSection?.start_locator || "0", 10);
-  const secEnd = parseInt(currentSection?.end_locator || String(secBase + text.length), 10);
+  // The rendered window's char range, used to scope notes and to map absolute
+  // book locators back to within-window offsets for highlight rendering.
+  const winEnd = winBase + text.length;
+  // The chapter's nominal char range — only for the reader-facing "% in" hint,
+  // which reads as how far into the CHAPTER a note sits (not into the window).
+  const secStart = parseInt(currentSection?.start_locator || "0", 10);
+  const secNominalEnd = parseInt(currentSection?.end_locator || String(winEnd), 10);
 
   // Deep Study: once the session has started and this section's text is loaded,
   // open the panel and render the prepared briefing. Fires at most once per
@@ -518,12 +627,12 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         const p = parseLocator(n.anchor_start || n.locator);
         if (p.kind === "char") {
           const v = parseInt(p.value, 10);
-          return v >= secBase && v < secEnd;
+          return v >= winBase && v < winEnd;
         }
         return n.chapter_label != null && n.chapter_label === currentSection?.label;
       })
       .sort((a, b) => anchorChar(a) - anchorChar(b));
-  }, [notes, secBase, secEnd, currentSection?.label, pendingDelete]);
+  }, [notes, winBase, winEnd, currentSection?.label, pendingDelete]);
 
   // Highlights to paint inline, grouped by within-section char span.
   const highlights = useMemo(() => {
@@ -531,21 +640,21 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       .map((n) => {
         const p = parseLocator(n.anchor_start || n.locator);
         if (p.kind !== "char" || !n.anchored_text) return null;
-        const start = parseInt(p.value, 10) - secBase;
+        const start = parseInt(p.value, 10) - winBase;
         return { id: n.id, start, end: start + n.anchored_text.length };
       })
       .filter((h): h is { id: string; start: number; end: number } => h != null && h.start >= 0);
-  }, [sectionNotes, secBase]);
+  }, [sectionNotes, winBase]);
 
   // Draft tutor cards anchored inside the current section (by char range).
   const sectionDrafts = useMemo(() => {
     return tutorDrafts
       .filter((d) => {
         const v = parseInt(parseLocator(d.anchorStart).value, 10);
-        return Number.isFinite(v) && v >= secBase && v < secEnd;
+        return Number.isFinite(v) && v >= winBase && v < winEnd;
       })
       .sort((a, b) => parseInt(parseLocator(a.anchorStart).value, 10) - parseInt(parseLocator(b.anchorStart).value, 10));
-  }, [tutorDrafts, secBase, secEnd]);
+  }, [tutorDrafts, winBase, winEnd]);
 
   // Cards render in document order inside the side panel (notes first by anchor,
   // then any live tutor drafts) — no absolute positioning, so they can never be
@@ -616,8 +725,8 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
       x: pos.x,
       y: pos.y,
       below: pos.below,
-      start: secBase + Math.min(start, end),
-      end: secBase + Math.max(start, end),
+      start: winBase + Math.min(start, end),
+      end: winBase + Math.max(start, end),
       text,
     });
     // A bare selection raises only the floating action toolbar (rendered below) —
@@ -692,9 +801,9 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
     const draft: TutorDraft = {
       draftId: `draft_${Date.now()}_${Math.round(Math.random() * 1e6)}`,
       mode: "historical",
-      locator: makeCharLocator(secBase),
-      anchorStart: makeCharLocator(secBase),
-      anchorEnd: makeCharLocator(secBase),
+      locator: makeCharLocator(winBase),
+      anchorStart: makeCharLocator(winBase),
+      anchorEnd: makeCharLocator(winBase),
       anchoredText: t,
       chapter: currentSection?.label ?? "",
     };
@@ -847,8 +956,8 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         <div className="tl-tb-div" />
         <button className={showNote ? "tl-iconbtn active" : "tl-iconbtn"} aria-label="Add note" title="Add note (or select text for the Companion Margin)" onClick={() => setShowNote(true)}><TLIcon name="pencil" size={18} /></button>
         <div className="tl-tb-div" />
-        <button className="tl-iconbtn" disabled={currentIdx <= 0} aria-label="Previous section" onClick={goPrev}><TLIcon name="chevronLeft" size={18} /></button>
-        <button className="tl-iconbtn" disabled={currentIdx >= assignableSections.length - 1} aria-label="Next section" onClick={goNext}><TLIcon name="chevronRight" size={18} /></button>
+        <button className="tl-iconbtn" disabled={currentIdx <= spanRange.min} aria-label="Previous section" onClick={goPrev}><TLIcon name="chevronLeft" size={18} /></button>
+        <button className="tl-iconbtn" disabled={currentIdx >= spanRange.max} aria-label="Next section" onClick={goNext}><TLIcon name="chevronRight" size={18} /></button>
         <div className="tl-tb-div" />
         <button
           className={marginIsVisible ? "tl-iconbtn tl-paneltoggle active" : "tl-iconbtn tl-paneltoggle"}
@@ -862,7 +971,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
             <span className="tl-panelcount">{sectionNotes.length + sectionDrafts.length}</span>
           )}
         </button>
-        <button className="tl-btn tl-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setEndingPrompt(true)}>{rescue ? "Done" : "Finish"}</button>
+        <button className="tl-btn tl-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setEndingPrompt(true)}>Finish</button>
       </div>
 
       {/* THE DESK: the scroll container (keyboard-pageable, owns selection +
@@ -884,12 +993,6 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
           data-margin={marginIsVisible ? "open" : "closed"}
         >
           <article className={isDivider ? "tl-sheet is-divider" : "tl-sheet"}>
-            {rescue && (
-              <div className="tl-rescue-banner" style={{ maxWidth: `${lineWidth}px` }} role="note">
-                <TLIcon name="clock" size={15} />
-                <span>Ten minutes. The goal is just to stay connected to the book — not to finish anything.</span>
-              </div>
-            )}
             {textError ? (
               <div className="tl-readcol" style={{ maxWidth: `${lineWidth}px` }}>
                 <div className="tl-read-error" role="alert">
@@ -914,6 +1017,10 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
             className="tl-margin-rail"
             aria-label="Margin"
             aria-hidden={!marginIsVisible}
+            // inert keeps the always-mounted rail's cards (note inputs, delete
+            // buttons) out of the focus order while it's visually collapsed —
+            // aria-hidden alone would leave focusable elements inside (WCAG).
+            inert={!marginIsVisible}
           >
             <div className="tl-margin-inner">
               <div className="tl-margin-head">
@@ -933,7 +1040,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
                   sourceSha={book.source_sha256}
                   mode="deep_study"
                   chapter={currentSection.label ?? ""}
-                  locator={makeCharLocator(secBase)}
+                  locator={makeCharLocator(winBase)}
                   sectionText={text}
                   onDismiss={() =>
                     setBriefingDismissed((prev) => new Set(prev).add(currentSection.id))
@@ -995,7 +1102,7 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
           sessionId={session?.id ?? null}
           chapter={currentSection.label}
           locator={locator}
-          positionHint={locatorHint(locator, { start: secBase, length: Math.max(0, secEnd - secBase) })}
+          positionHint={locatorHint(locator, { start: secStart, length: Math.max(0, secNominalEnd - secStart) })}
           onClose={() => setShowNote(false)}
         />
       )}
@@ -1021,14 +1128,15 @@ export default function TextReader({ today, mode = "full", onExit }: Props) {
         const highlights = mine.filter((n) => n.note_type === "Highlight").length;
         const tutor = mine.filter((n) => n.note_type === "TutorNote").length;
         const noteCount = mine.length - highlights - tutor;
-        // Next session preview: the section after the furthest one reached.
-        let maxIdx = currentIdx;
-        assignableSections.forEach((s, i) => { if (visited.has(s.id) && i > maxIdx) maxIdx = i; });
-        const nextLabel = assignableSections[maxIdx + 1]?.label ?? null;
+        // Next-time preview: the section holding the position the session will
+        // end at — the same chapter when a split chapter continues next sitting,
+        // the next one when the sitting ends on a boundary, null past book end.
+        const endPos = parseInt(sessionEndLocator(), 10);
+        const nextSec = assignableSections.find((s) => endPos < sectionTrueEnd(s.id));
+        const nextLabel = nextSec?.label ?? null;
         const recap: RecapData = { minutes, labels, highlights, noteCount, tutor, nextLabel };
         return (
           <EndingPanel
-            rescue={rescue}
             recap={recap}
             summary={summary}
             setSummary={setSummary}
@@ -1105,6 +1213,112 @@ export function splitParagraphs(
   }
   if (cursor < text.length) out.push(...splitProse(text.slice(cursor), cursor));
   return out;
+}
+
+// ── Sitting-span math (pure + exported: the session bound is load-bearing) ──
+//
+// COORDINATE SYSTEMS. Backend locators (section start/end_locator, the sitting
+// span, reading_position) are UTF-8 BYTE offsets into the body. JS strings are
+// UTF-16. The two agree only on pure-ASCII text, so every place a byte locator
+// meets a JS string index must convert through these two helpers. Note anchors
+// keep their historical hybrid dialect ("char:" + section byte base + UTF-16
+// offset within the section) — winBase preserves that encoding exactly.
+
+/** UTF-16 index in `t` of the given UTF-8 byte offset (clamped; snaps down to
+ *  a code-point start so a mid-character byte can never split a glyph). */
+export function byteToU16(t: string, byteOff: number): number {
+  if (byteOff <= 0) return 0;
+  let b = 0;
+  let i = 0;
+  while (i < t.length) {
+    const cp = t.codePointAt(i) as number;
+    const bytes = cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4;
+    if (b + bytes > byteOff) return i;
+    b += bytes;
+    i += cp > 0xffff ? 2 : 1;
+    if (b === byteOff) return i;
+  }
+  return t.length;
+}
+
+/** UTF-8 byte length of `t.slice(0, u16Off)` — the inverse of byteToU16. */
+export function u16ToByte(t: string, u16Off: number): number {
+  const end = Math.max(0, Math.min(t.length, u16Off));
+  let b = 0;
+  let i = 0;
+  while (i < end) {
+    const cp = t.codePointAt(i) as number;
+    b += cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4;
+    i += cp > 0xffff ? 2 : 1;
+  }
+  return b;
+}
+
+/** A section's global char span, [start, end). The end falls back to the next
+ *  section's start, then +∞ — an unknown tail never blocks rendering. */
+function sectionGlobalSpan(sections: ReadonlyArray<BookSection>, i: number): { start: number; end: number } {
+  const start = parseInt(sections[i]?.start_locator || "0", 10) || 0;
+  const own = parseInt(sections[i]?.end_locator || "", 10);
+  if (Number.isFinite(own)) return { start, end: own };
+  const next = parseInt(sections[i + 1]?.start_locator || "", 10);
+  return { start, end: Number.isFinite(next) ? next : Number.POSITIVE_INFINITY };
+}
+
+/** The contiguous index range of sections the sitting span touches — the only
+ *  sections a bounded session may show. Null bounds (legacy card) mean the whole
+ *  list. An empty intersection (data drift) falls back to the whole list with
+ *  `intersects: false`, and the CALLER must then drop the bounds entirely —
+ *  half-applying them would slice every section to an empty window. A reader
+ *  with a book open must always be able to read. */
+export function spanSectionRange(
+  sections: ReadonlyArray<BookSection>,
+  spanStart: number | null,
+  spanEnd: number | null,
+): { min: number; max: number; intersects: boolean } {
+  const last = sections.length - 1;
+  if (sections.length === 0) return { min: 0, max: -1, intersects: true };
+  if (spanStart == null && spanEnd == null) return { min: 0, max: last, intersects: true };
+  const lo = spanStart ?? Number.NEGATIVE_INFINITY;
+  const hi = spanEnd ?? Number.POSITIVE_INFINITY;
+  let min = -1;
+  let max = -1;
+  for (let i = 0; i < sections.length; i++) {
+    const s = sectionGlobalSpan(sections, i);
+    if (s.start < hi && s.end > lo) {
+      if (min < 0) min = i;
+      max = i;
+    }
+  }
+  if (min < 0) return { min: 0, max: last, intersects: false };
+  return { min, max, intersects: true };
+}
+
+/** Within-section slice (UTF-16 string indices into `text`) of the part of a
+ *  section that lies inside the sitting span. `secStartByte` is the section's
+ *  global UTF-8 byte start; span bounds are global byte offsets. Null bounds
+ *  leave that side open. Always returns a valid (possibly empty) slice. */
+export function sittingSlice(
+  text: string,
+  secStartByte: number,
+  spanStart: number | null,
+  spanEnd: number | null,
+): { start: number; end: number } {
+  const start = spanStart == null ? 0 : byteToU16(text, Math.max(0, spanStart - secStartByte));
+  const end = spanEnd == null ? text.length : Math.max(start, byteToU16(text, Math.max(0, spanEnd - secStartByte)));
+  return { start, end };
+}
+
+/** Rebase section-relative style ranges onto a text slice `[sliceStart,
+ *  sliceStart+sliceLen)`: shift, drop what falls outside, clamp the rest. */
+export function clipStructure(
+  ranges: ReadonlyArray<StyleRange>,
+  sliceStart: number,
+  sliceLen: number,
+): StyleRange[] {
+  return ranges
+    .map((r) => ({ ...r, start: r.start - sliceStart, end: r.end - sliceStart }))
+    .filter((r) => r.end > 0 && r.start < sliceLen)
+    .map((r) => ({ ...r, start: Math.max(0, r.start), end: Math.min(sliceLen, r.end) }));
 }
 
 /** The offset of the section's FIRST real prose paragraph — the one that opens
@@ -1264,6 +1478,14 @@ function renderParagraph(
  *  debounced autosave; saved-AI cards are visually distinct and read-only. */
 let saveProgressTimer: number | null = null;
 let lastSaveAt = 0;
+/** Drop any pending trailing save — called when a session ends or the reader
+ *  unmounts, so an 800ms-late save can't rewrite the resume point afterwards. */
+function cancelPendingProgressSave() {
+  if (saveProgressTimer != null) {
+    window.clearTimeout(saveProgressTimer);
+    saveProgressTimer = null;
+  }
+}
 function throttledSaveProgress(bookId: string, sectionId: string, locator: string, percent: number) {
   const now = Date.now();
   if (saveProgressTimer != null) window.clearTimeout(saveProgressTimer);
@@ -1399,11 +1621,9 @@ interface RecapData {
 /**
  * Session close = a recap, not a thin dialog: minutes read, sections finished,
  * counts of highlights/notes/tutor cards, an optional one-sentence takeaway the
- * reader can Accept/Edit/Skip, and a preview of next time. Rescue mode keeps the
- * "That counts" framing and never forces a takeaway or completion.
+ * reader can Accept/Edit/Skip, and a preview of next time.
  */
 function EndingPanel(props: {
-  rescue?: boolean;
   recap: RecapData;
   summary: string;
   setSummary: (s: string) => void;
@@ -1415,7 +1635,7 @@ function EndingPanel(props: {
   useDialog(panelRef, props.onCancel);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [editing, setEditing] = useState(props.summary.trim().length > 0);
-  const { rescue, recap } = props;
+  const { recap } = props;
   const hasTakeaway = props.summary.trim().length > 0;
   function startEditing() {
     setEditing(true);
@@ -1426,7 +1646,7 @@ function EndingPanel(props: {
       <div ref={panelRef} className="tl-modal tl-recap" role="dialog" aria-modal="true" aria-labelledby="text-ending-panel-title">
         <div className="tl-modal-head">
           <span className="t" id="text-ending-panel-title">
-            <TLIcon name="flag" size={16} /> {rescue ? "That counts" : "Session recap"}
+            <TLIcon name="flag" size={16} /> Session recap
           </span>
           <button className="tl-iconbtn" onClick={props.onCancel} aria-label="Keep reading"><TLIcon name="x" size={16} /></button>
         </div>
@@ -1444,11 +1664,7 @@ function EndingPanel(props: {
         )}
 
         <div className="tl-recap-takeaway">
-          <p className="prompt">
-            {rescue
-              ? "You stayed connected to the book today. Want to keep one line before you go? (Optional.)"
-              : "One sentence you want to remember from today?"}
-          </p>
+          <p className="prompt">One sentence you want to remember from today?</p>
           {editing ? (
             <textarea
               ref={taRef}
@@ -1457,7 +1673,7 @@ function EndingPanel(props: {
               value={props.summary}
               autoFocus
               onChange={(e) => props.setSummary(e.target.value)}
-              placeholder={rescue ? "Optional — or just skip." : "Your one line…"}
+              placeholder="Your one line…"
             />
           ) : hasTakeaway ? (
             <div className="tl-recap-saved">
@@ -1480,7 +1696,7 @@ function EndingPanel(props: {
             <button className="tl-btn tl-btn-ghost" onClick={props.onSkip}>Skip takeaway</button>
           )}
           <button className="tl-btn tl-btn-primary" onClick={hasTakeaway ? props.onSave : props.onSkip}>
-            {rescue ? "That counts — done" : hasTakeaway ? "Save & finish" : "Finish"}
+            {hasTakeaway ? "Save & finish" : "Finish"}
           </button>
         </div>
       </div>
