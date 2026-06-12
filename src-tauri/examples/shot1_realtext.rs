@@ -154,7 +154,10 @@ fn main() -> anyhow::Result<()> {
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![plan.id, plan.book_id, plan.start_date, plan.status, plan.activated_at, plan.sitting_length_minutes],
     )?;
-    assert_eq!(plan.status, "plan_ready", "fresh import is plan_ready, not active");
+    assert_eq!(
+        plan.status, "plan_ready",
+        "fresh import is plan_ready, not active"
+    );
     furthest = "planned";
 
     // ── M3: sittings build at the default length; the position-based model has
@@ -170,7 +173,10 @@ fn main() -> anyhow::Result<()> {
     )?;
     let sits = sittings::load_sittings(&conn, &book.id)?;
     assert!(!sits.is_empty(), "sittings are built for the book");
-    assert!(!sits[0].chapter_label.is_empty(), "first sitting carries a heuristic label");
+    assert!(
+        !sits[0].chapter_label.is_empty(),
+        "first sitting carries a heuristic label"
+    );
     assert!(sits[0].char_count > 0, "first sitting is non-empty");
     println!(
         "    Today: {} sittings, first = {:?} (calm, never behind) ✓",
@@ -298,12 +304,8 @@ fn main() -> anyhow::Result<()> {
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?12, ?13)",
         params![tutor.id, tutor.book_id, tutor.session_id, tutor.note_type, tutor.locator, tutor.chapter_label, tutor.body, tutor.short_quote, tutor.created_at, tutor.updated_at, tutor.anchor_start, tutor.anchor_end, tutor.anchored_text],
     )?;
-    let md_path = export::export_book_literature_note(
-        &conn,
-        &export::root_for(&conn),
-        &book.id,
-        &now,
-    )?;
+    let md_path =
+        export::export_book_literature_note(&conn, &export::root_for(&conn), &book.id, &now)?;
     let md = std::fs::read_to_string(&md_path)?;
     furthest = "exported";
 

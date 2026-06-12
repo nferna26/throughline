@@ -574,7 +574,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(has_col, 1, "reading_plans.sitting_length_minutes should exist");
+        assert_eq!(
+            has_col, 1,
+            "reading_plans.sitting_length_minutes should exist"
+        );
 
         // CHECK(char_count > 0) is enforced.
         conn.execute("INSERT INTO books (id,title,source_type,source_path,source_sha256,created_at) VALUES ('b','T','txt','/x','h',datetime('now'))", []).unwrap();
@@ -583,7 +586,10 @@ mod tests {
              VALUES ('s','b',0,'sec',0,0,'Chapter I')",
             [],
         );
-        assert!(zero.is_err(), "char_count > 0 CHECK must reject a zero-length sitting");
+        assert!(
+            zero.is_err(),
+            "char_count > 0 CHECK must reject a zero-length sitting"
+        );
     }
 
     #[test]

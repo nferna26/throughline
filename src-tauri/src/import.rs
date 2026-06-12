@@ -1306,7 +1306,10 @@ and its long history before the world finally met it in print.\n\n\
         // A derived reader.txt exists and is clean; the immutable source.txt still
         // carries the raw markup (it is the SHA anchor, never mutated).
         let reader = fs::read_to_string(book_dir.join("reader.txt")).expect("reader.txt written");
-        assert!(!reader.contains('_'), "reader.txt kept underscores: {reader:?}");
+        assert!(
+            !reader.contains('_'),
+            "reader.txt kept underscores: {reader:?}"
+        );
         assert!(
             !reader.contains("[Illustration"),
             "reader.txt kept the illustration marker: {reader:?}"
@@ -1407,7 +1410,10 @@ and its long history before the world finally met it in print.\n\n\
         let flags = classify_assignable(&raw_sections, &body);
 
         // A leading NON-ASSIGNABLE front-matter section exists (title + contents).
-        assert!(!flags[0], "front matter must be non-assignable: {raw_sections:?}");
+        assert!(
+            !flags[0],
+            "front matter must be non-assignable: {raw_sections:?}"
+        );
         let (_, fm_s, fm_e) = &raw_sections[0];
         let fm = &body[*fm_s..*fm_e];
         assert!(fm.contains("WALDEN") && fm.contains("Contents"));
@@ -1418,9 +1424,15 @@ and its long history before the world finally met it in print.\n\n\
         );
 
         // The first ASSIGNABLE section is the first real chapter (Economy).
-        let day1 = flags.iter().position(|&a| a).expect("an assignable section");
+        let day1 = flags
+            .iter()
+            .position(|&a| a)
+            .expect("an assignable section");
         let (label, s1, e1) = &raw_sections[day1];
-        assert_eq!(label, "Economy", "first assignable section should be Economy");
+        assert_eq!(
+            label, "Economy",
+            "first assignable section should be Economy"
+        );
         let chapter = &body[*s1..*e1];
         assert!(chapter.starts_with("Economy"));
         assert!(chapter.contains("When I wrote the following pages"));
@@ -1478,7 +1490,10 @@ and its long history before the world finally met it in print.\n\n\
         assert_eq!(secs[3].0, "CHAPTER IV");
         // No book-structure roles when the heading path handled it.
         let (_, roles) = sectionize_with_roles(&body);
-        assert!(roles.is_empty(), "heading-detected book must carry no inferred roles");
+        assert!(
+            roles.is_empty(),
+            "heading-detected book must carry no inferred roles"
+        );
     }
 
     /// An unstructured prose blob (no headings, no contents) still falls back to
@@ -1498,6 +1513,9 @@ and its long history before the world finally met it in print.\n\n\
             secs.iter().map(|(l, _, _)| l).collect::<Vec<_>>()
         );
         let (_, roles) = sectionize_with_roles(&body);
-        assert!(roles.is_empty(), "an unstructured blob carries no inferred roles");
+        assert!(
+            roles.is_empty(),
+            "an unstructured blob carries no inferred roles"
+        );
     }
 }

@@ -102,6 +102,9 @@ mod tests {
         let p = build_default_plan("b1");
         assert_eq!(p.status, "plan_ready");
         assert!(p.activated_at.is_none());
-        assert!(p.sitting_length_minutes.is_none(), "sitting length chosen later");
+        assert!(
+            p.sitting_length_minutes.is_none(),
+            "sitting length chosen later"
+        );
     }
 }

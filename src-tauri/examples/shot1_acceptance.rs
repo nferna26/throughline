@@ -145,7 +145,10 @@ fn main() -> anyhow::Result<()> {
     )?;
     let sits = sittings::load_sittings(&conn, &book.id)?;
     assert!(!sits.is_empty(), "sittings are built for the book");
-    println!("    plan: {} sittings (position-based, no end date)", sits.len());
+    println!(
+        "    plan: {} sittings (position-based, no end date)",
+        sits.len()
+    );
 
     // ── 3. Open today's (first sitting's) text section ─────────────────────
     let today_sec = sections
@@ -222,8 +225,12 @@ fn main() -> anyhow::Result<()> {
 
     // ── 6. Export the per-book LITERATURE NOTE + assert the frontmatter contract ─
     let now_export = now.clone();
-    let md_path =
-        export::export_book_literature_note(&conn, &export::root_for(&conn), &book.id, &now_export)?;
+    let md_path = export::export_book_literature_note(
+        &conn,
+        &export::root_for(&conn),
+        &book.id,
+        &now_export,
+    )?;
     let md = std::fs::read_to_string(&md_path)?;
     println!("    note exported → {}", md_path.display());
 

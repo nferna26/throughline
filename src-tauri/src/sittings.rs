@@ -51,7 +51,11 @@ fn section_bounds(body_len: usize, sections: &[BookSection]) -> Vec<SecBound> {
         let start = parse_loc(s.start_locator.as_deref())
             .unwrap_or_else(|| out.last().map(|b| b.end).unwrap_or(0));
         let end = parse_loc(s.end_locator.as_deref())
-            .or_else(|| sections.get(i + 1).and_then(|n| parse_loc(n.start_locator.as_deref())))
+            .or_else(|| {
+                sections
+                    .get(i + 1)
+                    .and_then(|n| parse_loc(n.start_locator.as_deref()))
+            })
             .unwrap_or(body_len)
             .min(body_len);
         let start = start.min(end);
@@ -71,7 +75,11 @@ fn parse_loc(s: Option<&str>) -> Option<usize> {
 }
 
 /// Plan the sittings for a book. Pure over `body` + `sections`.
-pub fn plan_sittings(body: &str, sections: &[BookSection], sitting_minutes: i64) -> Vec<PlannedSitting> {
+pub fn plan_sittings(
+    body: &str,
+    sections: &[BookSection],
+    sitting_minutes: i64,
+) -> Vec<PlannedSitting> {
     let body_len = body.len();
     let bounds = section_bounds(body_len, sections);
     let assignable: Vec<&SecBound> = bounds.iter().filter(|b| b.assignable).collect();
@@ -89,7 +97,10 @@ pub fn plan_sittings(body: &str, sections: &[BookSection], sitting_minutes: i64)
     let mut breaks: Vec<Break> = Vec::new();
     for b in &bounds {
         if b.start > span_start && b.start < span_end {
-            breaks.push(Break { offset: b.start, kind: BreakKind::Chapter });
+            breaks.push(Break {
+                offset: b.start,
+                kind: BreakKind::Chapter,
+            });
         }
     }
     let bytes = body.as_bytes();
@@ -103,7 +114,10 @@ pub fn plan_sittings(body: &str, sections: &[BookSection], sitting_minutes: i64)
                     after += 1;
                 }
                 if after > span_start && after < span_end {
-                    breaks.push(Break { offset: after, kind: BreakKind::Paragraph });
+                    breaks.push(Break {
+                        offset: after,
+                        kind: BreakKind::Paragraph,
+                    });
                 }
                 i = after.max(pos + 1);
             }
@@ -138,7 +152,10 @@ pub fn plan_sittings(body: &str, sections: &[BookSection], sitting_minutes: i64)
 
 /// The always-present heuristic label for a sitting spanning global `[start, end)`.
 fn label_for(start: usize, end: usize, bounds: &[SecBound]) -> String {
-    let overlapped: Vec<&SecBound> = bounds.iter().filter(|b| b.start < end && b.end > start).collect();
+    let overlapped: Vec<&SecBound> = bounds
+        .iter()
+        .filter(|b| b.start < end && b.end > start)
+        .collect();
     match overlapped.as_slice() {
         [] => "Reading".to_string(),
         [b] => {
@@ -214,8 +231,11 @@ pub fn rebuild_if_stale(
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?;
-    let have_rows: i64 =
-        conn.query_row("SELECT count(*) FROM sittings WHERE book_id = ?1", params![book_id], |r| r.get(0))?;
+    let have_rows: i64 = conn.query_row(
+        "SELECT count(*) FROM sittings WHERE book_id = ?1",
+        params![book_id],
+        |r| r.get(0),
+    )?;
     let fresh = have_rows > 0
         && matches!(&current, Some((fp, m, v))
             if *fp == fingerprint && *m == sitting_minutes && *v == chunker::CHUNKER_VERSION);
@@ -455,24 +475,48 @@ mod tests {
     fn plans_contiguous_sittings_with_labels_and_no_runt() {
         let (body, sections) = make_body();
         let plan = plan_sittings(&body, &sections, 1); // 1 min ~ 1000 chars
-        assert!(plan.len() >= 3, "expected several sittings, got {}", plan.len());
+        assert!(
+            plan.len() >= 3,
+            "expected several sittings, got {}",
+            plan.len()
+        );
         // Contiguous, full coverage of [0, body.len()).
         let mut cursor = 0usize;
         for p in &plan {
-            let base = parse_loc(sections.iter().find(|s| s.id == p.start_section_id).unwrap().start_locator.as_deref()).unwrap();
-            assert_eq!(base + p.start_offset as usize, cursor, "sittings must be contiguous");
+            let base = parse_loc(
+                sections
+                    .iter()
+                    .find(|s| s.id == p.start_section_id)
+                    .unwrap()
+                    .start_locator
+                    .as_deref(),
+            )
+            .unwrap();
+            assert_eq!(
+                base + p.start_offset as usize,
+                cursor,
+                "sittings must be contiguous"
+            );
             assert!(p.char_count > 0, "no empty sitting");
             assert!(!p.chapter_label.is_empty(), "label always present");
             cursor += p.char_count as usize;
         }
-        assert_eq!(cursor, body.len(), "sittings cover the whole assignable span");
+        assert_eq!(
+            cursor,
+            body.len(),
+            "sittings cover the whole assignable span"
+        );
         // No runt: the last sitting isn't trivially short.
         let last = plan.last().unwrap();
         assert!(last.char_count as usize >= 400, "no runt final sitting");
         // Labels reflect chapter then continuation then chapter two.
         assert_eq!(plan[0].chapter_label, "Chapter I");
-        assert!(plan.iter().any(|p| p.chapter_label == "Chapter I, continued"));
-        assert!(plan.iter().any(|p| p.chapter_label.starts_with("Chapter II")));
+        assert!(plan
+            .iter()
+            .any(|p| p.chapter_label == "Chapter I, continued"));
+        assert!(plan
+            .iter()
+            .any(|p| p.chapter_label.starts_with("Chapter II")));
     }
 
     #[test]
@@ -483,7 +527,10 @@ mod tests {
         sections[0].assignable = false;
         let plan = plan_sittings(&body, &sections, 1);
         // Every sitting begins inside chapter II (the only assignable section).
-        assert!(plan.iter().all(|p| p.start_section_id == "s2"), "only assignable content is chunked");
+        assert!(
+            plan.iter().all(|p| p.start_section_id == "s2"),
+            "only assignable content is chunked"
+        );
     }
 
     #[test]
@@ -491,12 +538,32 @@ mod tests {
         // Three sittings: [0,100) [100,250) [250,400). content_end = 400.
         let b = vec![(0i64, 100i64), (100, 150), (250, 150)];
         assert_eq!(locate(&b, None), Position::DayOne, "never read → day one");
-        assert_eq!(locate(&[], Some(0)), Position::DayOne, "no sittings → day one");
-        assert_eq!(locate(&b, Some(0)), Position::At(0), "start is in sitting 0");
+        assert_eq!(
+            locate(&[], Some(0)),
+            Position::DayOne,
+            "no sittings → day one"
+        );
+        assert_eq!(
+            locate(&b, Some(0)),
+            Position::At(0),
+            "start is in sitting 0"
+        );
         assert_eq!(locate(&b, Some(120)), Position::At(1), "containing sitting");
-        assert_eq!(locate(&b, Some(399)), Position::At(2), "last byte is still reading");
-        assert_eq!(locate(&b, Some(400)), Position::Finished, "furthest at content end → finished");
-        assert_eq!(locate(&b, Some(99999)), Position::Finished, "past the end → finished");
+        assert_eq!(
+            locate(&b, Some(399)),
+            Position::At(2),
+            "last byte is still reading"
+        );
+        assert_eq!(
+            locate(&b, Some(400)),
+            Position::Finished,
+            "furthest at content end → finished"
+        );
+        assert_eq!(
+            locate(&b, Some(99999)),
+            Position::Finished,
+            "past the end → finished"
+        );
     }
 
     /// A transient source-read failure (empty body) must NOT wipe a good sittings
@@ -522,16 +589,26 @@ mod tests {
         }
 
         // First build with the real body.
-        assert!(rebuild_if_stale(&conn, "b", &body, &sections, 1, "t0").unwrap(), "first build runs");
+        assert!(
+            rebuild_if_stale(&conn, "b", &body, &sections, 1, "t0").unwrap(),
+            "first build runs"
+        );
         let n1: i64 = conn
-            .query_row("SELECT count(*) FROM sittings WHERE book_id='b'", [], |r| r.get(0))
+            .query_row("SELECT count(*) FROM sittings WHERE book_id='b'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert!(n1 > 0, "sittings were built");
 
         // Transient read failure: an empty body must be a no-op, not a wipe.
-        assert!(!rebuild_if_stale(&conn, "b", "", &sections, 1, "t1").unwrap(), "empty body does not rebuild");
+        assert!(
+            !rebuild_if_stale(&conn, "b", "", &sections, 1, "t1").unwrap(),
+            "empty body does not rebuild"
+        );
         let n2: i64 = conn
-            .query_row("SELECT count(*) FROM sittings WHERE book_id='b'", [], |r| r.get(0))
+            .query_row("SELECT count(*) FROM sittings WHERE book_id='b'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(n2, n1, "the cache is preserved on an empty-body read");
     }
@@ -551,7 +628,10 @@ mod tests {
     fn locators_resolve_to_identical_text_after_reparse_shifts_offsets() {
         let (body1, sections1) = make_body();
         let plan = plan_sittings(&body1, &sections1, 1);
-        let texts1: Vec<&str> = plan.iter().map(|p| resolve(p, &sections1, &body1)).collect();
+        let texts1: Vec<&str> = plan
+            .iter()
+            .map(|p| resolve(p, &sections1, &body1))
+            .collect();
 
         // Re-parse: same content, but a header prepended shifts all global offsets.
         let header = "A PUBLISHER'S PREFACE, NEWLY ADDED.\n\n";
@@ -561,8 +641,10 @@ mod tests {
             .iter()
             .map(|s| {
                 let mut s2 = s.clone();
-                s2.start_locator = Some((parse_loc(s.start_locator.as_deref()).unwrap() + shift).to_string());
-                s2.end_locator = Some((parse_loc(s.end_locator.as_deref()).unwrap() + shift).to_string());
+                s2.start_locator =
+                    Some((parse_loc(s.start_locator.as_deref()).unwrap() + shift).to_string());
+                s2.end_locator =
+                    Some((parse_loc(s.end_locator.as_deref()).unwrap() + shift).to_string());
                 s2
             })
             .collect();
@@ -570,7 +652,10 @@ mod tests {
         // Resolve the SAME planned anchors against the shifted sections/body.
         for (p, t1) in plan.iter().zip(&texts1) {
             let t2 = resolve(p, &sections2, &body2);
-            assert_eq!(t2, *t1, "section-relative locator must resolve to identical text after re-parse");
+            assert_eq!(
+                t2, *t1,
+                "section-relative locator must resolve to identical text after re-parse"
+            );
         }
     }
 }

@@ -189,13 +189,19 @@ pub(crate) fn today_card(conn: &Connection) -> Result<Option<TodayCard>, AppErro
     let global_start = |s: &sittings::SittingRow| {
         sittings::to_global(&sections, &s.start_section_id, s.start_offset)
     };
-    let content_end = sits.last().map(|s| global_start(s) + s.char_count).unwrap_or(0);
+    let content_end = sits
+        .last()
+        .map(|s| global_start(s) + s.char_count)
+        .unwrap_or(0);
 
     let furthest = sittings::furthest_global(conn, &book.id, &sections)?;
     let (last_read_global, last_read_ts) = sittings::last_read(conn, &book.id, &sections)?;
 
     // Which sitting is "today", and what state is the screen in?
-    let bounds: Vec<(i64, i64)> = sits.iter().map(|s| (global_start(s), s.char_count)).collect();
+    let bounds: Vec<(i64, i64)> = sits
+        .iter()
+        .map(|s| (global_start(s), s.char_count))
+        .collect();
     let (state, current_idx): (&str, Option<usize>) = match sittings::locate(&bounds, furthest) {
         sittings::Position::DayOne => ("day_one", if sits.is_empty() { None } else { Some(0) }),
         sittings::Position::Finished => ("finished", None),
@@ -230,7 +236,12 @@ pub(crate) fn today_card(conn: &Connection) -> Result<Option<TodayCard>, AppErro
     };
 
     // The section to open for "Continue reading" and where to resume within it.
-    let section = cur.and_then(|s| sections.iter().find(|sec| sec.id == s.start_section_id).cloned());
+    let section = cur.and_then(|s| {
+        sections
+            .iter()
+            .find(|sec| sec.id == s.start_section_id)
+            .cloned()
+    });
     let resume_global = match state {
         "day_one" => cur.map(global_start),
         _ => last_read_global.or(furthest),
@@ -1065,7 +1076,10 @@ mod tests {
             .expect("compose")
             .expect("a plan-less book must still produce a Today card");
         assert_eq!(card.book.id, "b1");
-        assert_eq!(card.state, "no_plan", "the card must be recognizably plan-less");
+        assert_eq!(
+            card.state, "no_plan",
+            "the card must be recognizably plan-less"
+        );
         assert!(card.section.is_none(), "no section without a plan");
         assert_eq!(card.fraction_complete, 0.0);
     }

@@ -109,7 +109,11 @@ pub fn chunk(body_len: usize, breaks: &[Break], start: usize, target_chars: usiz
         .copied()
         .filter(|b| b.offset > start && b.offset < body_len)
         .collect();
-    pts.sort_by(|a, b| a.offset.cmp(&b.offset).then(b.kind.rank().cmp(&a.kind.rank())));
+    pts.sort_by(|a, b| {
+        a.offset
+            .cmp(&b.offset)
+            .then(b.kind.rank().cmp(&a.kind.rank()))
+    });
     pts.dedup_by(|a, b| a.offset == b.offset);
 
     let mut cursor = start;
@@ -117,7 +121,10 @@ pub fn chunk(body_len: usize, breaks: &[Break], start: usize, target_chars: usiz
         let ideal = cursor + target;
         // If the rest of the body is within one (tolerant) target, take it all.
         if ideal + (target as f64 * MIN_TAIL_FRACTION) as usize >= body_len {
-            out.push(Sitting { start: cursor, end: body_len });
+            out.push(Sitting {
+                start: cursor,
+                end: body_len,
+            });
             break;
         }
 
@@ -125,8 +132,10 @@ pub fn chunk(body_len: usize, breaks: &[Break], start: usize, target_chars: usiz
         let hi = (cursor + (target as f64 * (1.0 + WINDOW_TOLERANCE)) as usize).min(body_len);
 
         // Candidates that fall within the acceptance window [lo, hi].
-        let in_window: Vec<&Break> =
-            pts.iter().filter(|b| b.offset >= lo && b.offset <= hi).collect();
+        let in_window: Vec<&Break> = pts
+            .iter()
+            .filter(|b| b.offset >= lo && b.offset <= hi)
+            .collect();
 
         let end = if let Some(best) = in_window.into_iter().max_by(|a, b| {
             a.kind
@@ -165,7 +174,10 @@ mod tests {
         (1..)
             .map(|i| i * every)
             .take_while(|&o| o < body_len)
-            .map(|offset| Break { offset, kind: BreakKind::Paragraph })
+            .map(|offset| Break {
+                offset,
+                kind: BreakKind::Paragraph,
+            })
             .collect()
     }
 
@@ -209,7 +221,10 @@ mod tests {
     fn prefers_a_chapter_break_near_the_target() {
         let body = 60_000;
         let mut breaks = paras(1_000, body);
-        breaks.push(Break { offset: 24_000, kind: BreakKind::Chapter });
+        breaks.push(Break {
+            offset: 24_000,
+            kind: BreakKind::Chapter,
+        });
         let s = chunk(body, &breaks, 0, 25_000);
         assert_contiguous(&s, 0, body);
         // The first sitting should end on the chapter at 24k, not a nearer paragraph.
@@ -222,12 +237,19 @@ mod tests {
         // Five short "chapters" of 5k each at the front, then paragraphs.
         let mut breaks = paras(1_000, body);
         for i in 1..=5 {
-            breaks.push(Break { offset: i * 5_000, kind: BreakKind::Chapter });
+            breaks.push(Break {
+                offset: i * 5_000,
+                kind: BreakKind::Chapter,
+            });
         }
         let s = chunk(body, &breaks, 0, 25_000);
         assert_contiguous(&s, 0, body);
         // First sitting must NOT stop at the first 5k chapter; it merges toward 25k.
-        assert!(s[0].end >= 20_000, "short chapters should merge, got end {}", s[0].end);
+        assert!(
+            s[0].end >= 20_000,
+            "short chapters should merge, got end {}",
+            s[0].end
+        );
     }
 
     #[test]
@@ -236,7 +258,10 @@ mod tests {
         // One chapter spanning the whole body, with sub-headings every 20k.
         let mut breaks = paras(2_000, body);
         for i in 1..=3 {
-            breaks.push(Break { offset: i * 20_000, kind: BreakKind::Heading });
+            breaks.push(Break {
+                offset: i * 20_000,
+                kind: BreakKind::Heading,
+            });
         }
         let s = chunk(body, &breaks, 0, 25_000);
         assert_contiguous(&s, 0, body);
@@ -249,7 +274,13 @@ mod tests {
         let body = 50_000;
         let s = chunk(body, &[], 0, 25_000);
         // Nothing to break on: a single sitting covering the whole body.
-        assert_eq!(s, vec![Sitting { start: 0, end: 50_000 }]);
+        assert_eq!(
+            s,
+            vec![Sitting {
+                start: 0,
+                end: 50_000
+            }]
+        );
     }
 
     #[test]
@@ -275,7 +306,10 @@ mod tests {
     fn sparse_breaks_overshoot_rather_than_cut_mid_paragraph() {
         let body = 100_000;
         // Only one paragraph break, far past the first target window.
-        let breaks = vec![Break { offset: 60_000, kind: BreakKind::Paragraph }];
+        let breaks = vec![Break {
+            offset: 60_000,
+            kind: BreakKind::Paragraph,
+        }];
         let s = chunk(body, &breaks, 0, 25_000);
         assert_contiguous(&s, 0, body);
         // First sitting overshoots to the only clean break rather than cutting at 25k.

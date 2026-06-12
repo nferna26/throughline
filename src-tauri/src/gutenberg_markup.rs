@@ -453,7 +453,11 @@ mod tests {
             humour of _Northanger Abbey_, its completeness, is plain.";
         let cleaned = clean_body(body);
         // No underscores, no illustration marker, no empty gap where it sat.
-        assert!(!cleaned.text.contains('_'), "underscores survived: {:?}", cleaned.text);
+        assert!(
+            !cleaned.text.contains('_'),
+            "underscores survived: {:?}",
+            cleaned.text
+        );
         assert!(
             !cleaned.text.contains("[Illustration"),
             "illustration marker survived: {:?}",
@@ -478,7 +482,9 @@ mod tests {
         assert_eq!(ems.len(), 2, "expected 2 em ranges, got {secranges:?}");
         let slices: Vec<String> = ems.iter().map(|r| u16_slice(&cleaned.text, r)).collect();
         assert!(
-            slices.iter().any(|s| s == "Walt Whitman has somewhere a fine and just distinction."),
+            slices
+                .iter()
+                .any(|s| s == "Walt Whitman has somewhere a fine and just distinction."),
             "first em must cover the Walt Whitman sentence, got {slices:?}"
         );
         assert!(
@@ -518,7 +524,10 @@ mod tests {
         let body = "a snake_case identifier appears here.";
         let cleaned = clean_body(body);
         assert_eq!(cleaned.text, body, "lone underscore must be preserved");
-        assert!(cleaned.marks.is_empty(), "no em from an unmatched underscore");
+        assert!(
+            cleaned.marks.is_empty(),
+            "no em from an unmatched underscore"
+        );
     }
 
     /// `[Illustration: a ship]` (and the blank lines around it) are removed

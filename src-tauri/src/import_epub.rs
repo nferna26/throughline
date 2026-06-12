@@ -936,8 +936,7 @@ impl Extractor {
         match self.kind {
             SectionKind::TitlePage => {
                 // epub:type is authoritative on a title page.
-                if has("title") || (!self.saw_title && (is_heading || class_l.contains("title")))
-                {
+                if has("title") || (!self.saw_title && (is_heading || class_l.contains("title"))) {
                     // The first title-ish block is the main title; a later one is a
                     // secondary title (subtitle).
                     if self.saw_title {
@@ -1187,9 +1186,7 @@ fn promote_kind_from_epubtype(html: &str) -> Option<SectionKind> {
         return None;
     }
     // Order matters: titlepage before a generic "title".
-    if scan.contains("\"titlepage\"")
-        || scan.contains("'titlepage'")
-        || scan.contains("titlepage ")
+    if scan.contains("\"titlepage\"") || scan.contains("'titlepage'") || scan.contains("titlepage ")
     {
         return Some(SectionKind::TitlePage);
     }
@@ -1624,9 +1621,17 @@ mod tests {
             <li><a href=\"c3.xhtml\">Reading</a></li></ol></nav>";
         let s = extract_section_with_kind(html, SectionKind::Toc);
         assert_eq!(role_slice(&s, "contents-label").0, "Contents");
-        let items: Vec<&StyleRange> =
-            s.ranges.iter().filter(|r| r.kind == "contents-item").collect();
-        assert_eq!(items.len(), 3, "one contents-item per entry; got {:?}", s.ranges);
+        let items: Vec<&StyleRange> = s
+            .ranges
+            .iter()
+            .filter(|r| r.kind == "contents-item")
+            .collect();
+        assert_eq!(
+            items.len(),
+            3,
+            "one contents-item per entry; got {:?}",
+            s.ranges
+        );
         let units: Vec<u16> = s.text.encode_utf16().collect();
         let texts: Vec<String> = items
             .iter()
@@ -1651,12 +1656,12 @@ mod tests {
                 .map(|r| String::from_utf16(&units[r.start as usize..r.end as usize]).unwrap())
                 .collect()
         };
+        assert_eq!(parts, vec!["Walden", "On the Duty of Civil Disobedience"]);
         assert_eq!(
-            parts,
-            vec!["Walden", "On the Duty of Civil Disobedience"]
-        );
-        assert_eq!(
-            s.ranges.iter().filter(|r| r.kind == "contents-item").count(),
+            s.ranges
+                .iter()
+                .filter(|r| r.kind == "contents-item")
+                .count(),
             3
         );
     }
@@ -1697,8 +1702,7 @@ mod tests {
         // body-first spans exactly the FIRST prose paragraph, in UTF-16 units.
         let (first, bs, be) = role_slice(&s, "body-first");
         assert_eq!(first, "When I wrote the following pages, I lived alone.");
-        let expect_start =
-            "Economy\n\n".encode_utf16().count() as u32;
+        let expect_start = "Economy\n\n".encode_utf16().count() as u32;
         assert_eq!(bs, expect_start);
         assert_eq!(
             be - bs,
@@ -1707,7 +1711,10 @@ mod tests {
                 .count() as u32
         );
         // Only the FIRST paragraph is body-first; the second stays plain.
-        assert_eq!(s.ranges.iter().filter(|r| r.kind == "body-first").count(), 1);
+        assert_eq!(
+            s.ranges.iter().filter(|r| r.kind == "body-first").count(),
+            1
+        );
     }
 
     #[test]
@@ -1718,7 +1725,10 @@ mod tests {
         let s = extract_section_with_kind(html, SectionKind::Chapter);
         assert_eq!(role_slice(&s, "chapter-label").0, "BOOK I");
         assert_eq!(role_slice(&s, "chapter-title").0, "Economy");
-        assert_eq!(role_slice(&s, "body-first").0, "First prose paragraph here.");
+        assert_eq!(
+            role_slice(&s, "body-first").0,
+            "First prose paragraph here."
+        );
     }
 
     #[test]
@@ -1730,7 +1740,10 @@ mod tests {
         assert_eq!(role_slice(&s, "h2").0, "A subsection");
         // body-first is the first paragraph, not the one after the interior heading.
         assert_eq!(role_slice(&s, "body-first").0, "First.");
-        assert_eq!(s.ranges.iter().filter(|r| r.kind == "body-first").count(), 1);
+        assert_eq!(
+            s.ranges.iter().filter(|r| r.kind == "body-first").count(),
+            1
+        );
     }
 
     #[test]
@@ -1813,10 +1826,7 @@ mod tests {
             href: "nav.xhtml".into(),
             assignable: false,
         };
-        assert_eq!(
-            section_kind_for(&nav, Some("nav.xhtml")),
-            SectionKind::Toc
-        );
+        assert_eq!(section_kind_for(&nav, Some("nav.xhtml")), SectionKind::Toc);
 
         let epi = SpineEntry {
             idref: "epigraph".into(),
@@ -1839,11 +1849,11 @@ mod tests {
     #[test]
     fn attr_of_respects_token_boundaries() {
         // `epub:type=` must be found, but `someclass=` must NOT match `class=`.
-        assert_eq!(attr_of("<p someclass=\"x\" class=\"real\">", "class="), "real");
         assert_eq!(
-            epubtype_of("<h1 epub:type=\"title\" class=\"t\">"),
-            "title"
+            attr_of("<p someclass=\"x\" class=\"real\">", "class="),
+            "real"
         );
+        assert_eq!(epubtype_of("<h1 epub:type=\"title\" class=\"t\">"), "title");
         // Absent → empty, never a panic.
         assert_eq!(epubtype_of("<p>"), "");
     }

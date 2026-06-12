@@ -139,7 +139,10 @@ pub fn cmd_end_session(
 
     // Advance the durable, position-based progress to where the session ended, so
     // tomorrow's Today resumes at the next sitting. `end_locator` is a global offset.
-    if let Some(global) = end_locator.as_deref().and_then(|l| l.trim().parse::<i64>().ok()) {
+    if let Some(global) = end_locator
+        .as_deref()
+        .and_then(|l| l.trim().parse::<i64>().ok())
+    {
         if let Ok(book_id) = conn.query_row(
             "SELECT book_id FROM reading_sessions WHERE id = ?1",
             params![session_id],

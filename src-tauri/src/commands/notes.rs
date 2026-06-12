@@ -159,12 +159,9 @@ fn read_note(conn: &rusqlite::Connection, id: &str) -> Result<Note, AppError> {
 /// `exported_markdown_path` column points at the shared book file.
 fn reexport_note(conn: &rusqlite::Connection, mut note: Note) -> Result<Note, AppError> {
     let now = Utc::now().to_rfc3339();
-    if let Ok(path) = export::export_book_literature_note(
-        conn,
-        &export::root_for(conn),
-        &note.book_id,
-        &now,
-    ) {
+    if let Ok(path) =
+        export::export_book_literature_note(conn, &export::root_for(conn), &note.book_id, &now)
+    {
         log::log_export("book", &path.to_string_lossy());
         note.exported_markdown_path = Some(path.to_string_lossy().to_string());
         conn.execute(

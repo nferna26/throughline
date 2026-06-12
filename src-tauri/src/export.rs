@@ -291,7 +291,12 @@ const OWNED_FRONTMATTER_KEYS: &[&str] = &[
 /// Render the flat, app-owned frontmatter block (no nested YAML). `now` is the
 /// ISO timestamp the caller supplies (deterministic in tests — never `now()`
 /// inside here). `extra` carries user-added keys to preserve verbatim, in order.
-fn render_frontmatter(book: &Book, note_count: usize, now: &str, extra: &[(String, String)]) -> String {
+fn render_frontmatter(
+    book: &Book,
+    note_count: usize,
+    now: &str,
+    extra: &[(String, String)],
+) -> String {
     let mut out = String::new();
     out.push_str("---\n");
     out.push_str(&format!("title: {}\n", yaml_escape(&book.title)));
@@ -501,8 +506,7 @@ fn merge_into_existing(existing: &str, book: &Book, notes: &[Note], now: &str) -
 
     // Map current notes by export id for quick lookup, and track which got placed.
     use std::collections::HashMap;
-    let by_id: HashMap<String, &Note> =
-        notes.iter().map(|n| (note_export_id(n), n)).collect();
+    let by_id: HashMap<String, &Note> = notes.iter().map(|n| (note_export_id(n), n)).collect();
 
     let (fences, open_ids) = find_fences(body);
 
@@ -764,7 +768,8 @@ mod tests {
         }
         // Lowercase ascii + hyphens only (plus the id suffix).
         assert!(
-            slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+            slug.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
             "slug not clean: {slug}"
         );
         assert!(slug.contains("foo-bar-baz"), "title words present: {slug}");
@@ -797,8 +802,26 @@ mod tests {
     #[test]
     fn literature_note_has_frontmatter_callout_and_chapter_grouping() {
         let conn = migrated_with_book();
-        insert_note(&conn, "n1", "Takeaway", "char:120", Some("Book I"), "grace precedes effort", None, None);
-        insert_note(&conn, "n2", "Question", "char:300", Some("Book II"), "can you seek what you don't know?", None, None);
+        insert_note(
+            &conn,
+            "n1",
+            "Takeaway",
+            "char:120",
+            Some("Book I"),
+            "grace precedes effort",
+            None,
+            None,
+        );
+        insert_note(
+            &conn,
+            "n2",
+            "Question",
+            "char:300",
+            Some("Book II"),
+            "can you seek what you don't know?",
+            None,
+            None,
+        );
         let (_p, md) = export_to_temp(&conn, "format");
 
         // Frontmatter keys (flat, app-owned).
@@ -859,9 +882,21 @@ mod tests {
     fn long_highlight_is_truncated_to_the_fair_use_cap() {
         let conn = migrated_with_book();
         let long: String = "x".repeat(400);
-        insert_note(&conn, "h2", "Highlight", "char:10", None, "", None, Some(&long));
+        insert_note(
+            &conn,
+            "h2",
+            "Highlight",
+            "char:10",
+            None,
+            "",
+            None,
+            Some(&long),
+        );
         let (_p, md) = export_to_temp(&conn, "longhl");
-        assert!(md.contains('…'), "a >300 highlight must be truncated + ellipsis:\n{md}");
+        assert!(
+            md.contains('…'),
+            "a >300 highlight must be truncated + ellipsis:\n{md}"
+        );
         // No run of the book's own words exceeds the cap.
         assert!(
             !md.contains(&"x".repeat(QUOTE_WARN_LIMIT + 1)),
@@ -874,7 +909,11 @@ mod tests {
         // COPYRIGHT INVARIANT: a Takeaway/MarginNote/TutorNote must NEVER export the
         // raw anchored passage held in the DB — only the reader's/AI body exports.
         let conn = migrated_with_book();
-        for (id, kind) in [("t1", "Takeaway"), ("m1", "MarginNote"), ("u1", "TutorNote")] {
+        for (id, kind) in [
+            ("t1", "Takeaway"),
+            ("m1", "MarginNote"),
+            ("u1", "TutorNote"),
+        ] {
             insert_note(
                 &conn,
                 id,
@@ -891,20 +930,38 @@ mod tests {
             !md.contains("the unjust man is happy"),
             "anchored passage leaked for a non-highlight:\n{md}"
         );
-        assert!(md.contains("the reader's own words"), "body exports instead");
+        assert!(
+            md.contains("the reader's own words"),
+            "body exports instead"
+        );
         // TutorNote renders as the reader-facing "Tutor", never the raw enum text.
         assert!(md.contains("> [!abstract] Tutor"));
-        assert!(!md.contains("] TutorNote"), "raw enum label must not be a reader label");
+        assert!(
+            !md.contains("] TutorNote"),
+            "raw enum label must not be a reader label"
+        );
     }
 
     #[test]
     fn short_quote_is_truncated_and_renders_under_the_body() {
         let conn = migrated_with_book();
         let long_q: String = "q".repeat(400);
-        insert_note(&conn, "t2", "Takeaway", "char:10", None, "a body", Some(&long_q), None);
+        insert_note(
+            &conn,
+            "t2",
+            "Takeaway",
+            "char:10",
+            None,
+            "a body",
+            Some(&long_q),
+            None,
+        );
         let (_p, md) = export_to_temp(&conn, "shortq");
         assert!(md.contains("a body"));
-        assert!(md.contains('…'), "the >300 short quote must be truncated:\n{md}");
+        assert!(
+            md.contains('…'),
+            "the >300 short quote must be truncated:\n{md}"
+        );
         assert!(
             !md.contains(&"q".repeat(QUOTE_WARN_LIMIT + 1)),
             "no exported run may exceed the cap"
@@ -914,7 +971,16 @@ mod tests {
     #[test]
     fn reexport_preserves_a_hand_edit_outside_the_fences() {
         let conn = migrated_with_book();
-        insert_note(&conn, "n1", "Takeaway", "char:120", Some("Book I"), "first body", None, None);
+        insert_note(
+            &conn,
+            "n1",
+            "Takeaway",
+            "char:120",
+            Some("Book I"),
+            "first body",
+            None,
+            None,
+        );
         let root = std::env::temp_dir().join(format!("tl-litnote-idem-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(&root).unwrap();
@@ -923,10 +989,7 @@ mod tests {
         // Reader hand-edits the file OUTSIDE any fence: adds prose + a user FM key.
         let original = std::fs::read_to_string(&path).unwrap();
         let edited = original
-            .replace(
-                "---\ntitle:",
-                "---\nmy_custom_key: kept\ntitle:",
-            )
+            .replace("---\ntitle:", "---\nmy_custom_key: kept\ntitle:")
             .replace(
                 "> [!info] Reading source",
                 "My own paragraph the reader wrote.\n\n> [!info] Reading source",
@@ -949,7 +1012,10 @@ mod tests {
             "user-added frontmatter key must survive:\n{after}"
         );
         // The note's fence content updated in place.
-        assert!(after.contains("UPDATED body"), "note fence updated in place");
+        assert!(
+            after.contains("UPDATED body"),
+            "note fence updated in place"
+        );
         assert!(!after.contains("first body"), "old fence content replaced");
         // App-owned key refreshed.
         assert!(after.contains("last_export: 2026-06-11T00:00:00Z"));
@@ -963,8 +1029,26 @@ mod tests {
     #[test]
     fn a_hand_broken_fence_does_not_swallow_prose_between_notes() {
         let conn = migrated_with_book();
-        insert_note(&conn, "n1", "Takeaway", "char:120", Some("Book I"), "first body", None, None);
-        insert_note(&conn, "n2", "Takeaway", "char:200", Some("Book I"), "second body", None, None);
+        insert_note(
+            &conn,
+            "n1",
+            "Takeaway",
+            "char:120",
+            Some("Book I"),
+            "first body",
+            None,
+            None,
+        );
+        insert_note(
+            &conn,
+            "n2",
+            "Takeaway",
+            "char:200",
+            Some("Book I"),
+            "second body",
+            None,
+            None,
+        );
         let root = std::env::temp_dir().join(format!("tl-litnote-broken-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(&root).unwrap();
@@ -977,34 +1061,75 @@ mod tests {
         std::fs::write(&path, &broken).unwrap();
 
         // A re-export (e.g. n2 gets edited).
-        conn.execute("UPDATE notes SET body='second UPDATED' WHERE id='n2'", []).unwrap();
+        conn.execute("UPDATE notes SET body='second UPDATED' WHERE id='n2'", [])
+            .unwrap();
         export_book_literature_note(&conn, &root, "b1", NOW).unwrap();
         let after = std::fs::read_to_string(&path).unwrap();
 
         // The reader's interposed prose survives; n2 updates; nothing duplicates.
-        assert!(after.contains("MY PROSE BETWEEN THE NOTES."), "broken fence must not swallow reader prose:\n{after}");
-        assert!(after.contains("first body"), "the broken n1 region is preserved verbatim:\n{after}");
-        assert!(after.contains("second UPDATED"), "n2 still updates:\n{after}");
-        assert_eq!(after.matches("id=tl-n-n2").count(), 1, "n2 must not be duplicated:\n{after}");
-        assert_eq!(after.matches("id=tl-n-n1").count(), 1, "n1 must not be duplicated:\n{after}");
+        assert!(
+            after.contains("MY PROSE BETWEEN THE NOTES."),
+            "broken fence must not swallow reader prose:\n{after}"
+        );
+        assert!(
+            after.contains("first body"),
+            "the broken n1 region is preserved verbatim:\n{after}"
+        );
+        assert!(
+            after.contains("second UPDATED"),
+            "n2 still updates:\n{after}"
+        );
+        assert_eq!(
+            after.matches("id=tl-n-n2").count(),
+            1,
+            "n2 must not be duplicated:\n{after}"
+        );
+        assert_eq!(
+            after.matches("id=tl-n-n1").count(),
+            1,
+            "n1 must not be duplicated:\n{after}"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
     fn deleted_note_fence_is_removed_on_reexport() {
         let conn = migrated_with_book();
-        insert_note(&conn, "k1", "Takeaway", "char:10", Some("Book I"), "keep me", None, None);
-        insert_note(&conn, "d1", "Question", "char:20", Some("Book I"), "delete me", None, None);
+        insert_note(
+            &conn,
+            "k1",
+            "Takeaway",
+            "char:10",
+            Some("Book I"),
+            "keep me",
+            None,
+            None,
+        );
+        insert_note(
+            &conn,
+            "d1",
+            "Question",
+            "char:20",
+            Some("Book I"),
+            "delete me",
+            None,
+            None,
+        );
         let root = std::env::temp_dir().join(format!("tl-litnote-del-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(&root).unwrap();
         let path = export_book_literature_note(&conn, &root, "b1", NOW).unwrap();
-        assert!(std::fs::read_to_string(&path).unwrap().contains("delete me"));
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("delete me"));
 
         conn.execute("DELETE FROM notes WHERE id='d1'", []).unwrap();
         export_book_literature_note(&conn, &root, "b1", NOW).unwrap();
         let after = std::fs::read_to_string(&path).unwrap();
-        assert!(!after.contains("delete me"), "deleted note fence removed:\n{after}");
+        assert!(
+            !after.contains("delete me"),
+            "deleted note fence removed:\n{after}"
+        );
         assert!(!after.contains("tl-n-d1"), "deleted note id gone");
         assert!(after.contains("keep me"), "surviving note intact");
         std::fs::remove_dir_all(&root).ok();
@@ -1013,23 +1138,45 @@ mod tests {
     #[test]
     fn new_note_inserts_a_fence_without_clobbering_existing() {
         let conn = migrated_with_book();
-        insert_note(&conn, "a1", "Takeaway", "char:10", Some("Book I"), "alpha", None, None);
+        insert_note(
+            &conn,
+            "a1",
+            "Takeaway",
+            "char:10",
+            Some("Book I"),
+            "alpha",
+            None,
+            None,
+        );
         let root = std::env::temp_dir().join(format!("tl-litnote-ins-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(&root).unwrap();
         let path = export_book_literature_note(&conn, &root, "b1", NOW).unwrap();
 
         // Reader edits prose, then a NEW note is added + re-export.
-        let edited = std::fs::read_to_string(&path)
-            .unwrap()
-            .replace("<!-- /tl:note -->", "<!-- /tl:note -->\n\nReader prose between notes.");
+        let edited = std::fs::read_to_string(&path).unwrap().replace(
+            "<!-- /tl:note -->",
+            "<!-- /tl:note -->\n\nReader prose between notes.",
+        );
         std::fs::write(&path, &edited).unwrap();
-        insert_note(&conn, "b2", "Question", "char:20", Some("Book I"), "beta", None, None);
+        insert_note(
+            &conn,
+            "b2",
+            "Question",
+            "char:20",
+            Some("Book I"),
+            "beta",
+            None,
+            None,
+        );
         export_book_literature_note(&conn, &root, "b1", NOW).unwrap();
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(after.contains("alpha"), "existing note kept");
         assert!(after.contains("beta"), "new note inserted");
-        assert!(after.contains("Reader prose between notes."), "reader prose survived");
+        assert!(
+            after.contains("Reader prose between notes."),
+            "reader prose survived"
+        );
         assert!(after.contains("note_count: 2"));
         std::fs::remove_dir_all(&root).ok();
     }
@@ -1087,8 +1234,26 @@ mod tests {
     fn no_exported_run_exceeds_the_cap_and_sha_present() {
         let conn = migrated_with_book();
         let long: String = "z".repeat(500);
-        insert_note(&conn, "h1", "Highlight", "char:10", None, "", None, Some(&long));
-        insert_note(&conn, "t1", "Takeaway", "char:20", None, "body", Some(&long), None);
+        insert_note(
+            &conn,
+            "h1",
+            "Highlight",
+            "char:10",
+            None,
+            "",
+            None,
+            Some(&long),
+        );
+        insert_note(
+            &conn,
+            "t1",
+            "Takeaway",
+            "char:20",
+            None,
+            "body",
+            Some(&long),
+            None,
+        );
         let (_p, md) = export_to_temp(&conn, "caps");
         assert!(md.contains("source_private: true"));
         assert!(md.contains("source_sha256: sha-abc"));

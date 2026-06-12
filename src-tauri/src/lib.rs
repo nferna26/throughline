@@ -111,10 +111,9 @@ fn open_db_resilient() -> rusqlite::Connection {
             // The backup path is intentionally not logged in full (it embeds
             // the data dir); only the fact + retention count is recorded.
             match backup::write_rolling_backup(&c) {
-                Ok(_) => tracing::info!(
-                    "reading.db backup written ({} kept)",
-                    backup::KEEP_BACKUPS
-                ),
+                Ok(_) => {
+                    tracing::info!("reading.db backup written ({} kept)", backup::KEEP_BACKUPS)
+                }
                 Err(e) => tracing::warn!("reading.db backup skipped: {e:#}"),
             }
             c
@@ -145,12 +144,12 @@ fn open_db_resilient() -> rusqlite::Connection {
                     }
                     // The restored file failed to re-open (should not happen — it
                     // was validated). Fall through to fresh rather than crash.
-                    tracing::error!(
-                        "restored backup unexpectedly failed to open; starting fresh"
-                    );
+                    tracing::error!("restored backup unexpectedly failed to open; starting fresh");
                 }
                 Ok(None) => {
-                    tracing::error!("no usable backup found; preserving corrupt DB and starting fresh");
+                    tracing::error!(
+                        "no usable backup found; preserving corrupt DB and starting fresh"
+                    );
                 }
                 Err(e) => {
                     tracing::error!("backup restore attempt failed ({e:#}); preserving corrupt DB and starting fresh");

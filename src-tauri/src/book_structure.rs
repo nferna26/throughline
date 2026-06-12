@@ -421,7 +421,10 @@ fn detect_contents(lines: &[Line<'_>], after: usize, marks: &mut Vec<Mark>) -> O
         idx += 1;
     }
 
-    let item_count = entries.iter().filter(|(_, r)| *r == "contents-item").count();
+    let item_count = entries
+        .iter()
+        .filter(|(_, r)| *r == "contents-item")
+        .count();
     if item_count < 2 {
         // Not enough of a list to trust as a contents block.
         return None;
@@ -504,9 +507,12 @@ fn strip_leading_ordinal(s: &str) -> Option<&str> {
     let core = first.trim_end_matches('.');
     let is_num = !core.is_empty() && core.chars().all(|c| c.is_ascii_digit());
     let is_roman = !core.is_empty()
-        && core
-            .chars()
-            .all(|c| matches!(c.to_ascii_uppercase(), 'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M'));
+        && core.chars().all(|c| {
+            matches!(
+                c.to_ascii_uppercase(),
+                'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M'
+            )
+        });
     if is_num || is_roman {
         Some(rest)
     } else {
@@ -753,8 +759,14 @@ mod tests {
         let body = walden_body();
         let s = analyze(&body);
         let kinds: Vec<&str> = s.role_marks.iter().map(|m| m.kind.as_str()).collect();
-        assert!(kinds.contains(&"contents-label"), "no contents-label: {kinds:?}");
-        assert!(kinds.contains(&"contents-part"), "no contents-part: {kinds:?}");
+        assert!(
+            kinds.contains(&"contents-label"),
+            "no contents-label: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&"contents-part"),
+            "no contents-part: {kinds:?}"
+        );
         assert!(
             kinds.iter().filter(|k| **k == "contents-item").count() >= 3,
             "expected >= 3 contents-item: {kinds:?}"
@@ -794,7 +806,10 @@ mod tests {
             .filter(|m| m.kind == "chapter-title")
             .map(|m| &body[m.start..m.end])
             .collect();
-        assert!(titles.contains(&"Economy"), "chapter-title for Economy: {titles:?}");
+        assert!(
+            titles.contains(&"Economy"),
+            "chapter-title for Economy: {titles:?}"
+        );
         let bf = s
             .role_marks
             .iter()

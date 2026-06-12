@@ -207,7 +207,11 @@ mod tests {
     /// (`db_path`, `backups_dir`) then resolve under the temp dir.
     fn isolated_open() -> (std::sync::MutexGuard<'static, ()>, Connection, PathBuf) {
         let g = paths::lock_env_for_test();
-        let unique = format!("tl-backup-{}-{}", std::process::id(), super::timestamp_slug());
+        let unique = format!(
+            "tl-backup-{}-{}",
+            std::process::id(),
+            super::timestamp_slug()
+        );
         let data = std::env::temp_dir().join(&unique);
         let _ = std::fs::remove_dir_all(&data);
         unsafe {
@@ -304,7 +308,10 @@ mod tests {
 
         // Restore path: newest good backup is validated and copied into place.
         let restored = try_restore_newest_backup().expect("restore call");
-        assert!(restored.is_some(), "a good backup should have been restored");
+        assert!(
+            restored.is_some(),
+            "a good backup should have been restored"
+        );
 
         // The live DB now opens and still has the reader's row — not wiped.
         let conn2 = crate::db::open_and_migrate().expect("open after restore");
@@ -386,11 +393,9 @@ mod tests {
         assert!(restored.is_some(), "the newest GOOD backup should restore");
         let conn2 = crate::db::open_and_migrate().expect("open after restore");
         let n: i64 = conn2
-            .query_row(
-                "SELECT COUNT(*) FROM books WHERE id='b_newest'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM books WHERE id='b_newest'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(n, 1);
         drop(conn2);
