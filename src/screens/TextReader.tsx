@@ -975,6 +975,10 @@ export default function TextReader({ today, onExit }: Props) {
             className="tl-margin-rail"
             aria-label="Margin"
             aria-hidden={!marginIsVisible}
+            // inert keeps the always-mounted rail's cards (note inputs, delete
+            // buttons) out of the focus order while it's visually collapsed —
+            // aria-hidden alone would leave focusable elements inside (WCAG).
+            inert={!marginIsVisible}
           >
             <div className="tl-margin-inner">
               <div className="tl-margin-head">

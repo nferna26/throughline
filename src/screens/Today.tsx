@@ -11,11 +11,12 @@ interface Props {
   onImport: () => void;
   /** Open the reader at the current sitting. */
   onStart: (t: TodayCard) => void;
-  onRefresh: () => Promise<void> | void;
   /** Create a fresh plan for the book (the plan-less "Start a plan" flow). */
   onNewPlan?: (book: Book) => void;
   /** Jump to the Notes tab (the finished-book "Review your notes" action). */
   onReviewNotes?: () => void;
+  /** Open the manage-plans view (the quiet "earlier attempts" link). */
+  onPlans?: () => void;
 }
 
 // Time-of-day greeting in the app's quiet voice. The kicker is the only place the
@@ -39,7 +40,7 @@ function minutesPhrase(n: number): string {
   return `About ${word} minute${n === 1 ? "" : "s"}.`;
 }
 
-export default function Today({ today, onDiscover, onImport, onStart, onRefresh, onNewPlan, onReviewNotes }: Props) {
+export default function Today({ today, onDiscover, onImport, onStart, onNewPlan, onReviewNotes, onPlans }: Props) {
   const bookId = today?.book.id;
   // How many plans this book has — drives the quiet "Plans · N earlier" link.
   const [plansCount, setPlansCount] = useState(0);
@@ -156,7 +157,7 @@ export default function Today({ today, onDiscover, onImport, onStart, onRefresh,
       </button>
 
       {plansCount > 1 && (
-        <button className="tl-link-quiet tl-desk-plans" onClick={() => onRefresh()} aria-label="Earlier attempts at this book">
+        <button className="tl-link-quiet tl-desk-plans" onClick={() => onPlans?.()} aria-label="Earlier attempts at this book">
           {plansCount - 1} earlier attempt{plansCount - 1 === 1 ? "" : "s"}
         </button>
       )}

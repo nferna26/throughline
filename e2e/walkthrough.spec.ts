@@ -25,23 +25,27 @@ test("welcome-first-run", async ({ page }) => {
   // The privacy + durability promise (the switching-anxiety answer) is stated
   // plainly — and truthfully: books stay local; an opted-in tutor sends only
   // the selected passage (review P1-4, CORE-1002).
-  await expect(page.getByText(/only the passage you select is sent — never the book/i)).toBeVisible();
+  await expect(page.getByText(/only the passage you select is sent, never the book/i)).toBeVisible();
   await expect(page.getByText(/Markdown that outlives the app/i)).toBeVisible();
   await shoot(page, "00-welcome");
 });
 
-test("recovery-when-behind", async ({ page }) => {
-  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_BEHIND__ = true; });
+test("returning-after-a-lapse", async ({ page }) => {
+  // "Behind" is unrepresentable (Stage 2): however long the reader was away,
+  // the screen welcomes them back with no tally, no recovery, no options.
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_RETURNING__ = true; });
   await page.goto("/");
-  // Falling behind must never dead-end: a visible recovery panel with options.
-  await expect(page.getByText(/calm way back|behind/i).first()).toBeVisible();
-  await expect(page.getByText(/extend|re-pace|finish by/i).first()).toBeVisible();
-  await shoot(page, "09-recovery");
+  await expect(page.getByText("Welcome back")).toBeVisible();
+  await expect(page.getByText("The story kept your place.")).toBeVisible();
+  await expect(page.getByText(/Book II is waiting where you left it/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue reading" })).toBeVisible();
+  await expect(page.getByText(/behind|streak|missed|catch.?up|recovery/i)).toHaveCount(0);
+  await shoot(page, "09-returning");
 });
 
 test("plans-frontispiece", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /see plans for this book/i }).click();
+  await page.getByRole("button", { name: /earlier attempt/i }).click();
   // The live plan is the focal plate; earlier attempts are quiet back-matter.
   await expect(page.getByText("Slow mornings")).toBeVisible();
   await expect(page.getByText("Live").first()).toBeVisible();
@@ -53,14 +57,14 @@ test("plans-frontispiece", async ({ page }) => {
 test("plans-resting", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_RESTING__ = true; });
   await page.goto("/");
-  await page.getByRole("button", { name: /see plans for this book/i }).click();
+  await page.getByRole("button", { name: /earlier attempt/i }).click();
   await expect(page.getByText(/No live plan right now/i)).toBeVisible();
   await shoot(page, "13-plans-resting");
 });
 
 test("replan-decision", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /see plans for this book/i }).click();
+  await page.getByRole("button", { name: /earlier attempt/i }).click();
   // "Start a new plan" while a live plan exists → the shame-free decision dialog.
   await page.getByRole("button", { name: /start a new plan/i }).first().click();
   await expect(page.getByRole("dialog")).toBeVisible();
@@ -80,33 +84,82 @@ test("finished-book", async ({ page }) => {
   await shoot(page, "17-finished-book");
 });
 
-test("plan-ready-does-not-preprint-the-opening", async ({ page }) => {
-  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_PLAN_READY__ = true; });
+test("day-one-does-not-preprint-the-opening", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_DAY_ONE__ = true; });
   await page.goto("/");
-  // CORE-1049: a fresh section's opening is NOT pre-printed on Today — the reader
-  // meets it the instant they tap Start, so re-printing it earns nothing.
-  await expect(page.getByText(/Plan ready/i).first()).toBeVisible();
+  // Day one is calm and bare: no clock, no fill in the hairline — and the
+  // section's opening is NOT pre-printed (CORE-1049): the reader meets it the
+  // instant they tap Begin reading.
+  await expect(page.getByText("Beginning today")).toBeVisible();
+  await expect(page.getByText("We've set an unhurried pace.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Begin reading" })).toBeVisible();
   await expect(page.getByText(/Begin the morning by saying to thyself/)).toHaveCount(0);
-  await expect(page.getByRole("note", { name: /Before you read/i })).toHaveCount(0);
+  await shoot(page, "24-day-one");
 });
 
 test("today", async ({ page }) => {
   await page.goto("/");
+  // The book on the desk: title largest, the chapter line, minutes as
+  // reassurance, the hairline as the only (silent) position signal.
   await expect(page.getByRole("heading", { name: "Meditations" })).toBeVisible();
-  await expect(page.getByText(/Begin the morning by saying to thyself/).first()).toBeVisible();
+  await expect(page.getByText(/^This (morning|afternoon|evening)$/)).toBeVisible();
+  await expect(page.getByText("Book II", { exact: true })).toBeVisible();
+  await expect(page.getByText("About six minutes.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue reading" })).toBeVisible();
+  await expect(page.locator(".tl-hairline .fill")).toBeAttached();
+  await expect(page.getByText(/\d+\s*%/)).toHaveCount(0);
   await shoot(page, "01-today");
+});
+
+test("today-dark", async ({ page }) => {
+  await page.addInitScript(() => { try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ } });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Meditations" })).toBeVisible();
+  await shoot(page, "01b-today-dark");
 });
 
 test("reader", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /session/i }).first().click();
+  await page.getByRole("button", { name: "Continue reading" }).click();
   await expect(page.getByText(/Begin the morning by saying to thyself/).first()).toBeVisible();
   await shoot(page, "02-reader");
 });
 
+test("plan-setup-one-question", async ({ page }) => {
+  // The app-level loop segment: a plan-less book → Start a plan → the ONE
+  // question → Begin reading lands straight in the first sitting.
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_NO_PLAN__ = true; });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start a plan" }).click();
+
+  await expect(page.getByText("New on your desk")).toBeVisible();
+  await expect(page.getByText("How much feels right at a sitting?")).toBeVisible();
+  await expect(page.getByRole("radio", { name: /A steady sitting/ })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByText(/you'd finish around (early|mid|late) /)).toBeVisible();
+  // Every debt-forming surface is gone.
+  await expect(page.getByText(/finish by|days a week|margin help|name this plan|behind|streak/i)).toHaveCount(0);
+  await shoot(page, "25-plan-one-question");
+
+  await page.getByRole("button", { name: "Begin reading" }).click();
+  await expect(page.getByText(/Begin the morning by saying to thyself/).first()).toBeVisible();
+});
+
+test("sitting-bounded-reader", async ({ page }) => {
+  // A split sitting (sub-range of Book II): the reader renders only the
+  // sitting's slice and navigation cannot leave the sitting.
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_SPLIT_SITTING__ = true; });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Continue reading" }).click();
+  await expect(page.getByText(/Begin the morning by saying to thyself/).first()).toBeVisible();
+  // Text past the sitting end never renders.
+  await expect(page.getByText(/But I who have seen the nature of the good/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Next section/i })).toBeDisabled();
+  await shoot(page, "26-sitting-bounded");
+});
+
 test("reader-margin-and-tutor", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /session/i }).first().click();
+  await page.getByRole("button", { name: "Continue reading" }).click();
   await expect(page.locator(".tl-readcol p").first()).toBeVisible();
 
   // Select a passage with a REAL range (Chromium has real layout, unlike jsdom),
@@ -137,7 +190,7 @@ test("reader-margin-and-tutor", async ({ page }) => {
 test("cloud-consent-gate", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_NEEDS_CONSENT__ = true; });
   await page.goto("/");
-  await page.getByRole("button", { name: /session/i }).first().click();
+  await page.getByRole("button", { name: "Continue reading" }).click();
   await expect(page.locator(".tl-readcol p").first()).toBeVisible();
   await page.evaluate(() => {
     const ps = document.querySelectorAll(".tl-readcol p");
@@ -161,7 +214,7 @@ test("cloud-consent-gate", async ({ page }) => {
 test("cap-exhausted-fallback", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_CAP_EXHAUSTED__ = true; });
   await page.goto("/");
-  await page.getByRole("button", { name: /session/i }).first().click();
+  await page.getByRole("button", { name: "Continue reading" }).click();
   await expect(page.locator(".tl-readcol p").first()).toBeVisible();
   await page.evaluate(() => {
     const ps = document.querySelectorAll(".tl-readcol p");
@@ -201,7 +254,7 @@ test("tutor-fuel-nudge-75", async ({ page }) => {
     w.__TL_FAKE_REMAINING_FRACTION__ = 0.2; // 80% used → gentle nudge
   });
   await page.goto("/");
-  await page.getByRole("button", { name: /session/i }).first().click();
+  await page.getByRole("button", { name: "Continue reading" }).click();
   await expect(page.locator(".tl-readcol p").first()).toBeVisible();
   await page.evaluate(() => {
     const ps = document.querySelectorAll(".tl-readcol p");
@@ -228,7 +281,7 @@ test("tutor-fuel-nudge-90", async ({ page }) => {
     w.__TL_FAKE_REMAINING_FRACTION__ = 0.07; // 93% used → clearer nudge
   });
   await page.goto("/");
-  await page.getByRole("button", { name: /session/i }).first().click();
+  await page.getByRole("button", { name: "Continue reading" }).click();
   await expect(page.locator(".tl-readcol p").first()).toBeVisible();
   await page.evaluate(() => {
     const ps = document.querySelectorAll(".tl-readcol p");

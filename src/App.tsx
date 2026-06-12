@@ -8,11 +8,13 @@ import BookSwitcher from "./screens/BookSwitcher";
 import NotesBrowser from "./screens/NotesBrowser";
 import BookSetupSheet from "./screens/BookSetupSheet";
 import Discover from "./screens/Discover";
+import PlansView from "./components/PlansView";
+import RePlanDialog from "./components/RePlanDialog";
 import TLIcon from "./components/TLIcon";
 import ThroughlineMark from "./components/ThroughlineMark";
 import "./App.css";
 import "./tl-theme.css";
-import type { TodayCard, Book, ImportOutcome, ExportPathStatus } from "./types";
+import type { TodayCard, Book, ImportOutcome, ExportPathStatus, PlanSummary } from "./types";
 import { errorMessage } from "./types";
 import { purgeLegacyBriefings } from "./sectionBriefing";
 import { migrateLegacyLocalStorageKeys } from "./legacyStorage";
@@ -54,6 +56,7 @@ type View =
   | { kind: "today" }
   | { kind: "reader"; today: TodayCard }
   | { kind: "setup"; book: Book }
+  | { kind: "plans" }
   | { kind: "discover" }
   | { kind: "settings" };
 
@@ -283,6 +286,16 @@ export default function App() {
     refreshToday();
   }
 
+  // "Start a new plan" from the manage-plans view: a live plan gets the calm
+  // keep / pause / replace decision first; a plan-less book goes straight to
+  // the one-question setup.
+  const [replanActive, setReplanActive] = useState<PlanSummary | null>(null);
+  async function startNewPlanFlow(book: Book) {
+    const active = await invoke<PlanSummary | null>("cmd_get_active_plan", { bookId: book.id }).catch(() => null);
+    if (active) setReplanActive(active);
+    else await newPlan(book);
+  }
+
   if (today === undefined) {
     // A failed initial load gets an honest error + retry, never an endless spinner.
     if (loadError && today === undefined) {
@@ -384,7 +397,7 @@ export default function App() {
         {view.kind === "today" && (
           today === null ? (
             // No books yet — the welcome card owns book acquisition; no book chrome.
-            <Today today={null} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onRefresh={refreshToday} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} />
+            <Today today={null} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} />
           ) : (
             <>
               <div className="tl-bookhead">
@@ -415,7 +428,7 @@ export default function App() {
                 aria-labelledby={tab === "today" ? "tab-today" : "tab-notes"}
               >
                 {tab === "today" ? (
-                  <Today today={today} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onRefresh={refreshToday} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} />
+                  <Today today={today} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} onPlans={() => setView({ kind: "plans" })} />
                 ) : (
                   <NotesBrowser book={today.book} />
                 )}
@@ -428,6 +441,34 @@ export default function App() {
         )}
         {view.kind === "setup" && (
           <BookSetupSheet book={view.book} onDone={finishSetup} />
+        )}
+        {view.kind === "plans" && today && (
+          <PlansView
+            bookId={today.book.id}
+            bookTitle={today.book.title}
+            bookAuthor={today.book.author}
+            today={today}
+            onClose={() => setView({ kind: "today" })}
+            onContinueReading={() => startReading(today)}
+            onStartNewPlan={() => { void startNewPlanFlow(today.book); }}
+            onChanged={refreshToday}
+          />
+        )}
+        {replanActive && today && (
+          <RePlanDialog
+            bookTitle={today.book.title}
+            planName={replanActive.name}
+            progressLine={today.fraction_complete > 0 ? `${Math.round(today.fraction_complete * 100)}% through` : null}
+            onCancel={() => setReplanActive(null)}
+            onResolve={async (choice) => {
+              const active = replanActive;
+              setReplanActive(null);
+              if (choice === "keep") { setView({ kind: "today" }); return; }
+              if (choice === "pause") await invoke("cmd_pause_plan", { planId: active.id }).catch(() => {});
+              else await invoke("cmd_archive_plan", { planId: active.id }).catch(() => {});
+              await newPlan(today.book);
+            }}
+          />
         )}
         {view.kind === "discover" && (
           <Discover onBack={() => setView({ kind: "today" })} onPicked={onDiscoverPick} />

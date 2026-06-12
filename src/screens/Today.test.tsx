@@ -45,7 +45,6 @@ function renderToday(today: TodayCard | null, over: Partial<Parameters<typeof To
       onDiscover={noop}
       onImport={noop}
       onStart={noop}
-      onRefresh={noop}
       onNewPlan={noop}
       onReviewNotes={noop}
       {...over}

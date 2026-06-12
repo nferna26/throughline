@@ -245,7 +245,8 @@
 }
 .tl-desk-kicker {
   font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
-  color: var(--tl-faint); margin: 0 0 18px;
+  /* muted, not faint: 11px text needs AA contrast (the handoff's own fallback). */
+  color: var(--tl-muted); margin: 0 0 18px;
 }
 .tl-desk-title {
   font-family: var(--tl-serif); font-weight: 500; font-size: 46px;
@@ -293,7 +294,7 @@
   border-radius: 4px; transition: color 150ms ease;
 }
 .tl-link-quiet:hover { color: var(--tl-ink); }
-.tl-desk-plans { margin-top: 12px; font-size: 12.5px; color: var(--tl-faint); }
+.tl-desk-plans { margin-top: 12px; font-size: 12.5px; color: var(--tl-muted); }
 
 .tl-btn {
   appearance: none; cursor: pointer;
@@ -504,7 +505,9 @@
 .fp-entry:first-of-type { border-top: none; }
 .fp-entry .em-name { font-family: var(--tl-serif); font-size: 16px; color: var(--tl-ink); line-height: 1.25; }
 .fp-entry .em-meta { margin-top: 4px; font-size: 12.5px; color: var(--tl-muted); display: flex; flex-wrap: wrap; align-items: center; gap: 3px 9px; }
-.fp-entry .em-actions { margin-top: var(--tl-3); display: flex; gap: var(--tl-2); opacity: 0; transform: translateY(-2px); transition: opacity 150ms ease, transform 150ms ease; }
+/* Reveal is INSTANT (house motion rule) — a fade would also strand axe's
+   contrast scan mid-animation when the cursor happens to rest on an entry. */
+.fp-entry .em-actions { margin-top: var(--tl-3); display: flex; gap: var(--tl-2); opacity: 0; transform: translateY(-2px); }
 .fp-entry:hover .em-actions, .fp-entry:focus-within .em-actions { opacity: 1; transform: none; }
 
 .tl-act { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--tl-muted); background: transparent; border: 1px solid var(--tl-line); border-radius: var(--tl-r-pill); padding: 6px 12px; transition: color 150ms ease, border-color 150ms ease, background 150ms ease; }
@@ -1157,7 +1160,7 @@
   line-height: 1.15; letter-spacing: -0.012em; text-wrap: balance;
   color: var(--tl-ink); margin: 0;
 }
-.tl-plan-meta { font-size: 12.5px; color: var(--tl-faint); letter-spacing: 0.02em; margin: 8px 0 0; }
+.tl-plan-meta { font-size: 12.5px; color: var(--tl-muted); letter-spacing: 0.02em; margin: 8px 0 0; }
 
 .tl-q-prompt { font-family: var(--tl-serif); font-size: 19px; font-weight: 500; color: var(--tl-ink); margin: 24px 0 16px; }
 .tl-q-cards { display: flex; gap: 10px; width: 100%; justify-content: center; }

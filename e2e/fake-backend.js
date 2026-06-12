@@ -26,11 +26,14 @@ But I who have seen the nature of the good that it is beautiful, and of the bad 
 For we are made for cooperation, like feet, like hands, like eyelids, like the rows of the upper and lower teeth. To act against one another then is contrary to nature; and it is acting against one another to be vexed and to turn away.`;
 
   // NB: section start/end locators are BARE number strings (the backend stores
-  // `usize.to_string()`), not the "char:N" tagged form used by note anchors.
+  // `usize.to_string()`), not the "char:N" tagged form used by note anchors —
+  // and they are GLOBAL, contiguous body offsets (each section starts where the
+  // previous one ends), exactly as the importer emits them.
+  const SEC2_END = SECTION_TEXT.length;
   const SECTIONS = [
-    { id: "sec_2", book_id: BOOK.id, label: "Book II", href: null, start_locator: "0", end_locator: String(SECTION_TEXT.length), estimated_units: SECTION_TEXT.length, sort_order: 0 },
-    { id: "sec_3", book_id: BOOK.id, label: "Book III", href: null, start_locator: "0", end_locator: "900", estimated_units: 900, sort_order: 1 },
-    { id: "sec_4", book_id: BOOK.id, label: "Book IV", href: null, start_locator: "0", end_locator: "900", estimated_units: 900, sort_order: 2 },
+    { id: "sec_2", book_id: BOOK.id, label: "Book II", href: null, start_locator: "0", end_locator: String(SEC2_END), estimated_units: SECTION_TEXT.length, sort_order: 0 },
+    { id: "sec_3", book_id: BOOK.id, label: "Book III", href: null, start_locator: String(SEC2_END), end_locator: String(SEC2_END + 900), estimated_units: 900, sort_order: 1 },
+    { id: "sec_4", book_id: BOOK.id, label: "Book IV", href: null, start_locator: String(SEC2_END + 900), end_locator: String(SEC2_END + 1800), estimated_units: 900, sort_order: 2 },
   ];
 
   let NOTES = [
@@ -55,33 +58,31 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
     ai_key_present_openai: false, ai_key_present_anthropic: false, ai_codex_creds_present: false,
   };
 
+  // The five-state TodayCard (Stage 2). The default is mid-book "reading";
+  // flags flip it into the other states. Locators are bare-digit globals.
+  const FIRST_PARA_END = SECTION_TEXT.indexOf("\n\n");
   const TODAY = {
     book: BOOK,
     plan: {
-      id: "plan_1", book_id: BOOK.id, start_date: "2026-06-01", target_finish_date: "2026-07-01",
-      daily_target_units: 1, days_per_week: 7, catchup_mode: "gentle", status: "active",
-      activated_at: "2026-06-01T09:00:00Z", original_finish_date: null,
+      id: "plan_1", book_id: BOOK.id, start_date: "2026-06-01", status: "active",
+      activated_at: "2026-06-01T09:00:00Z", sitting_length_minutes: 25,
     },
+    state: "reading",
+    chapter_label: "Book II",
+    phrase: null,
+    estimated_minutes: 6,
+    fraction_complete: 0.18,
+    next_label: null,
     section: SECTIONS[0],
-    section_completed: false,
-    estimated_minutes: 6, session_minutes: 25, monthly_pct: 18,
-    pace: { kind: "on_pace" }, day_index: 3, total_days: 30,
-    streak: { days_read_last_7: 4, minutes_last_7: 96 },
-    recovery: null, resume_locator: "char:0", resume_percent: 42,
-    plan_status: "active",
-    forecast: { state: "on_track", projected_finish_date: "2026-06-29", days_late: 0 },
+    sitting_start_locator: 0,
+    sitting_end_locator: SECTION_TEXT.length,
+    resume_locator: "0",
+    resume_percent: null,
     memory: {
       last_capture: { note_type: "MarginNote", body: "The whole book in one line.", chapter_label: "Book II", created_at: "2026-06-06T08:10:00Z" },
       highlight_count: 1, note_count: 1,
     },
-    // Resume-only teaser (CORE-1049): a fresh section's opening is never
-    // pre-printed; the surviving "Where you left off" variant carries the
-    // sentence the reader is returning to plus a genre-neutral prompt.
-    teaser: {
-      excerpt: "Begin the morning by saying to thyself, I shall meet with the busybody, the ungrateful, arrogant, deceitful, envious, unsocial.",
-      prompt: "Read for the thread — what is this paragraph carrying forward?",
-      locator: "char:0", is_resume_excerpt: true,
-    },
+    teaser: null,
   };
 
   const DISCOVER_PAGE = {
@@ -102,26 +103,23 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
   // ── Command table ────────────────────────────────────────────────────────────
   function handle(cmd, args) {
     switch (cmd) {
-      // window.__TL_FAKE_EMPTY__ → no books yet; __TL_FAKE_BEHIND__ → behind + recovery.
+      // window.__TL_FAKE_EMPTY__ → no books yet. The other flags pick a state:
+      // __TL_FAKE_DONE__ → finished; __TL_FAKE_DAY_ONE__ → day_one;
+      // __TL_FAKE_RETURNING__ → returning; __TL_FAKE_NO_PLAN__ → no_plan
+      // (cmd_configure_plan clears it, so Begin reading lands in the reader);
+      // __TL_FAKE_SPLIT_SITTING__ → the sitting is a sub-range of Book II.
       case "cmd_today":
         if (window.__TL_FAKE_EMPTY__) return null;
-        if (window.__TL_FAKE_DONE__) return Object.assign({}, TODAY, { section: null, pace: { kind: "done" }, plan_status: "active" });
-        if (window.__TL_FAKE_PLAN_READY__) return Object.assign({}, TODAY, { plan_status: "plan_ready", pace: { kind: "not_started" }, resume_locator: null, resume_percent: null, teaser: null });
-        if (window.__TL_FAKE_BEHIND__) {
-          return Object.assign({}, TODAY, {
-            pace: { kind: "behind", days_behind: 6 },
-            forecast: { state: "needs_rebalance", projected_finish_date: "2026-07-15", days_late: 6 },
-            recovery: {
-              headline: "You're 6 days behind — here's the calm way back.",
-              days_behind: 6,
-              options: [
-                { kind: "ResumeToday" },
-                { kind: "GentleCatchup", extra_minutes: 10, for_sessions: 5 },
-                { kind: "ExtendFinish", add_days: 10, new_finish: "2026-07-11" },
-              ],
-            },
-          });
-        }
+        if (window.__TL_FAKE_DONE__)
+          return Object.assign({}, TODAY, { state: "finished", section: null, next_label: "Book XII", sitting_start_locator: null, sitting_end_locator: null, resume_locator: null, fraction_complete: 1 });
+        if (window.__TL_FAKE_DAY_ONE__)
+          return Object.assign({}, TODAY, { state: "day_one", fraction_complete: 0, resume_locator: null });
+        if (window.__TL_FAKE_RETURNING__)
+          return Object.assign({}, TODAY, { state: "returning", resume_locator: "64" });
+        if (window.__TL_FAKE_NO_PLAN__)
+          return Object.assign({}, TODAY, { state: "no_plan", section: null, sitting_start_locator: null, sitting_end_locator: null, resume_locator: null, plan: Object.assign({}, TODAY.plan, { status: "completed" }) });
+        if (window.__TL_FAKE_SPLIT_SITTING__)
+          return Object.assign({}, TODAY, { sitting_end_locator: FIRST_PARA_END });
         return TODAY;
       case "cmd_get_settings":
         if (window.__TL_FAKE_COMPANY_ACTIVE__)
@@ -155,7 +153,11 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_read_section_structure": return [];
       case "cmd_quote_warns": return false;
       case "cmd_set_active_book": return null;
-      case "cmd_configure_plan": return null;
+      case "cmd_configure_plan":
+        // Configuring the plan resolves the plan-less state — the next
+        // cmd_today serves the reading card, so Begin reading opens the reader.
+        window.__TL_FAKE_NO_PLAN__ = false;
+        return Object.assign({}, TODAY.plan, { sitting_length_minutes: (args && args.sittingLengthMinutes) || 25 });
       case "cmd_extend_finish_date":
         return { new_target_finish_date: "2026-07-11", new_daily_target_units: 1, remaining_sections: 12, remaining_days: 34 };
       case "cmd_save_section_progress": return null;
