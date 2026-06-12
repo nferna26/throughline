@@ -135,6 +135,20 @@ pub fn log_export(kind: &str, path: &str) {
     );
 }
 
+/// Log a phrase batch outcome — counts and statuses only, never slice text
+/// (invariant 1: usage, never content). `status` is ok / rate_limited /
+/// cap_hit / auth / transient.
+pub fn log_phrases(status: &str, provider: &str, requested: usize, stored: usize) {
+    info!(
+        category = "phrases",
+        status = status,
+        provider = provider,
+        requested = requested,
+        stored = stored,
+        "phrase batch"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

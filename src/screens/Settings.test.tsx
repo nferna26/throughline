@@ -34,6 +34,7 @@ function wire(
     ai_key_present_openai: false,
     ai_key_present_anthropic: false,
     ai_codex_creds_present: false,
+    ai_phrases: true,
     ...dto,
   };
   const credits: CompanyCredits | null =
@@ -45,6 +46,7 @@ function wire(
     switch (cmd) {
       case "cmd_get_settings": return Promise.resolve(full);
       case "cmd_company_credits": return Promise.resolve(credits);
+      case "cmd_company_status": return Promise.resolve({ provider_active: full.ai_provider === "company", has_license: true });
       case "cmd_list_ai_models": return Promise.resolve(["m"]);
       case "cmd_list_ai_requests": return Promise.resolve(requests);
       case "cmd_model_catalog": return Promise.resolve([]);
@@ -470,5 +472,61 @@ describe("Settings — 4-section redesign", () => {
     // No plumbing words in the backup reassurance.
     expect(text).not.toMatch(/\bsync\b/i);
     expect(text).not.toMatch(/cloud/i);
+  });
+
+  // ── Stage 3: session names (AI phrases) + the rebuilt company surface ──
+
+  it("session-names toggle round-trips aiPhrases through cmd_set_ai_settings", async () => {
+    wire({ ai_provider: "company" });
+    render(<Settings />);
+    const toggle = await screen.findByRole("switch", { name: "Session names" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      const call = mockInvoke.mock.calls.find(
+        (c) => c[0] === "cmd_set_ai_settings" && (c[1] as { aiPhrases?: boolean })?.aiPhrases !== undefined,
+      );
+      expect(call).toBeTruthy();
+      expect((call![1] as { aiPhrases: boolean }).aiPhrases).toBe(false);
+    });
+  });
+
+  it("company mode shows the active status and usage as approximate questions", async () => {
+    wire({ ai_provider: "company" });
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText("Throughline AI is active.")).toBeInTheDocument());
+    expect(screen.getByText("About 220 questions left.")).toBeInTheDocument();
+    // Reader language only: questions, never tokens or dollars.
+    expect(screen.queryByText(/token|\$\d/i)).toBeNull();
+  });
+
+  it("without a license, Settings offers the activation-code door and activates", async () => {
+    wire({ ai_provider: "company" }, { credits: null });
+    mockInvoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings": return Promise.resolve({
+          export_path: "/x", export_path_is_default: true, app_data_path: "/a",
+          ai_posture: "p", ai_base_url: "http://localhost:1234/v1", ai_model: "m",
+          quote_policy: "q", quote_warn_chars: 300, ai_requests_retention_days: 90,
+          margin_help: "guided", ai_provider: "company", ai_provider_chosen: true,
+          ai_remote_allowed: true, ai_model_openai: "", ai_model_anthropic: "",
+          ai_model_codex: "", ai_key_present_openai: false, ai_key_present_anthropic: false,
+          ai_codex_creds_present: false, ai_phrases: true,
+        });
+        case "cmd_company_status": return Promise.resolve({ provider_active: true, has_license: false });
+        case "cmd_company_credits": return Promise.reject({ kind: "Config", message: "not activated" });
+        case "cmd_list_ai_requests": return Promise.resolve([]);
+        case "cmd_activate_company": return Promise.resolve({ provider_active: true, has_license: true });
+        default: return Promise.resolve(undefined);
+      }
+    });
+    render(<Settings />);
+    const input = await screen.findByLabelText("Activation code");
+    fireEvent.change(input, { target: { value: "ABCD-1234-EFGH" } });
+    fireEvent.click(screen.getByRole("button", { name: "Activate" }));
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith("cmd_activate_company", { activationToken: "ABCD-1234-EFGH" }),
+    );
   });
 });

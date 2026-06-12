@@ -10,6 +10,7 @@ import {
   aiProviderLabel,
   type AiRequest,
   type CompanyCredits,
+  CompanyStatus,
   type ConnTestResult,
   type LibraryExportResult,
   type SettingsDto,
@@ -126,6 +127,11 @@ export default function Settings() {
 
   // Allowance meter (real, from cmd_company_credits)
   const [credits, setCredits] = useState<CompanyCredits | null>(null);
+  const [companyStatus, setCompanyStatus] = useState<CompanyStatus | null>(null);
+  // Activation-code entry (the in-Settings door the failure banner points at).
+  const [codeDraft, setCodeDraft] = useState("");
+  const [activating, setActivating] = useState(false);
+  const [activateMsg, setActivateMsg] = useState<string | null>(null);
 
   // BYO / on-this-Mac controls (draft, mirrors current Settings flow)
   const [baseUrlDraft, setBaseUrlDraft] = useState("");
@@ -209,6 +215,19 @@ export default function Settings() {
     };
   }, [provider]);
 
+  // Company status is a persisted-flag read (no network, no Keychain) and the
+  // activation door must exist from ANY mode — a failed deep link can land
+  // here while the reader is on local or their own key.
+  useEffect(() => {
+    let alive = true;
+    invoke<CompanyStatus>("cmd_company_status")
+      .then((st) => alive && setCompanyStatus(st))
+      .catch(() => alive && setCompanyStatus(null));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // Audit list.
   useEffect(() => {
     let alive = true;
@@ -229,6 +248,9 @@ export default function Settings() {
       invoke<CompanyCredits>("cmd_company_credits")
         .then(setCredits)
         .catch(() => setCredits(null));
+      invoke<CompanyStatus>("cmd_company_status")
+        .then(setCompanyStatus)
+        .catch(() => setCompanyStatus(null));
     };
     window.addEventListener("tl-company-activated", onActivated);
     return () => window.removeEventListener("tl-company-activated", onActivated);
@@ -297,6 +319,35 @@ export default function Settings() {
     const next = !tutorOn;
     setTutorEnabled(next);
     setTutorOn(next);
+  }
+
+  // Session names (AI phrases) on/off — persisted; off = zero phrase calls.
+  async function togglePhrases() {
+    if (!dto) return;
+    try {
+      const s = await invoke<SettingsDto>("cmd_set_ai_settings", { aiPhrases: !dto.ai_phrases });
+      setDto(s);
+    } catch {
+      /* leave the switch where it was — settings refresh will reconcile */
+    }
+  }
+
+  // Enter an activation code right here (the same cmd the deep link uses).
+  async function activateWithCode() {
+    const token = codeDraft.trim();
+    if (!token) return;
+    setActivating(true);
+    setActivateMsg(null);
+    try {
+      await invoke("cmd_activate_company", { activationToken: token });
+      setCodeDraft("");
+      // The same event the deep link fires — refreshes this screen in place.
+      window.dispatchEvent(new Event("tl-company-activated"));
+    } catch (e: any) {
+      setActivateMsg(String(e?.message ?? e));
+    } finally {
+      setActivating(false);
+    }
   }
 
   // ── "Where answers come from" mode switching ──────────────────────
@@ -462,6 +513,26 @@ export default function Settings() {
               </div>
             </div>
 
+            {/* Session names on/off (Stage 3 phrases). */}
+            <div className="row row-flex">
+              <div className="row-main">
+                <p className="row-title">Session names</p>
+                <p className="row-desc">
+                  Each day's reading gets a short, evocative name drawn from the chapter's
+                  opening lines — only those lines are sent, never the full text.
+                </p>
+              </div>
+              <div className="row-control">
+                <button
+                  className="toggle"
+                  role="switch"
+                  aria-checked={dto?.ai_phrases ?? true}
+                  aria-label="Session names"
+                  onClick={togglePhrases}
+                />
+              </div>
+            </div>
+
             {/* Where answers come from — paid-primary + quiet fallback expander */}
             <div className="row">
               <p className="row-title">Where answers come from</p>
@@ -475,6 +546,40 @@ export default function Settings() {
                   Only the passage you select is sent to get an answer.
                 </span>
               </p>
+
+              {/* Company status: active → say so; not activated → the code door
+                  the activation-failure banner points readers at. The door
+                  renders from EVERY mode (a failed throughline://activate can
+                  arrive while the reader is on local or their own key). */}
+              {mode === "included" && companyStatus?.has_license && (
+                <p className="company-active" role="status">Throughline AI is active.</p>
+              )}
+              {companyStatus && !companyStatus.has_license && (
+                  <div className="field">
+                    <span className="field-label">Already bought Throughline AI?</span>
+                    <p className="field-desc">Enter your activation code; the email receipt carries it.</p>
+                    <div className="field-row">
+                      <input
+                        className="input"
+                        value={codeDraft}
+                        onChange={(e) => setCodeDraft(e.target.value)}
+                        placeholder="XXXX-XXXX-XXXX"
+                        autoComplete="off"
+                        spellCheck={false}
+                        aria-label="Activation code"
+                      />
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={activating || !codeDraft.trim()}
+                        onClick={activateWithCode}
+                      >
+                        {activating ? "Activating…" : "Activate"}
+                      </button>
+                    </div>
+                    {activateMsg && <p className="byo-warn" role="alert">{activateMsg}</p>}
+                  </div>
+              )}
 
               {/* Allowance meter — shown only in the included mode, real data. */}
               {mode === "included" && allowance && (
@@ -496,6 +601,7 @@ export default function Settings() {
                   >
                     <div className="meter-fill" style={{ width: `${allowance.pct}%` }} />
                   </div>
+                  <p className="allowance-questions">About {credits!.approx_questions_left} questions left.</p>
                   <p className="allowance-foot">
                     {allowance.low
                       ? "Included with your one-time purchase, and running low. When it's gone you can keep going with your own AI below — your own key or a model on this Mac."

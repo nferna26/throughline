@@ -47,7 +47,9 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
     },
   ];
 
+  let AI_PHRASES_ON = true;
   const SETTINGS = {
+    ai_phrases: true,
     export_path: "/Users/demo/GBrain/Reading", export_path_is_default: true,
     app_data_path: "/Users/demo/Library/Application Support/Throughline",
     ai_posture: "local", ai_base_url: "http://localhost:1234/v1", ai_model: "local-model",
@@ -122,18 +124,28 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
           return Object.assign({}, TODAY, { sitting_end_locator: FIRST_PARA_END });
         if (window.__TL_FAKE_PHRASE__)
           return Object.assign({}, TODAY, { phrase: "the morning resolve at the day's door" });
+        if (window.__TL_FAKE_PHRASE_MAX__)
+          return Object.assign({}, TODAY, {
+            chapter_label: "The Second Book of the Meditations of Marcus Aurelius Antoninus, continued",
+            phrase: "the busybody, the ungrateful, the arrogant, the deceitful, the envious met calmly",
+          });
         return TODAY;
-      case "cmd_get_settings":
-        if (window.__TL_FAKE_COMPANY_ACTIVE__)
-          return Object.assign({}, SETTINGS, { ai_provider: "company", ai_remote_allowed: true, ai_local_only: false, ai_posture: "Sends your selection to ai.readthroughline.com" });
+      case "cmd_get_settings": {
+        const base = Object.assign({}, SETTINGS, { ai_phrases: AI_PHRASES_ON });
+        if (window.__TL_FAKE_COMPANY_ACTIVE__ || window.__TL_FAKE_COMPANY_UNLICENSED__)
+          return Object.assign(base, { ai_provider: "company", ai_remote_allowed: true, ai_local_only: false, ai_posture: "Sends your selection to ai.readthroughline.com", ai_model_anthropic: "claude-sonnet-4-6" });
         return window.__TL_FAKE_CLOUD__
-          ? Object.assign({}, SETTINGS, { ai_provider: "anthropic", ai_remote_allowed: true, ai_local_only: false, ai_posture: "Sends your selection to api.anthropic.com" })
-          : SETTINGS;
+          ? Object.assign(base, { ai_provider: "anthropic", ai_remote_allowed: true, ai_local_only: false, ai_posture: "Sends your selection to api.anthropic.com", ai_model_anthropic: "claude-sonnet-4-6" })
+          : base;
+      }
       case "cmd_company_status":
+        if (window.__TL_FAKE_COMPANY_UNLICENSED__)
+          return { provider_active: true, has_license: false };
         return window.__TL_FAKE_COMPANY_ACTIVE__
           ? { provider_active: true, has_license: true }
           : { provider_active: false, has_license: false };
       case "cmd_company_credits": {
+        if (window.__TL_FAKE_COMPANY_UNLICENSED__) throw { kind: "Config", message: "Throughline AI isn't activated." };
         // Fraction-only credits (the proxy never sends dollars). Scenarios set
         // __TL_FAKE_REMAINING_FRACTION__ to drive the 75%/90%-used nudges.
         const rem = typeof window.__TL_FAKE_REMAINING_FRACTION__ === "number"
@@ -142,6 +154,7 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       }
       case "cmd_activate_company":
         window.__TL_FAKE_COMPANY_ACTIVE__ = true;
+        window.__TL_FAKE_COMPANY_UNLICENSED__ = false;
         return { provider_active: true, has_license: true };
       case "cmd_company_checkout":
         return "https://checkout.stripe.com/c/pay/cs_test_fake123";
@@ -236,7 +249,10 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_pause_plan": case "cmd_resume_plan": case "cmd_archive_plan": case "cmd_delete_plan":
       case "cmd_restore_plan": case "cmd_start_new_plan":
         return null;
-      case "cmd_set_ai_settings": case "cmd_set_ai_key": case "cmd_clear_ai_key":
+      case "cmd_set_ai_settings":
+        if (args && typeof args.aiPhrases === "boolean") AI_PHRASES_ON = args.aiPhrases;
+        return handle("cmd_get_settings", {});
+      case "cmd_set_ai_key": case "cmd_clear_ai_key":
       case "cmd_set_export_path": case "cmd_forget_ai_history": case "cmd_codex_logout":
         return null;
       case "cmd_codex_device_start": return { user_code: "ABCD-1234", verification_uri: "https://example.com", device_code: "dev", interval: 5 };

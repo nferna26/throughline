@@ -123,6 +123,7 @@ pub fn cmd_configure_plan(
     sitting_length_minutes: i64,
     name: Option<String>,
     state: State<DbState>,
+    app: tauri::AppHandle,
 ) -> Result<ReadingPlan, AppError> {
     let conn = state.0.lock()?;
     let plan = fetch_plan_for_book(&conn, &book_id)?
@@ -145,6 +146,16 @@ pub fn cmd_configure_plan(
         "UPDATE reading_plans SET sitting_length_minutes = ?1, name = COALESCE(?2, name, ?3) WHERE id = ?4",
         params![mins, provided, default_label, plan.id],
     )?;
+
+    // Build the sittings cache NOW (it otherwise builds lazily on first Today)
+    // so the import-time phrase batch has opening hashes to work from, then
+    // fire-and-forget phrases for the first sittings (docs/PHRASES_API.md
+    // timing). The response path never waits on any of this.
+    let sections = list_sections(&conn, &book_id)?;
+    let body = read_txt_section(&book_id, 0, None).unwrap_or_default();
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = sittings::rebuild_if_stale(&conn, &book_id, &body, &sections, mins, &now);
+    crate::phrases::spawn_first_batch(&app, &conn, &book_id, &sections);
 
     fetch_plan_for_book(&conn, &book_id)?.ok_or_else(|| AppError::not_found("plan", Some(book_id)))
 }

@@ -176,9 +176,9 @@ pub fn cost_micros(provider: AiProvider, model: &str, u: &TokenUsage) -> i64 {
     micros.round() as i64
 }
 
-const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_VERSION: &str = "2023-06-01";
-const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+pub(crate) const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
+pub(crate) const ANTHROPIC_VERSION: &str = "2023-06-01";
+pub(crate) const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";

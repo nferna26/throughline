@@ -344,11 +344,13 @@ type SettingsDto = {
 - errors: `Config` (bad path), `Io` (mkdir fails)
 
 #### `cmd_set_ai_settings`
-- args: `{ baseUrl?: string; model?: string; localOnly?: boolean; retentionDays?: number }`
+- args: `{ provider?: string; baseUrl?: string; model?: string; retentionDays?: number; aiPhrases?: boolean }`
 - returns: `SettingsDto` (updated)
-- errors: `Ai` (non-loopback URL rejected while local-only ON), `Config` (turning local-only ON while URL is non-loopback), `Db`
+- errors: `Validation` (unknown provider), `Config` (non-loopback local base URL), `Db`
 
-`retentionDays` sets the AI audit retention window (adr-001), clamped to ≥ 0 (0 disables the sweep). It can be set independently of the AI URL/model fields. Added in 0.1.x; additive, `COMMAND_API_VERSION` stays `1`.
+`retentionDays` sets the AI audit retention window (adr-001), clamped to ≥ 0 (0 disables the sweep). `aiPhrases` turns AI session phrases on/off (Stage 3, docs/PHRASES_API.md); off means zero phrase network calls, and turning it on (like a provider change, a new key, or re-activation) resets the phrase backoff state. The returned `SettingsDto` carries the matching `ai_phrases: boolean` field. Each arg can be set independently. Additive; `COMMAND_API_VERSION` stays `1`. (The old `localOnly` arg no longer exists — the authoritative switch is `provider`.)
+
+Backend-emitted event: `tl-phrases-updated` fires after a phrase batch is stored (fire-and-forget upsert); the frontend refreshes the Today card so the phrase slot swaps text in place. Additive, no command-surface change.
 
 ---
 

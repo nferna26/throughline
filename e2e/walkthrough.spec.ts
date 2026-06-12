@@ -280,11 +280,14 @@ test("cap-exhausted-fallback", async ({ page }) => {
   await shoot(page, "20b-cap-topup");
 });
 
-test("tutor-fuel-nudge-75", async ({ page }) => {
+test("tutor-fuel-strip-when-low", async ({ page }) => {
+  // The old two-tier nudges are ONE quiet strip in the tutor footer now:
+  // absent until 75% of the allowance is used, then "Running low" with the
+  // relay's own approximate-questions number (0.2 remaining -> about 80).
   await page.addInitScript(() => {
     const w = window as unknown as Record<string, unknown>;
     w.__TL_FAKE_COMPANY_ACTIVE__ = true;
-    w.__TL_FAKE_REMAINING_FRACTION__ = 0.2; // 80% used → gentle nudge
+    w.__TL_FAKE_REMAINING_FRACTION__ = 0.2;
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Continue reading" }).click();
@@ -301,17 +304,17 @@ test("tutor-fuel-nudge-75", async ({ page }) => {
     document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   });
   await page.getByRole("button", { name: /^Explain/ }).click();
-  // The answer still streams (non-blocking), with the gentle free-path nudge below.
-  await expect(page.getByText(/About a quarter of your included AI left/i)).toBeVisible();
-  await expect(page.getByText(/keep going free with your own key or a local model/i)).toBeVisible();
-  await shoot(page, "22-fuel-nudge75");
+  await expect(page.getByText(/Running low/)).toBeVisible();
+  await expect(page.getByText(/about 80 left/)).toBeVisible();
+  await shoot(page, "22-fuel-low");
 });
 
-test("tutor-fuel-nudge-90", async ({ page }) => {
+test("tutor-fuel-strip-stays-quiet-with-plenty-left", async ({ page }) => {
+  // Below the 75%-used threshold the strip is genuinely absent — quiet by
+  // default, no gauge competing with the answer.
   await page.addInitScript(() => {
     const w = window as unknown as Record<string, unknown>;
-    w.__TL_FAKE_COMPANY_ACTIVE__ = true;
-    w.__TL_FAKE_REMAINING_FRACTION__ = 0.07; // 93% used → clearer nudge
+    w.__TL_FAKE_COMPANY_ACTIVE__ = true; // fake default: 0.75 remaining
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Continue reading" }).click();
@@ -328,9 +331,9 @@ test("tutor-fuel-nudge-90", async ({ page }) => {
     document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   });
   await page.getByRole("button", { name: /^Explain/ }).click();
-  await expect(page.getByText(/included AI is almost done/i)).toBeVisible();
-  await expect(page.getByText(/LM Studio on this Mac, about two minutes/i)).toBeVisible();
-  await shoot(page, "23-fuel-nudge90");
+  await expect(page.getByText(/Aurelius is bracing himself|Stoic/).first()).toBeVisible();
+  await expect(page.getByText(/Running low/)).toHaveCount(0);
+  await shoot(page, "23-fuel-quiet");
 });
 
 test("export-warning", async ({ page }) => {
@@ -343,48 +346,74 @@ test("export-warning", async ({ page }) => {
 });
 
 test("model-picker-with-price-chip", async ({ page }) => {
+  // The picker moved behind Settings -> Reading assistant -> "Use your own AI
+  // instead"; the model select and its price chip are unchanged once reached.
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  // Choose a cloud provider → the model picker + price chip appear (Epic B2).
-  await page.getByLabel("AI provider").selectOption("anthropic");
+  // The fake's saved provider is local, so the expander is already open on
+  // "On this Mac only" — switch to the key path.
+  await page.getByRole("button", { name: "Your own key" }).click();
+  await expect(page.getByLabel("Which service")).toHaveValue("anthropic");
   const modelSel = page.getByLabel("AI model");
   await expect(modelSel).toBeVisible();
-  // The bundled default is Sonnet, and its per-Mtok price is shown.
   await expect(modelSel).toHaveValue("claude-sonnet-4-6");
   await expect(page.getByText(/\$3 \/ \$15/).first()).toBeVisible();
   await shoot(page, "10-model-picker");
 });
 
 test("cloud-trust-copy", async ({ page }) => {
+  // Hostnames live in the reader's consent sheet (cloud-consent-gate pins
+  // that); the Settings trust card is mode-aware and plumbing-free.
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_CLOUD__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  // With a cloud provider active, the trust card names the host + reassures.
-  await expect(page.getByText(/api\.anthropic\.com/i).first()).toBeVisible();
-  await expect(page.getByText(/your book file never does/i)).toBeVisible();
+  await expect(page.getByText("Everything stays on this Mac")).toBeVisible();
+  await expect(page.getByText(/your own Anthropic/)).toBeVisible();
+  await expect(page.getByText(/are sent there to be answered/)).toBeVisible();
+  await expect(page.getByText(/api\.anthropic\.com/i)).toHaveCount(0);
   await shoot(page, "15-cloud-trust");
 });
 
 test("company-activation", async ({ page }) => {
+  // Activation-by-code lives in Settings -> Reading assistant (the door the
+  // activation-failure banner points at), beside the deep-link path.
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_COMPANY_UNLICENSED__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  // Choosing Throughline AI shows the buy + activation surface (not a key field).
-  await page.selectOption('select[aria-label="AI provider"]', "company");
-  await expect(page.getByRole("button", { name: /Get Throughline AI — \$20/i })).toBeVisible();
-  await expect(page.getByPlaceholder("XXXX-XXXX-XXXX")).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Activate$/ })).toBeVisible();
-  await page.getByText(/Throughline AI — \$20 once/i).scrollIntoViewIfNeeded();
+  await expect(page.getByText("Already bought Throughline AI?")).toBeVisible();
+  const code = page.getByLabel("Activation code");
+  await expect(code).toHaveAttribute("placeholder", "XXXX-XXXX-XXXX");
+  await code.fill("ABCD-1234-EFGH");
   await shoot(page, "18-company-activate");
+  await page.getByRole("button", { name: "Activate" }).click();
+  // The same window event the deep link fires refreshes the surface in place.
+  await expect(page.getByText("Throughline AI is active.")).toBeVisible();
+  await expect(page.getByText("Reading help remaining")).toBeVisible();
 });
 
 test("company-checkout", async ({ page }) => {
+  // The $20 door lives on the cap-hit screen; this pins the full fallback
+  // copy, including the "continue here" link the main cap test leaves out.
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_CAP_EXHAUSTED__ = true; });
   await page.goto("/");
-  await page.getByRole("button", { name: "Settings" }).click();
-  await page.selectOption('select[aria-label="AI provider"]', "company");
-  // Clicking buy hits cmd_company_checkout (which opens the browser) and shows a fallback link.
-  await page.getByRole("button", { name: /Get Throughline AI — \$20/i }).click();
+  await page.getByRole("button", { name: "Continue reading" }).click();
+  await expect(page.locator(".tl-readcol p").first()).toBeVisible();
+  await page.evaluate(() => {
+    const ps = document.querySelectorAll(".tl-readcol p");
+    const p = ps[1] || ps[0];
+    if (!p) return;
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const sel = window.getSelection();
+    sel!.removeAllRanges();
+    sel!.addRange(range);
+    document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  await page.getByRole("button", { name: /^Explain/ }).click();
+  await page.getByRole("button", { name: /another full allowance — \$20/i }).click();
   await expect(page.getByText(/Opening checkout in your browser/i)).toBeVisible();
   await expect(page.getByRole("link", { name: /continue here/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /try again/i })).toBeVisible();
   await shoot(page, "21-company-checkout");
 });
 
@@ -392,21 +421,78 @@ test("company-fuel-gauge", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_COMPANY_ACTIVE__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  // Active company mode shows the fuel gauge, not a "buy" prompt.
-  await expect(page.getByText(/Throughline AI is active/i)).toBeVisible();
-  await expect(page.getByText(/Plenty of AI left/i)).toBeVisible();
-  await page.getByText(/Throughline AI is active/i).scrollIntoViewIfNeeded();
+  // Company status + the real allowance meter, in reader language.
+  await expect(page.getByText("Throughline AI is active.")).toBeVisible();
+  await expect(page.getByText("Reading help remaining")).toBeVisible();
+  await expect(page.getByText("Plenty left")).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: /Reading help remaining/i })).toBeVisible();
   await shoot(page, "19-company-fuel");
 });
 
-test("ai-usage-card", async ({ page }) => {
+test("usage-as-questions-not-dollars", async ({ page }) => {
+  // Replaces the dollars/spend-cap usage card: usage reads as approximate
+  // questions from the relay's own numbers — never tokens, never dollars.
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_COMPANY_ACTIVE__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByText("AI usage").first()).toBeVisible();
-  await expect(page.getByText("all time").first()).toBeVisible();
-  await expect(page.getByLabel(/spend cap in dollars/i)).toBeVisible();
-  await page.getByText("AI usage").first().scrollIntoViewIfNeeded();
-  await shoot(page, "11-ai-usage");
+  await expect(page.getByText("About 300 questions left.")).toBeVisible();
+  await expect(page.getByText(/spend cap/i)).toHaveCount(0);
+  await expect(page.getByText(/token/i)).toHaveCount(0);
+  await shoot(page, "11-usage-questions");
+});
+
+test("phrase-arrives-mid-view-with-zero-CLS", async ({ page }) => {
+  // A phrase lands while Today is on screen (the fire-and-forget upsert path
+  // emits tl-phrases-updated): the slot swaps text in place and the button
+  // does not move a pixel.
+  await page.goto("/");
+  await expect(page.getByText("Book II", { exact: true })).toBeVisible();
+  const before = await page.getByRole("button", { name: "Continue reading" }).boundingBox();
+  await page.evaluate(() => {
+    (window as unknown as Record<string, unknown>).__TL_FAKE_PHRASE__ = true;
+    window.dispatchEvent(new Event("tl-phrases-updated"));
+  });
+  await expect(page.getByText(/the morning resolve at the day's door/)).toBeVisible();
+  const after = await page.getByRole("button", { name: "Continue reading" }).boundingBox();
+  expect(after!.y).toBe(before!.y);
+  await shoot(page, "27-phrase-live");
+});
+
+test("phrase-slot-holds-at-contract-maxima", async ({ page }) => {
+  // The worst legal content (long ", continued" label + a near-80-char
+  // phrase) must still not move the button: the slot is capped, not just
+  // reserved.
+  await page.goto("/");
+  await expect(page.getByText("Book II", { exact: true })).toBeVisible();
+  const before = await page.getByRole("button", { name: "Continue reading" }).boundingBox();
+  await page.evaluate(() => {
+    (window as unknown as Record<string, unknown>).__TL_FAKE_PHRASE_MAX__ = true;
+    window.dispatchEvent(new Event("tl-phrases-updated"));
+  });
+  await expect(page.getByText(/the busybody, the ungrateful/)).toBeVisible();
+  const after = await page.getByRole("button", { name: "Continue reading" }).boundingBox();
+  expect(after!.y).toBe(before!.y);
+});
+
+test("activation-door-reachable-from-any-mode", async ({ page }) => {
+  // A failed deep link can land in Settings while the reader is on local or
+  // their own key — the code door must exist there too, not only in company
+  // mode (the fake's default provider is local).
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByText("Already bought Throughline AI?")).toBeVisible();
+  await expect(page.getByLabel("Activation code")).toBeVisible();
+});
+
+test("session-names-toggle-in-settings", async ({ page }) => {
+  // The phrases on/off switch round-trips through cmd_set_ai_settings.
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  const toggle = page.getByRole("switch", { name: "Session names" });
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await shoot(page, "28-session-names-toggle");
 });
 
 test("settings", async ({ page }) => {

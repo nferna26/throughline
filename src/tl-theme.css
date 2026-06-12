@@ -273,7 +273,14 @@
    now so its arrival is a pure text swap with zero layout shift. */
 .tl-desk-orient { font-size: 14px; color: var(--tl-ink-soft); line-height: 1.55; margin: 0 0 22px; }
 .tl-desk-orient .line { margin: 0; }
-.tl-desk-orient .line.phrase { font-family: var(--tl-serif); font-style: italic; min-height: calc(2 * 1.55em); }
+/* Reserved AND capped at two lines: the Stage-3 phrase swap must hold the
+   layout still even at the contract maxima (80-char phrase, long label). */
+.tl-desk-orient .line.phrase {
+  font-family: var(--tl-serif); font-style: italic;
+  min-height: calc(2 * 1.55em);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 /* Finished: an outline check ring (never a filled badge), then quiet actions. */
 .tl-check-ring {
@@ -1186,6 +1193,8 @@
 /* Describes, never commits; holds one line so updates never shift the column. */
 .tl-plan-horizon { font-size: 13px; color: var(--tl-muted); line-height: 1.55; margin: 18px 0 22px; min-height: 1.55em; }
 .tl-plan-actions { display: flex; align-items: center; justify-content: center; gap: 16px; }
+/* The phrases disclosure under the actions: quiet, AA-contrast, one line ideally. */
+.tl-plan-privacy { font-size: 12.5px; color: var(--tl-muted); line-height: 1.5; margin: 18px 0 0; max-width: 52ch; }
 
 @media (prefers-reduced-motion: reduce) {
   .tl-q-card, .tl-qc-dot, .tl-link-quiet { transition: none; }
