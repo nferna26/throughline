@@ -84,7 +84,7 @@ describe("App — company activation deep link feedback (CORE-1009)", () => {
     expect(screen.queryByText(/Throughline AI is active/)).toBeNull();
   });
 
-  it("shows the failure message with a pointer to Settings → Assistance when activation fails", async () => {
+  it("shows the failure message with a pointer to Settings → Reading assistant when activation fails", async () => {
     wire(() =>
       Promise.reject({
         kind: "Validation",
@@ -98,7 +98,7 @@ describe("App — company activation deep link feedback (CORE-1009)", () => {
     expect(
       await screen.findByText(/That activation code is invalid, expired, or already used\./)
     ).toBeInTheDocument();
-    // …with a retry-by-code pointer to Settings → Assistance.
-    expect(screen.getByText(/Settings → Assistance/)).toBeInTheDocument();
+    // …with a retry-by-code pointer to Settings → Reading assistant.
+    expect(screen.getByText(/Settings → Reading assistant/)).toBeInTheDocument();
   });
 });
