@@ -48,6 +48,16 @@ jobs:
       - name: Frontend tests (Vitest)
         run: npm test
 
+      - name: Install Playwright browser (Chromium)
+        run: npx playwright install chromium
+
+      # Required gate, not optional: this suite drives the REAL frontend (vite
+      # dev + faked IPC) and is the only automated coverage of reader-visible
+      # flows — it caught the locator-dialect silent no-op every other suite
+      # slept through.
+      - name: UI walkthrough + a11y (Playwright)
+        run: npx playwright test
+
       - name: Rust tests (lib + integration)
         working-directory: src-tauri
         run: cargo test --all-targets

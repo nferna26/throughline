@@ -155,6 +155,23 @@ the tutor quotes your selection before explaining. Treat each as an acceptance c
   drift from it, trust it and update this file).
 - After touching import, export, notes, or the tutor path: run the golden loop end-to-end
   using the isolated-data-dir acceptance examples, and state the result — don't claim it.
+- **Counts cite their source.** Any test/lint count in a report names the commit or CI
+  run that reproduces it. A number reproducible from no revision is a failed claim.
+  (Case law: a "293 tests" receipt survived two stage handoffs before an audit showed
+  no committed revision ever produced it.)
+- **A suite outside a gate is documentation, not protection.** Every suite is either
+  wired to a required CI gate or registered below as explicitly manual with a stated
+  cadence. "Green" in a report means green *in the gates*, and the report names which
+  gates ran. (Case law: "branch ends green" and "8 e2e tests failing" coexisted for two
+  stages because the Playwright suite ran nowhere.)
+
+  Suite registry — CI gates (`.github/workflows/ci.yml`, required on PRs to main):
+  typecheck (`tsc --noEmit`) · frontend build · Vitest · `cargo test --all-targets` ·
+  golden loop (`cargo run --example stage2_golden_loop`) · clippy `-D warnings` ·
+  `cargo fmt --check` · Playwright walkthrough + a11y (`npx playwright test`) ·
+  production binary build. Registered manual: the 7 `#[ignore]` live-API checks in
+  `ai_providers.rs` (need real credentials; run before shipping provider/relay
+  changes); `verify:ui` screenshot review (human, per UI redesign).
 - Deliver review findings as a ranked list — severity, evidence (file:line), and the
   smallest fix — not as a rewrite. One finding the reader would feel beats ten the linter
   would.
