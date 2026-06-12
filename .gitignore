@@ -32,7 +32,9 @@ dist-ssr
 
 # Local-only research + agent tooling (not product)
 local-only/
-.claude/
+# Local agent scratch stays out; the shared project config is tracked.
+.claude/*
+!.claude/settings.json
 .codex/
 
 # Self-verify UI harness artifacts

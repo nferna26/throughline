@@ -71,6 +71,20 @@ change to it as a security change.
 **4. DRM.** DRM-free EPUBs only. Never parse around, strip, or otherwise circumvent
 protection.
 
+**4a. Locators have one owner.** One locator module owns serialization on each side of
+the IPC boundary. Durable anchors stay section-relative; whatever wire dialect the
+`cmd_*` commands parse is defined in exactly one place — never composed ad hoc at call
+sites. Ad-hoc `char:`-style prefixes are grep-banned outside that module. A locator
+parse failure is LOUD — log + error — never a silent no-op. (Stage 2 case law: the old
+reader sent `"char:N"` where the backend parsed bare digits; every test passed while
+the real app never advanced `reading_position`.)
+
+**4b. Byte/UTF-16 conversion has one boundary.** Backend locators are UTF-8 byte
+offsets; JS strings are UTF-16. The conversion happens at exactly one boundary
+(`byteToU16`/`u16ToByte` at section-text load), and any code that touches it ships with
+multibyte tests — curly quotes, accented Latin, and an astral-plane character minimum.
+Mixing the domains is invisible on ASCII fixtures and corrupts positions on real books.
+
 **5. Scope discipline.** Still out, even if a fix seems to invite them: cloud sync,
 accounts, gamification (XP, badges, streaks-as-punishment, confetti, mascots), background or
 scheduled AI, mobile, PDF/OCR, local embeddings, OpenClaw integration (none, not even a
