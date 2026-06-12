@@ -33,6 +33,9 @@ pub const KEY_AI_MODEL_CODEX: &str = "ai_model_codex";
 // whenever a key/credential is saved or cleared; seeded once from the Keychain
 // the first time they're read (see key_present_seeded). The secret itself is
 // still ONLY in the Keychain — these hold a boolean, never the key.
+/// AI session phrases on/off ("true"/"false", default ON). Off = zero phrase
+/// network calls — the gate lives in phrases::plan_batch, before any wire code.
+pub const KEY_AI_PHRASES: &str = "ai_phrases";
 pub const KEY_AI_KEY_PRESENT_OPENAI: &str = "ai_key_present_openai";
 pub const KEY_AI_KEY_PRESENT_ANTHROPIC: &str = "ai_key_present_anthropic";
 pub const KEY_CODEX_CREDS_PRESENT: &str = "ai_codex_creds_present";
@@ -178,6 +181,8 @@ pub struct SettingsDto {
     pub ai_key_present_anthropic: bool,
     /// Whether usable Codex-login credentials exist on disk (~/.codex/auth.json).
     pub ai_codex_creds_present: bool,
+    /// AI session phrases on/off (Stage 3). Off = zero phrase network calls.
+    pub ai_phrases: bool,
 }
 
 pub fn get_export_path(conn: &Connection) -> Result<PathBuf> {
@@ -323,6 +328,12 @@ pub fn get_local_only(conn: &Connection) -> bool {
     // Default ON. The flag is stored as a string ("true"/"false") so it shares
     // the same key/value table as the others.
     !matches!(get_string(conn, KEY_LOCAL_ONLY).as_deref(), Some("false"))
+}
+
+/// AI session phrases (Stage 3). Default ON; the import-screen line discloses
+/// it and Settings owns the toggle. Stored "true"/"false" like KEY_LOCAL_ONLY.
+pub fn get_ai_phrases(conn: &Connection) -> bool {
+    !matches!(get_string(conn, KEY_AI_PHRASES).as_deref(), Some("false"))
 }
 
 pub fn get_ai_base_url(conn: &Connection) -> String {
@@ -507,6 +518,7 @@ pub fn build_dto(conn: &Connection) -> Result<SettingsDto> {
         ai_codex_creds_present: key_present_seeded(conn, KEY_CODEX_CREDS_PRESENT, || {
             crate::keystore::has_codex_creds()
         }) || crate::ai_providers::codex_cli_auth_present(),
+        ai_phrases: get_ai_phrases(conn),
     })
 }
 
@@ -815,6 +827,7 @@ mod tests {
             ai_key_present_openai: false,
             ai_key_present_anthropic: false,
             ai_codex_creds_present: false,
+            ai_phrases: true,
         };
         let v = serde_json::to_value(&dto).unwrap();
         assert!(

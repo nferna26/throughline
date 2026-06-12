@@ -99,10 +99,20 @@ pub fn cmd_set_ai_settings(
     base_url: Option<String>,
     model: Option<String>,
     retention_days: Option<i64>,
+    ai_phrases: Option<bool>,
     state: State<DbState>,
 ) -> Result<settings::SettingsDto, AppError> {
     use settings::AiProvider;
     let conn = state.0.lock()?;
+    if let Some(on) = ai_phrases {
+        // Off = zero phrase network calls (the plan gate reads this first).
+        settings::set_string(
+            &conn,
+            settings::KEY_AI_PHRASES,
+            if on { "true" } else { "false" },
+        )
+        .map_err(AppError::from)?;
+    }
     if let Some(days) = retention_days {
         // adr-001: clamp to >= 0 (0 disables the sweep / keeps everything).
         let days = days.max(0);

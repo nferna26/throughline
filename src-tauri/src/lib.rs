@@ -45,6 +45,7 @@ pub mod log;
 pub mod migrations;
 pub mod models;
 pub mod paths;
+pub mod phrases;
 pub mod plan;
 pub mod settings;
 pub mod sittings;
