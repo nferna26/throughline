@@ -21,7 +21,7 @@
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::db::DbState;
@@ -163,7 +163,11 @@ pub fn valid_phrase(p: &str) -> bool {
     if t.contains('\n') || t.contains('—') {
         return false;
     }
-    if t.starts_with('"') || t.ends_with('"') || t.starts_with('\u{201c}') || t.ends_with('\u{201d}') {
+    if t.starts_with('"')
+        || t.ends_with('"')
+        || t.starts_with('\u{201c}')
+        || t.ends_with('\u{201d}')
+    {
         return false;
     }
     if t.ends_with('.') {
@@ -251,6 +255,17 @@ pub fn plan_batch(
     sections: &[BookSection],
     limit: usize,
 ) -> Option<(Vec<MissingSitting>, PhraseRoute)> {
+    let route = route_for(conn)?;
+    let missing = missing_sittings(conn, book_id, sections, limit).ok()?;
+    if missing.is_empty() {
+        return None;
+    }
+    Some((missing, route))
+}
+
+/// The single gate every phrase path goes through: the toggle first, then a
+/// phrase-capable provider. None ⇒ no wire code is reachable.
+fn route_for(conn: &Connection) -> Option<PhraseRoute> {
     if !settings::get_ai_phrases(conn) {
         return None;
     }
@@ -271,11 +286,7 @@ pub fn plan_batch(
         // Codex, Disabled, Unset: phrases stay heuristic.
         _ => return None,
     };
-    let missing = missing_sittings(conn, book_id, sections, limit).ok()?;
-    if missing.is_empty() {
-        return None;
-    }
-    Some((missing, route))
+    Some(route)
 }
 
 /// Resolve the route's credential from the Keychain — call OUTSIDE the DB lock.
@@ -389,17 +400,27 @@ fn http() -> Result<reqwest::Client, PhraseFail> {
 
 /// One batch over the chosen wire. Statuses map per the contract; bodies of
 /// failed responses are NEVER read into diagnostics (counts, never content).
-pub async fn fetch_batch(auth: &PhraseAuth, items: &[PhraseItem]) -> Result<PhraseFetch, PhraseFail> {
+pub async fn fetch_batch(
+    auth: &PhraseAuth,
+    items: &[PhraseItem],
+) -> Result<PhraseFetch, PhraseFail> {
     match auth {
         PhraseAuth::Company { base_url, license } => fetch_company(base_url, license, items).await,
         PhraseAuth::Anthropic { key, model } => fetch_anthropic(key, model, items).await,
         PhraseAuth::OpenAi { key, model } => {
-            fetch_openai_compatible(crate::ai_providers::OPENAI_BASE_URL, Some(key), model, items).await
+            fetch_openai_compatible(
+                crate::ai_providers::OPENAI_BASE_URL,
+                Some(key),
+                model,
+                items,
+            )
+            .await
         }
         PhraseAuth::Local { base_url, model } => {
             // The loopback gate is the same load-bearing enforcement point the
             // tutor uses: a local provider never sends off this Mac.
-            crate::ai_client::validate_base_url(base_url, true).map_err(|_| PhraseFail::Transient)?;
+            crate::ai_client::validate_base_url(base_url, true)
+                .map_err(|_| PhraseFail::Transient)?;
             fetch_openai_compatible(base_url, None, model, items).await
         }
     }
@@ -544,11 +565,17 @@ async fn fetch_openai_compatible(
     } else {
         body["max_tokens"] = serde_json::json!(max_output_tokens(items.len()));
     }
-    let mut req = http()?.post(&url).header("content-type", "application/json");
+    let mut req = http()?
+        .post(&url)
+        .header("content-type", "application/json");
     if let Some(k) = key {
         req = req.bearer_auth(k);
     }
-    let resp = req.json(&body).send().await.map_err(|_| PhraseFail::Transient)?;
+    let resp = req
+        .json(&body)
+        .send()
+        .await
+        .map_err(|_| PhraseFail::Transient)?;
     match resp.status().as_u16() {
         200 => {
             let v: serde_json::Value = resp.json().await.map_err(|_| PhraseFail::Transient)?;
@@ -606,6 +633,124 @@ pub async fn fetch_and_store(app: tauri::AppHandle, items: Vec<PhraseItem>, auth
             log::log_phrases(status, provider, items.len(), 0);
         }
     }
+}
+
+/// One specific sitting (by sort order) still missing its phrase, or None.
+pub fn missing_sitting_at(
+    conn: &Connection,
+    book_id: &str,
+    sections: &[BookSection],
+    sort_order: i64,
+) -> rusqlite::Result<Option<MissingSitting>> {
+    let row = conn
+        .query_row(
+            "SELECT s.opening_hash, s.chapter_label, s.start_section_id, s.start_offset, s.char_count
+             FROM sittings s LEFT JOIN phrases p ON p.opening_hash = s.opening_hash
+             WHERE s.book_id = ?1 AND s.sort_order = ?2
+               AND s.opening_hash IS NOT NULL AND p.opening_hash IS NULL",
+            params![book_id, sort_order],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    Ok(
+        row.and_then(|(opening_hash, label, sec_id, offset, char_count)| {
+            if char_count <= 0 {
+                return None;
+            }
+            Some(MissingSitting {
+                sort_order,
+                opening_hash,
+                label,
+                global_start: sittings::to_global(sections, &sec_id, offset).max(0) as usize,
+                char_count: char_count as usize,
+            })
+        }),
+    )
+}
+
+// ── Fire-and-forget entry points (what the commands call) ───────────────────
+//
+// Both plan under the CALLER's lock (cheap DB reads), then spawn: the Keychain
+// read, the disk reads, and the HTTP all happen inside the spawned task. The
+// command's response path never awaits any of this.
+
+fn spawn_missing(
+    app: &tauri::AppHandle,
+    book_id: &str,
+    missing: Vec<MissingSitting>,
+    route: PhraseRoute,
+) {
+    if missing.is_empty() || backoff_active() {
+        return;
+    }
+    let book_id = book_id.to_string();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let Some(auth) = resolve_auth(route) else {
+            return; // no credential for the route: heuristic carries it, silently
+        };
+        let items = items_from_missing(&missing, |s, e| {
+            crate::commands::books::read_txt_section(&book_id, s, Some(e)).ok()
+        });
+        fetch_and_store(app, items, auth).await;
+    });
+}
+
+/// Import-time batch: the first few sittings of a freshly configured book
+/// (docs/PHRASES_API.md timing). Call right after the sittings cache is built.
+pub fn spawn_first_batch(
+    app: &tauri::AppHandle,
+    conn: &Connection,
+    book_id: &str,
+    sections: &[BookSection],
+) {
+    let Some((missing, route)) = plan_batch(conn, book_id, sections, IMPORT_BATCH_SITTINGS) else {
+        return;
+    };
+    spawn_missing(app, book_id, missing, route);
+}
+
+/// Session-complete prefetch: the phrase for the sitting the reader will meet
+/// NEXT (the one `cmd_today` serves at `global`). One item, fire-and-forget.
+pub fn spawn_next_phrase(
+    app: &tauri::AppHandle,
+    conn: &Connection,
+    book_id: &str,
+    sections: &[BookSection],
+    global: i64,
+) {
+    let Ok(sits) = sittings::load_sittings(conn, book_id) else {
+        return;
+    };
+    let bounds: Vec<(i64, i64)> = sits
+        .iter()
+        .map(|s| {
+            (
+                sittings::to_global(sections, &s.start_section_id, s.start_offset),
+                s.char_count,
+            )
+        })
+        .collect();
+    let idx = match sittings::locate(&bounds, Some(global)) {
+        sittings::Position::At(i) => i,
+        sittings::Position::DayOne => 0,
+        sittings::Position::Finished => return, // no next sitting to name
+    };
+    let Some(route) = route_for(conn) else {
+        return;
+    };
+    let Ok(Some(missing)) = missing_sitting_at(conn, book_id, sections, idx as i64) else {
+        return; // already phrased (or no hash): nothing to do
+    };
+    spawn_missing(app, book_id, vec![missing], route);
 }
 
 #[cfg(test)]
@@ -683,7 +828,10 @@ mod tests {
         let text = "  One\n\ntwo   three\tfour  ".repeat(120);
         let slice = payload_slice(&text);
         let hashed = sittings::normalize_opening(&text);
-        assert!(hashed.starts_with(&slice), "slice must prefix the hashed string");
+        assert!(
+            hashed.starts_with(&slice),
+            "slice must prefix the hashed string"
+        );
         assert!(slice.split(' ').count() <= MAX_SLICE_WORDS);
         assert!(slice.chars().count() <= MAX_SLICE_CHARS);
     }
@@ -705,7 +853,11 @@ mod tests {
         // The body has a SENTINEL immediately after sitting 1's span. The
         // builder reads with an explicit [start, end) bound, so the sentinel
         // must be unreachable no matter what.
-        let body = format!("{}SENTINEL-SPOILER{}", "opening words ".repeat(40), "tail ".repeat(50));
+        let body = format!(
+            "{}SENTINEL-SPOILER{}",
+            "opening words ".repeat(40),
+            "tail ".repeat(50)
+        );
         let sitting_len = "opening words ".repeat(40).len();
         let missing = vec![MissingSitting {
             sort_order: 0,
@@ -719,9 +871,16 @@ mod tests {
             asked.push((s, e));
             Some(body[s..e].to_string())
         });
-        assert_eq!(asked, vec![(0, sitting_len)], "read exactly the sitting span");
+        assert_eq!(
+            asked,
+            vec![(0, sitting_len)],
+            "read exactly the sitting span"
+        );
         assert_eq!(items.len(), 1);
-        assert!(!items[0].slice.contains("SENTINEL"), "no text beyond the slice");
+        assert!(
+            !items[0].slice.contains("SENTINEL"),
+            "no text beyond the slice"
+        );
     }
 
     #[test]
@@ -751,7 +910,9 @@ mod tests {
         assert!(!valid_phrase("ends with a period."));
         assert!(!valid_phrase("an em dash — sneaks in"));
         assert!(!valid_phrase("\"quoted\""));
-        assert!(!valid_phrase("one two three four five six seven eight nine ten eleven"));
+        assert!(!valid_phrase(
+            "one two three four five six seven eight nine ten eleven"
+        ));
         assert!(!valid_phrase(&"x".repeat(81)));
         assert!(!valid_phrase("two\nlines"));
     }
@@ -772,13 +933,27 @@ mod tests {
         .unwrap();
         assert_eq!(n, 1);
         let phrase: String = conn
-            .query_row("SELECT phrase FROM phrases WHERE opening_hash = ?1", [H1], |r| r.get(0))
+            .query_row(
+                "SELECT phrase FROM phrases WHERE opening_hash = ?1",
+                [H1],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(phrase, "the morning resolve");
         // Upsert replaces (content-addressed cache, last write wins).
-        upsert_phrases(&conn, &[(H1.to_string(), "a better phrase".to_string())], "m2", "t").unwrap();
+        upsert_phrases(
+            &conn,
+            &[(H1.to_string(), "a better phrase".to_string())],
+            "m2",
+            "t",
+        )
+        .unwrap();
         let phrase: String = conn
-            .query_row("SELECT phrase FROM phrases WHERE opening_hash = ?1", [H1], |r| r.get(0))
+            .query_row(
+                "SELECT phrase FROM phrases WHERE opening_hash = ?1",
+                [H1],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(phrase, "a better phrase");
     }
@@ -817,13 +992,25 @@ mod tests {
         seed_sitting(&conn, 0, H1, 0, 100);
         seed_sitting(&conn, 1, H2, 100, 100);
         settings::set_string(&conn, settings::KEY_AI_PROVIDER, "company").unwrap();
-        upsert_phrases(&conn, &[(H1.to_string(), "already named".to_string())], "m", "t").unwrap();
+        upsert_phrases(
+            &conn,
+            &[(H1.to_string(), "already named".to_string())],
+            "m",
+            "t",
+        )
+        .unwrap();
         let (missing, route) = plan_batch(&conn, "b", &sections(), 10).unwrap();
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].opening_hash, H2);
         assert!(matches!(route, PhraseRoute::Company { .. }));
         // Both phrased → None (nothing to do).
-        upsert_phrases(&conn, &[(H2.to_string(), "named too".to_string())], "m", "t").unwrap();
+        upsert_phrases(
+            &conn,
+            &[(H2.to_string(), "named too".to_string())],
+            "m",
+            "t",
+        )
+        .unwrap();
         assert!(plan_batch(&conn, "b", &sections(), 10).is_none());
     }
 
@@ -833,7 +1020,9 @@ mod tests {
     fn backoff_honors_retry_after_and_caps_transient_growth() {
         reset_backoff_for_tests();
         assert!(!backoff_active());
-        note_failure(&PhraseFail::RateLimited { retry_after: Some(30) });
+        note_failure(&PhraseFail::RateLimited {
+            retry_after: Some(30),
+        });
         let until = BACKOFF_UNTIL_MS.load(Ordering::Relaxed);
         let wait = until - now_ms();
         assert!(wait >= 29_000, "waits at least retry_after ({wait}ms)");
@@ -845,12 +1034,18 @@ mod tests {
         note_failure(&PhraseFail::Transient);
         note_failure(&PhraseFail::Transient);
         let wait = BACKOFF_UNTIL_MS.load(Ordering::Relaxed) - now_ms();
-        assert!(wait <= 1_800_000 + 450_000, "transient backoff caps at ~30min");
+        assert!(
+            wait <= 1_800_000 + 450_000,
+            "transient backoff caps at ~30min"
+        );
 
         reset_backoff_for_tests();
         note_failure(&PhraseFail::CapHit);
         let wait = BACKOFF_UNTIL_MS.load(Ordering::Relaxed) - now_ms();
-        assert!(wait >= 23 * 60 * 60 * 1000, "cap-hit sleeps ~a day, invisibly");
+        assert!(
+            wait >= 23 * 60 * 60 * 1000,
+            "cap-hit sleeps ~a day, invisibly"
+        );
         reset_backoff_for_tests();
     }
 

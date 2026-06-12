@@ -108,6 +108,7 @@ pub fn cmd_end_session(
     completed_section_ids: Option<Vec<String>>,
     summary_sentence: Option<String>,
     state: State<DbState>,
+    app: tauri::AppHandle,
 ) -> Result<ReadingSession, AppError> {
     let conn = state.0.lock()?;
     let now = Utc::now().to_rfc3339();
@@ -150,6 +151,10 @@ pub fn cmd_end_session(
         ) {
             let sections = list_sections(&conn, &book_id)?;
             let _ = sittings::record_progress(&conn, &book_id, &sections, global, &now);
+            // Fire-and-forget: prefetch the NEXT sitting's phrase (Stage 3,
+            // docs/PHRASES_API.md timing). Spawned, never awaited — the recap
+            // UI cannot wait on this even by accident.
+            crate::phrases::spawn_next_phrase(&app, &conn, &book_id, &sections, global);
         }
     }
 

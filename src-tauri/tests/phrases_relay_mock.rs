@@ -92,7 +92,8 @@ async fn company_wire_speaks_the_contract_and_accepts_partial_responses() {
     let req = captured.lock().unwrap().clone();
     assert!(req.starts_with("POST /v1/phrases"), "path: {req:.60}");
     assert!(
-        req.to_lowercase().contains("authorization: bearer lic_test_123"),
+        req.to_lowercase()
+            .contains("authorization: bearer lic_test_123"),
         "Bearer license auth"
     );
     let body_json: serde_json::Value =
