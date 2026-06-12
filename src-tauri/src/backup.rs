@@ -221,6 +221,10 @@ mod tests {
         (g, conn, data)
     }
 
+    /// MUST run while the caller still holds the env lock: it removes the
+    /// THROUGHLINE_* overrides and deletes the data dir — done after dropping
+    /// the lock, another test could resolve its DB path into a directory being
+    /// torn down ("file is not a database" on CI, where timing is unfriendly).
     fn cleanup(data: &Path) {
         unsafe {
             std::env::remove_var("THROUGHLINE_DATA_DIR");
@@ -255,8 +259,8 @@ mod tests {
             .unwrap();
         assert_eq!(n, 1, "backup must contain the reader's row");
         drop(conn);
-        drop(g);
         cleanup(&data);
+        drop(g);
     }
 
     #[test]
@@ -290,8 +294,8 @@ mod tests {
         assert!(names.iter().any(|n| n.contains("20260104")));
         assert!(keep_me.exists(), "non-backup files must not be pruned");
         drop(conn);
-        drop(g);
         cleanup(&data);
+        drop(g);
     }
 
     #[test]
@@ -324,8 +328,8 @@ mod tests {
             .unwrap();
         assert_eq!(n, 1, "reader's row must survive corruption via restore");
         drop(conn2);
-        drop(g);
         cleanup(&data);
+        drop(g);
     }
 
     #[test]
@@ -342,8 +346,8 @@ mod tests {
             restored.is_none(),
             "with no usable backup, restore must report None (caller goes fresh)"
         );
-        drop(g);
         cleanup(&data);
+        drop(g);
     }
 
     #[test]
@@ -367,8 +371,8 @@ mod tests {
             restored.is_none(),
             "a corrupt backup must be rejected, not restored"
         );
-        drop(g);
         cleanup(&data);
+        drop(g);
     }
 
     #[test]
@@ -399,8 +403,8 @@ mod tests {
             .unwrap();
         assert_eq!(n, 1);
         drop(conn2);
-        drop(g);
         cleanup(&data);
+        drop(g);
     }
 
     /// Backups must never land in the export tree — only under app data.
@@ -432,8 +436,8 @@ mod tests {
             "backup must not create the export tree {export:?}"
         );
         drop(conn);
-        drop(g);
         cleanup(&data);
+        drop(g);
         let _ = std::fs::remove_dir_all(&export);
     }
 }
