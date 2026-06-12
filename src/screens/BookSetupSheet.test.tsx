@@ -136,6 +136,15 @@ describe("BookSetupSheet — one question", () => {
     expect(screen.getByRole("button", { name: "Begin reading" })).toBeEnabled();
   });
 
+  it("discloses the phrases payload in the operator's exact words", async () => {
+    render(<BookSetupSheet book={book} onDone={() => {}} />);
+    expect(
+      screen.getByText(
+        "To name your sessions, Throughline sends each chapter's opening lines — never the full text.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("stays silent about length and horizon when the book's length is unknown", async () => {
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === "cmd_assignable_sections") return Promise.resolve([]);

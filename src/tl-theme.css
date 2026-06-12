@@ -1186,6 +1186,8 @@
 /* Describes, never commits; holds one line so updates never shift the column. */
 .tl-plan-horizon { font-size: 13px; color: var(--tl-muted); line-height: 1.55; margin: 18px 0 22px; min-height: 1.55em; }
 .tl-plan-actions { display: flex; align-items: center; justify-content: center; gap: 16px; }
+/* The phrases disclosure under the actions: quiet, AA-contrast, one line ideally. */
+.tl-plan-privacy { font-size: 12.5px; color: var(--tl-muted); line-height: 1.5; margin: 18px 0 0; max-width: 52ch; }
 
 @media (prefers-reduced-motion: reduce) {
   .tl-q-card, .tl-qc-dot, .tl-link-quiet { transition: none; }

@@ -385,12 +385,12 @@ pub async fn cmd_ai_ask(
         match provider {
             settings::AiProvider::Unset => {
                 return Err(AppError::config(
-                    "Choose an AI provider first (Settings → Assistance).",
+                    "Choose an AI provider first (Settings → Reading assistant).",
                 ))
             }
             settings::AiProvider::Disabled => {
                 return Err(AppError::config(
-                    "AI is turned off. Enable a provider in Settings → Assistance.",
+                    "AI is turned off. Enable a provider in Settings → Reading assistant.",
                 ))
             }
             _ => {}
@@ -407,7 +407,7 @@ pub async fn cmd_ai_ask(
                 .unwrap_or(0);
             if spend_cap_exceeded(cap, month_to_date_micros(&conn)) {
                 return Err(AppError::config(format!(
-                    "You've reached your monthly AI spend cap (${:.2}). Raise or clear it in Settings → Assistance to keep using cloud AI.",
+                    "You've reached your monthly AI spend cap (${:.2}). Raise or clear it in Settings → Reading assistant to keep using cloud AI.",
                     cap as f64 / 100.0
                 )));
             }
@@ -416,7 +416,7 @@ pub async fn cmd_ai_ask(
         let model = settings::get_ai_model_for(&conn, provider);
         if model.trim().is_empty() {
             return Err(AppError::config(
-                "No AI model set. Open Settings → Assistance and set the model id.",
+                "No AI model set. Open Settings → Reading assistant and set the model id.",
             ));
         }
         let base_url = if matches!(provider, settings::AiProvider::Company) {
@@ -480,16 +480,16 @@ pub async fn cmd_ai_ask(
         settings::AiProvider::Local => crate::ai_providers::ProviderAuth::Local,
         settings::AiProvider::OpenAi => crate::keystore::get_key("openai")
             .map(crate::ai_providers::ProviderAuth::OpenAiKey)
-            .ok_or_else(|| AppError::config("Add your OpenAI API key in Settings → Assistance."))?,
+            .ok_or_else(|| AppError::config("Add your OpenAI API key in Settings → Reading assistant."))?,
         settings::AiProvider::Anthropic => crate::keystore::get_key("anthropic")
             .map(crate::ai_providers::ProviderAuth::AnthropicKey)
             .ok_or_else(|| {
-                AppError::config("Add your Anthropic API key in Settings → Assistance.")
+                AppError::config("Add your Anthropic API key in Settings → Reading assistant.")
             })?,
         settings::AiProvider::Codex => crate::ai_providers::ProviderAuth::Codex,
         settings::AiProvider::Company => crate::keystore::get_key("company")
             .map(crate::ai_providers::ProviderAuth::CompanyLicense)
-            .ok_or_else(|| AppError::config("Activate Throughline AI in Settings → Assistance."))?,
+            .ok_or_else(|| AppError::config("Activate Throughline AI in Settings → Reading assistant."))?,
         _ => return Err(AppError::config("No AI provider chosen.")),
     };
 

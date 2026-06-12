@@ -144,6 +144,32 @@ export default function App() {
     return () => unlisten?.();
   }, []);
 
+  // Phrases land in the background (fire-and-forget upserts after import or a
+  // finished sitting). Refresh the card so the phrase slot swaps its text in
+  // place — the slot's reserved height makes the swap zero-CLS. The window
+  // event mirrors the Tauri one for the browser harness (same idiom as
+  // tl-company-activated).
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen("tl-phrases-updated", () => {
+          refreshToday();
+        });
+      } catch {
+        /* not running under Tauri — nothing to listen to */
+      }
+    })();
+    const onWin = () => refreshToday();
+    window.addEventListener("tl-phrases-updated", onWin);
+    return () => {
+      unlisten?.();
+      window.removeEventListener("tl-phrases-updated", onWin);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // The calm dismissable notice banner. It carries every "that didn't work"
   // moment — a refused drop, a failed import, a book that wouldn't switch, a
   // plan that wouldn't start. It must be in-app: window.alert is a dead
@@ -365,7 +391,7 @@ export default function App() {
           <TLIcon name={activation.ok ? "check" : "behind"} size={16} />
           <span>
             {activation.message}
-            {!activation.ok && " You can enter your activation code in Settings → Assistance."}
+            {!activation.ok && " You can enter your activation code in Settings → Reading assistant."}
           </span>
           {!activation.ok && (
             <button

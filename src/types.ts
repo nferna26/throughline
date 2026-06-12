@@ -252,6 +252,8 @@ export interface SettingsDto {
   ai_key_present_openai: boolean;
   ai_key_present_anthropic: boolean;
   ai_codex_creds_present: boolean;
+  /** AI session phrases on/off (Stage 3). Off = zero phrase network calls. */
+  ai_phrases: boolean;
 }
 
 /** Human label + privacy disclosure for a provider, used by onboarding + cards. */

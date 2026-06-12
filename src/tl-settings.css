@@ -470,6 +470,8 @@
 .tl-settings2 .allowance.low .meter-fill {
   background: var(--warn);
 }
+.tl-settings2 .company-active { margin: 10px 0 0; font-size: 13px; font-weight: 600; color: var(--tl-accent); }
+.tl-settings2 .allowance-questions { margin: 8px 0 0; font-size: 13px; color: var(--tl-ink); font-weight: 550; }
 .tl-settings2 .allowance-foot {
   margin: 10px 0 0;
   font-size: 12.5px;

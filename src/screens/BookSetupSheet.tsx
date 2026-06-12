@@ -175,6 +175,12 @@ export default function BookSetupSheet({ book, onDone }: Props) {
               I'll decide as I go
             </button>
           </div>
+
+          {/* The phrases disclosure (Stage 3) — exact operator copy. Settings
+              owns the on/off toggle. */}
+          <p className="tl-plan-privacy">
+            To name your sessions, Throughline sends each chapter's opening lines — never the full text.
+          </p>
         </div>
       </div>
     </div>
