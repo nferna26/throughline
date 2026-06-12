@@ -117,9 +117,11 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
         if (window.__TL_FAKE_RETURNING__)
           return Object.assign({}, TODAY, { state: "returning", resume_locator: "64" });
         if (window.__TL_FAKE_NO_PLAN__)
-          return Object.assign({}, TODAY, { state: "no_plan", section: null, sitting_start_locator: null, sitting_end_locator: null, resume_locator: null, plan: Object.assign({}, TODAY.plan, { status: "completed" }) });
+          return Object.assign({}, TODAY, { state: "no_plan", section: null, sitting_start_locator: null, sitting_end_locator: null, resume_locator: null, plan: { id: "", book_id: BOOK.id, start_date: "2026-06-11", status: "no_plan", activated_at: null, sitting_length_minutes: null } });
         if (window.__TL_FAKE_SPLIT_SITTING__)
           return Object.assign({}, TODAY, { sitting_end_locator: FIRST_PARA_END });
+        if (window.__TL_FAKE_PHRASE__)
+          return Object.assign({}, TODAY, { phrase: "the morning resolve at the day's door" });
         return TODAY;
       case "cmd_get_settings":
         if (window.__TL_FAKE_COMPANY_ACTIVE__)
@@ -156,10 +158,10 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_configure_plan":
         // Configuring the plan resolves the plan-less state — the next
         // cmd_today serves the reading card, so Begin reading opens the reader.
-        window.__TL_FAKE_NO_PLAN__ = false;
+        // (__TL_FAKE_STAY_PLANLESS__ keeps the section-less card to exercise
+        // the Begin-reading fallback: never a section-less reader.)
+        if (!window.__TL_FAKE_STAY_PLANLESS__) window.__TL_FAKE_NO_PLAN__ = false;
         return Object.assign({}, TODAY.plan, { sitting_length_minutes: (args && args.sittingLengthMinutes) || 25 });
-      case "cmd_extend_finish_date":
-        return { new_target_finish_date: "2026-07-11", new_daily_target_units: 1, remaining_sections: 12, remaining_days: 34 };
       case "cmd_save_section_progress": return null;
       case "cmd_start_session":
         return { id: "sess_1", book_id: BOOK.id, started_at: nowIso(), ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null };
@@ -222,15 +224,15 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
           ? { path: "/Volumes/USB/GBrain/Reading", writable: false, message: "Throughline can't save notes to this folder (No such file or directory)." }
           : { path: SETTINGS.export_path, writable: true, message: null };
       case "cmd_list_plans_for_book": {
-        const live = { id: "p_live", book_id: BOOK.id, name: "Slow mornings", lifecycle: "active", status: "active", start_date: "2026-05-28", target_finish_date: "2026-06-28", paused_days_total: 0, session_count: 9, note_count: 4, reached_percent: null };
+        const live = { id: "p_live", book_id: BOOK.id, name: "Slow mornings", lifecycle: "active", status: "active", start_date: "2026-05-28", paused_days_total: 0, session_count: 9, note_count: 4, reached_percent: null };
         const past = [
-          { id: "p3", book_id: BOOK.id, name: "Winter read", lifecycle: "paused", status: "rebalanced", start_date: "2026-01-03", target_finish_date: "2026-02-12", paused_days_total: 0, session_count: 14, note_count: 7, reached_percent: 34 },
-          { id: "p1", book_id: BOOK.id, name: "First attempt", lifecycle: "archived", status: "rebalanced", start_date: "2025-11-04", target_finish_date: "2025-12-01", paused_days_total: 3, session_count: 6, note_count: 2, reached_percent: 22 },
+          { id: "p3", book_id: BOOK.id, name: "Winter read", lifecycle: "paused", status: "rebalanced", start_date: "2026-01-03", paused_days_total: 0, session_count: 14, note_count: 7, reached_percent: 34 },
+          { id: "p1", book_id: BOOK.id, name: "First attempt", lifecycle: "archived", status: "rebalanced", start_date: "2025-11-04", paused_days_total: 3, session_count: 6, note_count: 2, reached_percent: 22 },
         ];
         return window.__TL_FAKE_RESTING__ ? past : [live, ...past];
       }
       case "cmd_get_active_plan":
-        return window.__TL_FAKE_RESTING__ ? null : { id: "p_live", book_id: BOOK.id, name: "Slow mornings", lifecycle: "active", status: "active", start_date: "2026-05-28", target_finish_date: "2026-06-28", paused_days_total: 0, session_count: 9, note_count: 4, reached_percent: null };
+        return window.__TL_FAKE_RESTING__ ? null : { id: "p_live", book_id: BOOK.id, name: "Slow mornings", lifecycle: "active", status: "active", start_date: "2026-05-28", paused_days_total: 0, session_count: 9, note_count: 4, reached_percent: null };
       case "cmd_pause_plan": case "cmd_resume_plan": case "cmd_archive_plan": case "cmd_delete_plan":
       case "cmd_restore_plan": case "cmd_start_new_plan":
         return null;

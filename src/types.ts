@@ -334,7 +334,6 @@ export interface PlanSummary {
   lifecycle: string; // active | paused | completed | archived | superseded
   status: string;
   start_date: string;
-  target_finish_date: string;
   paused_days_total: number;
   session_count: number;
   note_count: number;

@@ -126,7 +126,7 @@ export default function PlansView({
               <StateTag lifecycle="active" />
               <div className="fp-name">{live.name || "Current plan"}</div>
               <div className="fp-sub">
-                Started {fmtDate(live.start_date)} · aiming at {fmtDate(live.target_finish_date)}
+                Started {fmtDate(live.start_date)}
               </div>
               <div className="fp-progress">
                 <div className="fp-track">

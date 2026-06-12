@@ -51,9 +51,17 @@ fn main() -> anyhow::Result<()> {
             params![s.id, s.book_id, s.label, s.href, s.start_locator, s.end_locator, s.estimated_units, s.sort_order, if s.assignable {1} else {0}],
         )?;
     }
-    let sections: Vec<models::BookSection> =
-        result.sections.iter().filter(|s| s.assignable).cloned().collect();
-    println!("    '{}' — {} assignable sections", result.book.title, sections.len());
+    let sections: Vec<models::BookSection> = result
+        .sections
+        .iter()
+        .filter(|s| s.assignable)
+        .cloned()
+        .collect();
+    println!(
+        "    '{}' — {} assignable sections",
+        result.book.title,
+        sections.len()
+    );
 
     // ── Setup: the ONE question (cmd_configure_plan's effect) ────────────────
     let sitting_minutes: i64 = 25;
@@ -63,17 +71,31 @@ fn main() -> anyhow::Result<()> {
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![plan_row.id, plan_row.book_id, plan_row.start_date, plan_row.status, plan_row.activated_at, sitting_minutes],
     )?;
-    println!("==> Plan configured: a steady sitting ({} minutes)", sitting_minutes);
+    println!(
+        "==> Plan configured: a steady sitting ({} minutes)",
+        sitting_minutes
+    );
 
     // ── Today #1: the sittings cache + the day-one state ─────────────────────
     let body = commands::books::read_txt_section(&result.book.id, 0, None)?;
     let now = Utc::now().to_rfc3339();
-    sittings::rebuild_if_stale(&conn, &result.book.id, &body, &sections, sitting_minutes, &now)?;
+    sittings::rebuild_if_stale(
+        &conn,
+        &result.book.id,
+        &body,
+        &sections,
+        sitting_minutes,
+        &now,
+    )?;
     let sits = sittings::load_sittings(&conn, &result.book.id)?;
     anyhow::ensure!(!sits.is_empty(), "sittings were not built");
-    let global_start =
-        |s: &sittings::SittingRow| sittings::to_global(&sections, &s.start_section_id, s.start_offset);
-    let bounds: Vec<(i64, i64)> = sits.iter().map(|s| (global_start(s), s.char_count)).collect();
+    let global_start = |s: &sittings::SittingRow| {
+        sittings::to_global(&sections, &s.start_section_id, s.start_offset)
+    };
+    let bounds: Vec<(i64, i64)> = sits
+        .iter()
+        .map(|s| (global_start(s), s.char_count))
+        .collect();
 
     let furthest = sittings::furthest_global(&conn, &result.book.id, &sections)?;
     anyhow::ensure!(
@@ -82,7 +104,10 @@ fn main() -> anyhow::Result<()> {
     );
     let s0 = &sits[0];
     let (s0_start, s0_end) = (bounds[0].0, bounds[0].0 + bounds[0].1);
-    anyhow::ensure!(!s0.chapter_label.trim().is_empty(), "chapter_label must never be blank");
+    anyhow::ensure!(
+        !s0.chapter_label.trim().is_empty(),
+        "chapter_label must never be blank"
+    );
     println!(
         "==> Today #1: day_one → '{}' (sitting span [{}, {}), ~{} chars)",
         s0.chapter_label, s0_start, s0_end, s0.char_count
@@ -104,7 +129,10 @@ fn main() -> anyhow::Result<()> {
     let mid = s0_start + s0.char_count / 2;
     sittings::record_progress(&conn, &result.book.id, &sections, mid, &now)?;
     let (resume_mid, _) = sittings::last_read(&conn, &result.book.id, &sections)?;
-    anyhow::ensure!(resume_mid == Some(mid), "mid-sitting save must set the resume point");
+    anyhow::ensure!(
+        resume_mid == Some(mid),
+        "mid-sitting save must set the resume point"
+    );
 
     // A note captured mid-sitting (the reader's own words, char-anchored).
     let note_id = format!("note_{}", Uuid::new_v4().simple());
@@ -113,7 +141,10 @@ fn main() -> anyhow::Result<()> {
          VALUES (?1, ?2, ?3, 'Reflection', ?4, ?5, 'The sitting is the unit of reading now.', NULL, ?6, ?6, NULL)",
         params![note_id, result.book.id, session_id, format!("char:{mid}"), s0.chapter_label, now],
     )?;
-    println!("==> Read to the sitting's end; note saved mid-sitting at char:{}", mid);
+    println!(
+        "==> Read to the sitting's end; note saved mid-sitting at char:{}",
+        mid
+    );
 
     // ── Complete: end the session AT THE SITTING'S END (cmd_end_session) ─────
     // This replicates cmd_end_session's exact parse: a bare-digit end_locator
@@ -129,7 +160,10 @@ fn main() -> anyhow::Result<()> {
 
     // ── Today #2: the card rolled forward on its own ──────────────────────────
     let furthest2 = sittings::furthest_global(&conn, &result.book.id, &sections)?;
-    anyhow::ensure!(furthest2 == Some(s0_end), "furthest must MAX-clamp to the sitting end");
+    anyhow::ensure!(
+        furthest2 == Some(s0_end),
+        "furthest must MAX-clamp to the sitting end"
+    );
     match sittings::locate(&bounds, furthest2) {
         sittings::Position::At(1) => {
             println!(
@@ -137,7 +171,10 @@ fn main() -> anyhow::Result<()> {
                 sits[1].chapter_label
             );
         }
-        other => anyhow::bail!("expected the NEXT sitting after completion, got {:?}", other),
+        other => anyhow::bail!(
+            "expected the NEXT sitting after completion, got {:?}",
+            other
+        ),
     }
 
     // ── Export: the literature note with the privacy frontmatter ─────────────
@@ -148,7 +185,10 @@ fn main() -> anyhow::Result<()> {
         &Utc::now().to_rfc3339(),
     )?;
     let text = std::fs::read_to_string(&md)?;
-    anyhow::ensure!(text.contains("source_private: true"), "export must carry source_private: true");
+    anyhow::ensure!(
+        text.contains("source_private: true"),
+        "export must carry source_private: true"
+    );
     anyhow::ensure!(
         text.contains("The sitting is the unit of reading now."),
         "export must carry the reader's note"

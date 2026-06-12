@@ -52,6 +52,10 @@ jobs:
         working-directory: src-tauri
         run: cargo test --all-targets
 
+      - name: Golden loop (offline acceptance, isolated data dir)
+        working-directory: src-tauri
+        run: cargo run --example stage2_golden_loop
+
       - name: Rust lint (clippy)
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings

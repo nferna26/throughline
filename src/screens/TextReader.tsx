@@ -41,6 +41,29 @@ export default function TextReader({ today, onExit }: Props) {
   // and completion-tracking all index into this list.
   const [assignableSections, setAssignableSections] = useState<BookSection[]>([]);
   const [currentIdx, setCurrentIdx] = useState<number>(-1);
+  // Sections the sitting span touches: Next/Prev move within these only, so the
+  // reader can't navigate (and thus render) outside the sitting. When the span
+  // doesn't intersect the sections at all (data drift), the bounds are dropped
+  // ENTIRELY — half-applying them would slice every section to an empty window
+  // and dead-end the book.
+  const spanRange = useMemo(
+    () => spanSectionRange(assignableSections, sittingStart, sittingEnd),
+    [assignableSections, sittingStart, sittingEnd],
+  );
+  const boundStart = spanRange.intersects ? sittingStart : null;
+  const boundEnd = spanRange.intersects ? sittingEnd : null;
+  // Where the reader resumes, as a global BYTE offset clamped into the sitting
+  // span. A resume point outside the span (a re-read, stale data) opens the
+  // sitting at its start rather than rendering the wrong window.
+  const resumeBytes = useMemo(() => {
+    const parsed = parseLocator(today.resume_locator);
+    if (parsed.kind !== "char") return null;
+    const abs = parseInt(parsed.value, 10);
+    if (!Number.isFinite(abs)) return null;
+    if (boundStart != null && abs < boundStart) return boundStart;
+    if (boundEnd != null && abs >= boundEnd) return boundStart ?? null;
+    return abs;
+  }, [today.resume_locator, boundStart, boundEnd]);
   const [text, setText] = useState<string>("");
   // A failed section-text read is said out loud in the reading column (never a
   // silent blank page) with a Try again. null = no error. `loadNonce` bumps to
@@ -53,11 +76,14 @@ export default function TextReader({ today, onExit }: Props) {
   // text while we're mid-navigation. null = text not yet loaded for the current
   // section.
   const [textSectionId, setTextSectionId] = useState<string | null>(null);
-  // Global char offset of `text[0]` — the rendered window's base. Equals the
-  // section start except when the sitting begins mid-section (a split chapter),
-  // where the window starts at the sitting start instead. All offset math
-  // (locators, highlights, selections) is window-relative + winBase.
+  // The rendered window's base in the NOTE-ANCHOR dialect (the section's byte
+  // start + the window's UTF-16 offset within the section — the historical
+  // hybrid every saved "char:" anchor uses). All note/highlight/selection math
+  // is window-relative UTF-16 + winBase.
   const [winBase, setWinBase] = useState(0);
+  // The window's base as a true global BYTE offset — what progress saves and
+  // session-end locators (which the backend parses) are composed from.
+  const [byteWinBase, setByteWinBase] = useState(0);
   // Style ranges for the current section (headings/blockquotes/emphasis), in
   // section-relative UTF-16 offsets. Empty for plain .txt books; populated for
   // EPUB-derived text so the reader can style it without mutating offsets.
@@ -110,6 +136,9 @@ export default function TextReader({ today, onExit }: Props) {
   // the reader leaves via Finish, the toolbar back button, or anything that calls
   // onExit. Set before the awaited end so a second path can't slip past.
   const endedRef = useRef<boolean>(false);
+  // Resume is applied at most once per reader open (to the section containing
+  // the resume point), never re-fired by later navigation.
+  const resumeAppliedRef = useRef<boolean>(false);
   const [endingPrompt, setEndingPrompt] = useState(false);
   const [summary, setSummary] = useState("");
   // ── Companion Margin: anchored notes/highlights/tutor cards beside the text ──
@@ -121,6 +150,8 @@ export default function TextReader({ today, onExit }: Props) {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const deleteTimer = useRef<number | null>(null);
   useEffect(() => () => { if (deleteTimer.current) clearTimeout(deleteTimer.current); }, []);
+  // The reader unmounting must also drop any pending trailing progress save.
+  useEffect(() => () => cancelPendingProgressSave(), []);
   // Draft tutor cards live only in component state until the reader saves one
   // (which turns it into a durable TutorNote via the existing approval path).
   const [tutorDrafts, setTutorDrafts] = useState<TutorDraft[]>([]);
@@ -187,17 +218,29 @@ export default function TextReader({ today, onExit }: Props) {
       const list = await invoke<BookSection[]>("cmd_assignable_sections", { bookId: book.id });
       if (cancelled) return;
       setAssignableSections(list);
-      // Find the assigned section in the assignable list. If it isn't there for
-      // any reason (data drift), fall back to the first in-span section — but
-      // never to an arbitrary spine entry.
+      // Open at the section CONTAINING the resume point — a merged sitting can
+      // resume several chapters past its first one. Fall back to the assigned
+      // section, then to the first in-span section — but never to an arbitrary
+      // spine entry.
       const range = spanSectionRange(list, sittingStart, sittingEnd);
-      const fromAssigned = list.findIndex((s) => s.id === assignedSection.id);
-      const startIdx = fromAssigned >= 0 ? fromAssigned : Math.max(0, range.min);
+      const lo = range.intersects ? range.min : 0;
+      const hi = range.intersects ? range.max : list.length - 1;
+      let startIdx = -1;
+      if (resumeBytes != null) {
+        for (let i = lo; i <= hi; i++) {
+          const s = sectionGlobalSpan(list, i);
+          if (resumeBytes >= s.start && resumeBytes < s.end) { startIdx = i; break; }
+        }
+      }
+      if (startIdx < 0) {
+        const fromAssigned = list.findIndex((s) => s.id === assignedSection.id);
+        startIdx = fromAssigned >= 0 ? fromAssigned : Math.max(0, lo);
+      }
       setCurrentIdx(startIdx);
       const baseOffset = parseInt(list[startIdx]?.start_locator || "0", 10);
-      // Bare-digit global offset: the backend's progress dialect (a "char:"
-      // prefix is stored opaquely but never advances reading_position).
-      const startLoc = today.resume_locator ?? String(Math.max(baseOffset, sittingStart ?? 0));
+      // Bare-digit global byte offset: the backend's progress dialect (a
+      // "char:" prefix is stored opaquely but never advances reading_position).
+      const startLoc = String(resumeBytes ?? Math.max(baseOffset, sittingStart ?? 0));
       // A failed session-start must not blank the reader OR discard a later typed
       // takeaway (FT-33): the text still loads and reads; `session` stays null, so
       // finalizeSession saves the takeaway as a session-less note and skips the end.
@@ -248,11 +291,13 @@ export default function TextReader({ today, onExit }: Props) {
       // Bound the section's text to the sitting window: a session never renders
       // text outside its span. The slice is what makes the bound structural —
       // selections, notes, and progress saves all derive from rendered text.
+      // `base` and the span are BYTE offsets; the slice converts to UTF-16 once.
       const base = parseInt(sec.start_locator || "0", 10);
-      const slice = sittingSlice(base, t.length, sittingStart, sittingEnd);
+      const slice = sittingSlice(t, base, boundStart, boundEnd);
       const bounded = t.slice(slice.start, slice.end);
       setText(bounded);
       setWinBase(base + slice.start);
+      setByteWinBase(base + u16ToByte(t, slice.start));
       setTextSectionId(sec.id);
       // Structure ranges are a separate, optional read (EPUB-derived text only).
       // Failure or absence simply means unstyled paragraphs — never blocks reading.
@@ -269,15 +314,14 @@ export default function TextReader({ today, onExit }: Props) {
         next.add(sec.id);
         return next;
       });
-      // Resume to saved char offset only for the section we originally landed on.
-      if (sec.id === assignedSection?.id && today.resume_locator) {
-        const parsed = parseLocator(today.resume_locator);
-        if (parsed.kind === "char") {
-          const abs = parseInt(parsed.value, 10);
-          const within = Math.max(0, abs - (base + slice.start));
-          setTopOffset(within);
-          setTimeout(() => scrollToOffset(within), 30);
-        }
+      // Resume once, in the section that actually contains the resume point —
+      // a merged sitting can resume chapters past its first one.
+      const byteLen = u16ToByte(t, t.length);
+      if (!resumeAppliedRef.current && resumeBytes != null && resumeBytes >= base && resumeBytes <= base + byteLen) {
+        resumeAppliedRef.current = true;
+        const within = Math.max(0, Math.min(bounded.length, byteToU16(t, resumeBytes - base) - slice.start));
+        setTopOffset(within);
+        setTimeout(() => scrollToOffset(within), 30);
       } else {
         setTopOffset(0);
         if (containerRef.current) containerRef.current.scrollTop = 0;
@@ -366,12 +410,12 @@ export default function TextReader({ today, onExit }: Props) {
       if (textSectionId === sec.id && endReached(container)) markEndReached(sec.id);
       const secStart = parseInt(sec.start_locator || "0", 10);
       const total = (sec.estimated_units || text.length) || 1;
-      const globalPos = winBase + off;
-      const pct = Math.min(100, Math.max(0, ((globalPos - secStart) / total) * 100));
-      // Bare digits, not "char:": cmd_save_section_progress only advances
-      // reading_position for a plain global offset. The window slice keeps
-      // globalPos inside the sitting span, so nothing persists beyond it.
-      throttledSaveProgress(book.id, sec.id, String(globalPos), pct);
+      // Bare digits, BYTE-denominated: cmd_save_section_progress only advances
+      // reading_position for a plain global byte offset. The window slice keeps
+      // the position inside the sitting span, so nothing persists beyond it.
+      const globalBytes = byteWinBase + u16ToByte(text, off);
+      const pct = Math.min(100, Math.max(0, ((globalBytes - secStart) / total) * 100));
+      throttledSaveProgress(book.id, sec.id, String(globalBytes), pct);
     }
   }
 
@@ -409,13 +453,6 @@ export default function TextReader({ today, onExit }: Props) {
   // Anchor locator for notes (the "char:" dialect notes are stored in).
   const locator = useMemo(() => makeCharLocator(winBase + topOffset), [winBase, topOffset]);
 
-  // Sections the sitting span touches: Next/Prev move within these only, so the
-  // reader can't navigate (and thus render) outside the sitting.
-  const spanRange = useMemo(
-    () => spanSectionRange(assignableSections, sittingStart, sittingEnd),
-    [assignableSections, sittingStart, sittingEnd],
-  );
-
   const goNext = useCallback(() => {
     setCurrentIdx((i) => Math.min(spanRange.max, i + 1));
   }, [spanRange.max]);
@@ -438,9 +475,9 @@ export default function TextReader({ today, onExit }: Props) {
   // A section can only COMPLETE in a sitting that covers its true end: a split
   // chapter read to the sitting boundary is progress, not a finished chapter.
   const sectionEndsInSpan = useCallback((id: string): boolean => {
-    if (sittingEnd == null) return true; // unbounded legacy session
-    return sectionTrueEnd(id) <= sittingEnd;
-  }, [sittingEnd, sectionTrueEnd]);
+    if (boundEnd == null) return true; // unbounded legacy session
+    return sectionTrueEnd(id) <= boundEnd;
+  }, [boundEnd, sectionTrueEnd]);
 
   // Whether the reader has read this sitting to its end. The LAST in-span
   // section's window is sliced to end exactly at the sitting end, so reaching
@@ -448,13 +485,14 @@ export default function TextReader({ today, onExit }: Props) {
   const lastInSpanId = assignableSections[spanRange.max]?.id ?? null;
   const sittingComplete = lastInSpanId != null && reachedEnd.has(lastInSpanId);
 
-  // Where the session ends, in the backend's bare-digit global-offset dialect.
+  // Where the session ends, in the backend's bare-digit global-BYTE dialect.
   // Completing the sitting ends AT the sitting's end — that's what advances
-  // reading_position past this sitting so the next cmd_today rolls forward.
+  // reading_position past this sitting so the next cmd_today rolls forward
+  // (sticky on purpose: re-reading earlier pages never un-completes a sitting).
   // Leaving mid-sitting ends at the current position (the resume point).
   function sessionEndLocator(): string {
-    if (sittingEnd != null && sittingComplete) return String(sittingEnd);
-    return String(winBase + topOffset);
+    if (boundEnd != null && sittingComplete) return String(boundEnd);
+    return String(byteWinBase + u16ToByte(text, topOffset));
   }
 
   // Sections "completed" this sitting: every visited section we've moved past,
@@ -477,6 +515,9 @@ export default function TextReader({ today, onExit }: Props) {
   // When the session never started, there's nothing to end (but a takeaway may
   // still be saved by finalizeSession before this runs).
   async function flushSession() {
+    // A trailing throttled save firing AFTER the end would rewrite the resume
+    // point with a stale position — drop it before anything else.
+    cancelPendingProgressSave();
     if (endedRef.current) return;
     if (!session) return;
     endedRef.current = true;
@@ -496,6 +537,7 @@ export default function TextReader({ today, onExit }: Props) {
   // null without racing a setState. A takeaway is never forced — a short
   // sitting still counts.
   async function finalizeSession(takeaway: string | null) {
+    cancelPendingProgressSave();
     const tk = takeaway && takeaway.trim() ? takeaway.trim() : null;
     // The recap's "one sentence to remember" is a first-class Takeaway: it stays
     // in the session export AND becomes a durable, user-authored Takeaway note,
@@ -1174,6 +1216,43 @@ export function splitParagraphs(
 }
 
 // ── Sitting-span math (pure + exported: the session bound is load-bearing) ──
+//
+// COORDINATE SYSTEMS. Backend locators (section start/end_locator, the sitting
+// span, reading_position) are UTF-8 BYTE offsets into the body. JS strings are
+// UTF-16. The two agree only on pure-ASCII text, so every place a byte locator
+// meets a JS string index must convert through these two helpers. Note anchors
+// keep their historical hybrid dialect ("char:" + section byte base + UTF-16
+// offset within the section) — winBase preserves that encoding exactly.
+
+/** UTF-16 index in `t` of the given UTF-8 byte offset (clamped; snaps down to
+ *  a code-point start so a mid-character byte can never split a glyph). */
+export function byteToU16(t: string, byteOff: number): number {
+  if (byteOff <= 0) return 0;
+  let b = 0;
+  let i = 0;
+  while (i < t.length) {
+    const cp = t.codePointAt(i) as number;
+    const bytes = cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4;
+    if (b + bytes > byteOff) return i;
+    b += bytes;
+    i += cp > 0xffff ? 2 : 1;
+    if (b === byteOff) return i;
+  }
+  return t.length;
+}
+
+/** UTF-8 byte length of `t.slice(0, u16Off)` — the inverse of byteToU16. */
+export function u16ToByte(t: string, u16Off: number): number {
+  const end = Math.max(0, Math.min(t.length, u16Off));
+  let b = 0;
+  let i = 0;
+  while (i < end) {
+    const cp = t.codePointAt(i) as number;
+    b += cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4;
+    i += cp > 0xffff ? 2 : 1;
+  }
+  return b;
+}
 
 /** A section's global char span, [start, end). The end falls back to the next
  *  section's start, then +∞ — an unknown tail never blocks rendering. */
@@ -1187,16 +1266,18 @@ function sectionGlobalSpan(sections: ReadonlyArray<BookSection>, i: number): { s
 
 /** The contiguous index range of sections the sitting span touches — the only
  *  sections a bounded session may show. Null bounds (legacy card) mean the whole
- *  list; an empty intersection (data drift) also falls back to the whole list,
- *  because a reader with a book open must always be able to read. */
+ *  list. An empty intersection (data drift) falls back to the whole list with
+ *  `intersects: false`, and the CALLER must then drop the bounds entirely —
+ *  half-applying them would slice every section to an empty window. A reader
+ *  with a book open must always be able to read. */
 export function spanSectionRange(
   sections: ReadonlyArray<BookSection>,
   spanStart: number | null,
   spanEnd: number | null,
-): { min: number; max: number } {
+): { min: number; max: number; intersects: boolean } {
   const last = sections.length - 1;
-  if (sections.length === 0) return { min: 0, max: -1 };
-  if (spanStart == null && spanEnd == null) return { min: 0, max: last };
+  if (sections.length === 0) return { min: 0, max: -1, intersects: true };
+  if (spanStart == null && spanEnd == null) return { min: 0, max: last, intersects: true };
   const lo = spanStart ?? Number.NEGATIVE_INFINITY;
   const hi = spanEnd ?? Number.POSITIVE_INFINITY;
   let min = -1;
@@ -1208,22 +1289,22 @@ export function spanSectionRange(
       max = i;
     }
   }
-  if (min < 0) return { min: 0, max: last };
-  return { min, max };
+  if (min < 0) return { min: 0, max: last, intersects: false };
+  return { min, max, intersects: true };
 }
 
-/** Within-section slice of a section's text that lies inside the sitting span.
- *  `secStart` is the section's global start; offsets are JS string indices.
- *  Null bounds leave that side open. Always returns a valid (possibly empty)
- *  slice: 0 ≤ start ≤ end ≤ textLen. */
+/** Within-section slice (UTF-16 string indices into `text`) of the part of a
+ *  section that lies inside the sitting span. `secStartByte` is the section's
+ *  global UTF-8 byte start; span bounds are global byte offsets. Null bounds
+ *  leave that side open. Always returns a valid (possibly empty) slice. */
 export function sittingSlice(
-  secStart: number,
-  textLen: number,
+  text: string,
+  secStartByte: number,
   spanStart: number | null,
   spanEnd: number | null,
 ): { start: number; end: number } {
-  const start = spanStart == null ? 0 : Math.min(textLen, Math.max(0, spanStart - secStart));
-  const end = spanEnd == null ? textLen : Math.min(textLen, Math.max(start, spanEnd - secStart));
+  const start = spanStart == null ? 0 : byteToU16(text, Math.max(0, spanStart - secStartByte));
+  const end = spanEnd == null ? text.length : Math.max(start, byteToU16(text, Math.max(0, spanEnd - secStartByte)));
   return { start, end };
 }
 
@@ -1397,6 +1478,14 @@ function renderParagraph(
  *  debounced autosave; saved-AI cards are visually distinct and read-only. */
 let saveProgressTimer: number | null = null;
 let lastSaveAt = 0;
+/** Drop any pending trailing save — called when a session ends or the reader
+ *  unmounts, so an 800ms-late save can't rewrite the resume point afterwards. */
+function cancelPendingProgressSave() {
+  if (saveProgressTimer != null) {
+    window.clearTimeout(saveProgressTimer);
+    saveProgressTimer = null;
+  }
+}
 function throttledSaveProgress(bookId: string, sectionId: string, locator: string, percent: number) {
   const now = Date.now();
   if (saveProgressTimer != null) window.clearTimeout(saveProgressTimer);

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
-import TextReader, { clampToolbarPosition, clampPanelWidth, panelDragOutcome, DEFAULT_PANEL_WIDTH, splitParagraphs, firstProseDropCapOffset } from "./TextReader";
+import TextReader, { clampToolbarPosition, clampPanelWidth, panelDragOutcome, DEFAULT_PANEL_WIDTH, splitParagraphs, firstProseDropCapOffset, byteToU16, u16ToByte } from "./TextReader";
 import type { TodayCard, BookSection, Note } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -546,6 +546,121 @@ describe("TextReader sitting-bounded session", () => {
       expect((call![1] as { locator: string }).locator).toMatch(/^\d+$/);
     }, { timeout: 3000 });
   });
+
+  it("sitting bounds are BYTE offsets: a multibyte prefix still slices at the right characters", async () => {
+    // "ÀÉÎÕÜ" is 5 chars but 10 UTF-8 bytes; the sitting end of 17 bytes lands
+    // after " plain" (10 + 7 bytes). A UTF-16 reading of 17 would wrongly
+    // include part of " tail".
+    const MB_TEXT = "ÀÉÎÕÜ plain tail words beyond the sitting.";
+    const mbSection = { ...section, end_locator: String(u16ToByte(MB_TEXT, MB_TEXT.length)), estimated_units: 100 };
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([mbSection]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(MB_TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+    const today = card();
+    today.sitting_end_locator = 17; // bytes: "ÀÉÎÕÜ plain" exactly
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("plain"));
+    expect(container.querySelector(".tl-readcol")?.textContent).not.toContain("tail");
+  });
+
+  it("a chapter with no end_locator completes via the NEXT section's start (within the sitting)", async () => {
+    const open1 = { ...section, end_locator: null };
+    const next2 = { id: "s2", book_id: "b1", label: "Chapter 2", href: null, start_locator: "1000", end_locator: "2000", estimated_units: 1000, sort_order: 1 };
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([open1, next2]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+    // A merged sitting covering both chapters: chapter 1's true end falls back
+    // to chapter 2's start (1000), which the sitting covers.
+    const today = card();
+    today.sitting_end_locator = 2000;
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    const main = container.querySelector(".tl-reader-main") as HTMLElement;
+    setGeometry(main, { scrollTop: 3200, clientHeight: 800, scrollHeight: 4000 });
+    fireEvent.scroll(main);
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    const finishButtons = screen.getAllByRole("button", { name: /^Finish$/ });
+    fireEvent.click(finishButtons[finishButtons.length - 1]);
+
+    await waitFor(() => {
+      const call = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_end_session");
+      expect(call).toBeTruthy();
+      expect((call![1] as { completedSectionIds: string[] }).completedSectionIds).toContain("s1");
+    });
+  });
+
+  it("a merged sitting resumes in the chapter CONTAINING the resume point, not the first one", async () => {
+    const sec2 = { id: "s2", book_id: "b1", label: "Chapter 2", href: null, start_locator: "1000", end_locator: "2000", estimated_units: 1000, sort_order: 1 };
+    const TEXT2 = "Second chapter text that the reader is partway through reading.";
+    vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section, sec2]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "1010", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text":
+          return Promise.resolve((args as { sectionId: string }).sectionId === "s2" ? TEXT2 : TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
+    // The sitting spans chapters 1-2; the reader left off inside chapter 2.
+    const today = card();
+    today.sitting_end_locator = 2000;
+    today.resume_locator = "1010";
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+
+    // The reader opens IN chapter 2 — never back at the sitting's first page.
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("Second chapter"));
+    const start = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_start_session");
+    expect((start![1] as { startLocator: string }).startLocator).toBe("1010");
+  });
+
+  it("a sitting span that matches no section drops the bounds instead of blanking the book", async () => {
+    mockBackend([]);
+    // Drifted data: the span lies entirely past every section.
+    const today = card();
+    today.sitting_start_locator = 50_000;
+    today.sitting_end_locator = 60_000;
+    const { container } = render(<TextReader today={today} onExit={() => {}} />);
+    // The full section still renders — a reader with a book open can always read.
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("lazy dog"));
+  });
+});
+
+describe("byte/UTF-16 boundary helpers", () => {
+  it("round-trips offsets on ASCII (identity)", () => {
+    expect(byteToU16("hello", 3)).toBe(3);
+    expect(u16ToByte("hello", 3)).toBe(3);
+  });
+  it("converts through multibyte characters and clamps", () => {
+    const t = "Àb"; // À = 2 bytes
+    expect(u16ToByte(t, 1)).toBe(2);
+    expect(u16ToByte(t, 2)).toBe(3);
+    expect(byteToU16(t, 2)).toBe(1);
+    expect(byteToU16(t, 1)).toBe(0); // mid-character byte snaps DOWN
+    expect(byteToU16(t, 99)).toBe(2);
+    expect(byteToU16(t, 0)).toBe(0);
+  });
+  it("handles astral-plane characters (4 bytes, 2 UTF-16 units)", () => {
+    const t = "a\u{1F4D6}b"; // 📖
+    expect(u16ToByte(t, 3)).toBe(5);
+    expect(byteToU16(t, 5)).toBe(3);
+    expect(byteToU16(t, 3)).toBe(1); // inside the emoji snaps to its start
+  });
 });
 
 // FT-31: the reader's scroll container must be keyboard-pageable — Space pages
@@ -784,14 +899,27 @@ describe("TextReader New-note modal — humanized position", () => {
   beforeEach(() => vi.mocked(invoke).mockReset());
 
   it("shows the chapter and a plain position, never a raw char: locator", async () => {
-    mockBackend([]);
-    // Resume mid-section so the modal's position is meaningfully non-zero:
-    // char 320 of a 1000-char section → "32% in".
+    // A text long enough that the resume point actually exists in it: resume at
+    // char 320 of a 1000-char section → "32% in". resume_locator speaks the
+    // backend's bare-digit dialect.
+    const LONG = TEXT + " filler words to give the section real length.".repeat(20);
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "320", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(LONG);
+        case "cmd_list_notes": return Promise.resolve([]);
+        default: return Promise.resolve(undefined);
+      }
+    });
     const today = card();
-    today.resume_locator = "char:320";
-    today.resume_percent = 32;
+    today.resume_locator = "320";
     const { container } = render(<TextReader today={today} onExit={() => {}} />);
     await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    // The session starts AT the resume point, in bare digits.
+    const start = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_start_session");
+    expect((start![1] as { startLocator: string }).startLocator).toBe("320");
 
     fireEvent.click(screen.getByRole("button", { name: "Add note" }));
     const modal = screen.getByRole("dialog");

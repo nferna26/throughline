@@ -49,6 +49,8 @@ test("plans-frontispiece", async ({ page }) => {
   // The live plan is the focal plate; earlier attempts are quiet back-matter.
   await expect(page.getByText("Slow mornings")).toBeVisible();
   await expect(page.getByText("Live").first()).toBeVisible();
+  // The progress line binds fraction_complete (0.18 in the seed).
+  await expect(page.getByText("18% through")).toBeVisible();
   await expect(page.getByText(/Earlier attempts/i)).toBeVisible();
   await expect(page.getByText("Winter read")).toBeVisible();
   await shoot(page, "12-plans-frontispiece");
@@ -109,6 +111,37 @@ test("today", async ({ page }) => {
   await expect(page.locator(".tl-hairline .fill")).toBeAttached();
   await expect(page.getByText(/\d+\s*%/)).toHaveCount(0);
   await shoot(page, "01-today");
+});
+
+test("phrase-slot-swap-is-zero-CLS", async ({ page }) => {
+  // The chapter label carries the screen until Stage 3's phrase arrives; the
+  // slot reserves its height NOW, so the swap must not move the button.
+  await page.goto("/");
+  await expect(page.getByText("Book II", { exact: true })).toBeVisible();
+  const before = await page.getByRole("button", { name: "Continue reading" }).boundingBox();
+
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_PHRASE__ = true; });
+  await page.goto("/");
+  await expect(page.getByText(/the morning resolve at the day's door/)).toBeVisible();
+  const after = await page.getByRole("button", { name: "Continue reading" }).boundingBox();
+
+  expect(after!.y).toBe(before!.y);
+});
+
+test("begin-reading-never-opens-a-sectionless-reader", async ({ page }) => {
+  // If the fresh card has nothing to open (no section), Begin reading lands on
+  // Today rather than a dead reader.
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_NO_PLAN__ = true;
+    w.__TL_FAKE_STAY_PLANLESS__ = true;
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start a plan" }).click();
+  await page.getByRole("button", { name: "Begin reading" }).click();
+
+  await expect(page.getByText(/There's no plan right now/)).toBeVisible();
+  await expect(page.locator(".tl-readcol")).toHaveCount(0);
 });
 
 test("today-dark", async ({ page }) => {

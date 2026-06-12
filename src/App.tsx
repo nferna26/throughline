@@ -243,7 +243,9 @@ export default function App() {
       setToday(t);
       setLoadError(null);
     } catch (e) {
-      setLoadError(errorMessage(e));
+      // loadError only renders before the first card; once a book is on the
+      // desk the dismissable banner is the visible channel for this failure.
+      setNotice(`Couldn't open the book: ${errorMessage(e)}`);
     }
     if (begin && t && t.section) {
       setView({ kind: "reader", today: t });
