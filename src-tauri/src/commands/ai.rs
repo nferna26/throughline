@@ -801,6 +801,8 @@ pub async fn cmd_activate_company(
         return Err(AppError::ai("Activation returned no license."));
     }
     crate::keystore::set_key("company", &license).map_err(|e| AppError::io(format!("{e}")))?;
+    // Re-activation clears any phrase auth/cap stop (docs/PHRASES_API.md §Errors).
+    crate::phrases::reset_backoff();
     {
         let conn = state.0.lock()?;
         settings::set_string(&conn, settings::KEY_AI_PROVIDER, "company")?;

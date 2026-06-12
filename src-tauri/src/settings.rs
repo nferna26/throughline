@@ -336,6 +336,25 @@ pub fn get_ai_phrases(conn: &Connection) -> bool {
     !matches!(get_string(conn, KEY_AI_PHRASES).as_deref(), Some("false"))
 }
 
+/// One-time default for AI phrases, run at startup. Fresh installs default ON
+/// (the plan screen carries the disclosure before any send). Installs that
+/// already hold books predate that disclosure surface, so they default OFF —
+/// for them, the consent moment is the Settings toggle, whose copy says
+/// exactly what is sent. Never overrides an explicit choice.
+pub fn seed_ai_phrases_default(conn: &Connection) -> Result<()> {
+    if get_string(conn, KEY_AI_PHRASES).is_some() {
+        return Ok(());
+    }
+    let has_books: bool = conn
+        .query_row("SELECT EXISTS(SELECT 1 FROM books)", [], |r| r.get(0))
+        .unwrap_or(false);
+    set_string(
+        conn,
+        KEY_AI_PHRASES,
+        if has_books { "false" } else { "true" },
+    )
+}
+
 pub fn get_ai_base_url(conn: &Connection) -> String {
     get_string(conn, KEY_AI_BASE_URL).unwrap_or_else(|| DEFAULT_AI_BASE_URL.to_string())
 }
@@ -834,6 +853,33 @@ mod tests {
             v.get("ai_local_only").is_none(),
             "the dead ai_local_only field must not reach the IPC surface"
         );
+    }
+
+    #[test]
+    fn ai_phrases_seed_defaults_off_for_existing_installs_on_for_fresh() {
+        // Fresh install (no books): disclosure shows at first import → ON.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        seed_ai_phrases_default(&conn).unwrap();
+        assert!(get_ai_phrases(&conn));
+
+        // Existing install (books predate the disclosure surface): OFF until
+        // the reader opts in via the Settings toggle.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO books (id,title,source_type,source_path,source_sha256,created_at)
+             VALUES ('b','T','txt','/x','h','2026-01-01')",
+            [],
+        )
+        .unwrap();
+        seed_ai_phrases_default(&conn).unwrap();
+        assert!(!get_ai_phrases(&conn));
+
+        // Never overrides an explicit choice.
+        set_string(&conn, KEY_AI_PHRASES, "true").unwrap();
+        seed_ai_phrases_default(&conn).unwrap();
+        assert!(get_ai_phrases(&conn));
     }
 
     #[test]

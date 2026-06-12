@@ -117,6 +117,11 @@ fn open_db_resilient() -> rusqlite::Connection {
                 }
                 Err(e) => tracing::warn!("reading.db backup skipped: {e:#}"),
             }
+            // Stage 3: installs that predate the phrases disclosure default the
+            // toggle OFF; fresh installs default ON (best-effort, never fatal).
+            if let Err(e) = settings::seed_ai_phrases_default(&c) {
+                tracing::warn!("ai_phrases default seed skipped: {e:#}");
+            }
             c
         }
         Err(e) => {

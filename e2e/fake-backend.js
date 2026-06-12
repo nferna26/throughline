@@ -124,6 +124,11 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
           return Object.assign({}, TODAY, { sitting_end_locator: FIRST_PARA_END });
         if (window.__TL_FAKE_PHRASE__)
           return Object.assign({}, TODAY, { phrase: "the morning resolve at the day's door" });
+        if (window.__TL_FAKE_PHRASE_MAX__)
+          return Object.assign({}, TODAY, {
+            chapter_label: "The Second Book of the Meditations of Marcus Aurelius Antoninus, continued",
+            phrase: "the busybody, the ungrateful, the arrogant, the deceitful, the envious met calmly",
+          });
         return TODAY;
       case "cmd_get_settings": {
         const base = Object.assign({}, SETTINGS, { ai_phrases: AI_PHRASES_ON });

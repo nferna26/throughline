@@ -458,6 +458,32 @@ test("phrase-arrives-mid-view-with-zero-CLS", async ({ page }) => {
   await shoot(page, "27-phrase-live");
 });
 
+test("phrase-slot-holds-at-contract-maxima", async ({ page }) => {
+  // The worst legal content (long ", continued" label + a near-80-char
+  // phrase) must still not move the button: the slot is capped, not just
+  // reserved.
+  await page.goto("/");
+  await expect(page.getByText("Book II", { exact: true })).toBeVisible();
+  const before = await page.getByRole("button", { name: "Continue reading" }).boundingBox();
+  await page.evaluate(() => {
+    (window as unknown as Record<string, unknown>).__TL_FAKE_PHRASE_MAX__ = true;
+    window.dispatchEvent(new Event("tl-phrases-updated"));
+  });
+  await expect(page.getByText(/the busybody, the ungrateful/)).toBeVisible();
+  const after = await page.getByRole("button", { name: "Continue reading" }).boundingBox();
+  expect(after!.y).toBe(before!.y);
+});
+
+test("activation-door-reachable-from-any-mode", async ({ page }) => {
+  // A failed deep link can land in Settings while the reader is on local or
+  // their own key — the code door must exist there too, not only in company
+  // mode (the fake's default provider is local).
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByText("Already bought Throughline AI?")).toBeVisible();
+  await expect(page.getByLabel("Activation code")).toBeVisible();
+});
+
 test("session-names-toggle-in-settings", async ({ page }) => {
   // The phrases on/off switch round-trips through cmd_set_ai_settings.
   await page.goto("/");

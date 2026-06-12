@@ -18,7 +18,9 @@
 //! Codex (the experimental ChatGPT-login tutor path) is deliberately not a
 //! phrase provider; those readers keep heuristic labels.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -160,13 +162,20 @@ pub fn valid_phrase(p: &str) -> bool {
     if t.is_empty() || t.chars().count() > MAX_PHRASE_CHARS {
         return false;
     }
-    if t.contains('\n') || t.contains('—') {
+    if t.contains('\n') || t.contains('\r') || t.contains('—') {
         return false;
     }
     if t.starts_with('"')
         || t.ends_with('"')
         || t.starts_with('\u{201c}')
         || t.ends_with('\u{201d}')
+    {
+        return false;
+    }
+    // A phrase WRAPPED in single/curly-single quotes is a violator too; only a
+    // surrounding PAIR fires, so interior apostrophes stay legal.
+    if (t.starts_with('\'') && t.ends_with('\''))
+        || (t.starts_with('\u{2018}') && t.ends_with('\u{2019}'))
     {
         return false;
     }
@@ -178,7 +187,12 @@ pub fn valid_phrase(p: &str) -> bool {
 }
 
 fn plausible_hash(h: &str) -> bool {
-    h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit())
+    // 64 LOWERCASE hex chars (contract §Request) — the join key is emitted by
+    // format!("{:x}") and SQLite TEXT '=' is case-sensitive, so an uppercase
+    // hash could only ever produce a dead row.
+    h.len() == 64
+        && h.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Upsert validated phrases into the content-addressed cache. Returns how many
@@ -225,6 +239,17 @@ pub enum PhraseAuth {
     Anthropic { key: String, model: String },
     OpenAi { key: String, model: String },
     Local { base_url: String, model: String },
+}
+
+impl PhraseRoute {
+    pub fn label(&self) -> &'static str {
+        match self {
+            PhraseRoute::Company { .. } => "company",
+            PhraseRoute::Anthropic { .. } => "anthropic",
+            PhraseRoute::OpenAi { .. } => "openai",
+            PhraseRoute::Local { .. } => "local",
+        }
+    }
 }
 
 impl PhraseAuth {
@@ -315,8 +340,38 @@ pub fn resolve_auth(route: PhraseRoute) -> Option<PhraseAuth> {
 
 // ── Backoff (failure invisibility: silence, never a surface) ────────────────
 
-static BACKOFF_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
-static CONSECUTIVE_FAILS: AtomicU32 = AtomicU32::new(0);
+// One slot per route (company / anthropic / openai / local): a relay cap-hit
+// must never silence a reader who switches to their own key (contract §Builds).
+const ROUTES: usize = 4;
+static BACKOFF_UNTIL_MS: [AtomicI64; ROUTES] = [
+    AtomicI64::new(0),
+    AtomicI64::new(0),
+    AtomicI64::new(0),
+    AtomicI64::new(0),
+];
+static CONSECUTIVE_FAILS: [AtomicU32; ROUTES] = [
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+];
+/// Batches the relay REJECTED (400: a shape disagreement that will reproduce
+/// deterministically). Contract: a permanent skip for those items — held for
+/// the process lifetime, cleared only by reset_backoff (an operator action).
+static SKIPPED_HASHES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn skipped() -> &'static Mutex<HashSet<String>> {
+    SKIPPED_HASHES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn route_idx(label: &str) -> usize {
+    match label {
+        "company" => 0,
+        "anthropic" => 1,
+        "openai" => 2,
+        _ => 3,
+    }
+}
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -334,8 +389,8 @@ fn jitter_ms(max: i64) -> i64 {
     nanos % max.max(1)
 }
 
-pub fn backoff_active() -> bool {
-    now_ms() < BACKOFF_UNTIL_MS.load(Ordering::Relaxed)
+pub fn backoff_active(route_label: &str) -> bool {
+    now_ms() < BACKOFF_UNTIL_MS[route_idx(route_label)].load(Ordering::Relaxed)
 }
 
 /// How a batch failed. Carries statuses and seconds — never response content.
@@ -347,21 +402,28 @@ pub enum PhraseFail {
     CapHit,
     /// 401 — bad/revoked license or key.
     Auth,
+    /// 400 — the relay rejected the batch's shape; deterministic, never retried.
+    Rejected,
     /// Transport / 5xx / parse failure.
     Transient,
 }
 
-/// Contract §Errors: 429 honors retry_after + jitter; cap-hit sleeps long
-/// (24 h) and stays invisible; transient failures back off exponentially
-/// (1 min → 5 min → 30 min cap); auth failures stop for a day (re-activation
-/// or a new key resets on success).
-pub fn note_failure(fail: &PhraseFail) {
-    let fails = CONSECUTIVE_FAILS.fetch_add(1, Ordering::Relaxed) + 1;
+/// Contract §Errors, per route: 429 honors retry_after + jitter; cap-hit (402)
+/// sleeps a day and stays invisible; auth (401) stops effectively permanently
+/// (until reset_backoff fires on re-activation / a new key); rejected (400)
+/// batches are skip-listed separately; transient failures back off
+/// exponentially (1 min → 5 min → 30 min cap).
+pub fn note_failure(route_label: &str, fail: &PhraseFail) {
+    let i = route_idx(route_label);
+    let fails = CONSECUTIVE_FAILS[i].fetch_add(1, Ordering::Relaxed) + 1;
     let wait_ms: i64 = match fail {
         PhraseFail::RateLimited { retry_after } => {
             (retry_after.unwrap_or(60).max(1) as i64) * 1000 + jitter_ms(15_000)
         }
-        PhraseFail::CapHit | PhraseFail::Auth => 24 * 60 * 60 * 1000,
+        PhraseFail::CapHit | PhraseFail::Rejected => 24 * 60 * 60 * 1000,
+        // "Permanent stop until re-activation": in-process permanence; the
+        // resets below are the re-activation paths.
+        PhraseFail::Auth => 30 * 24 * 60 * 60 * 1000,
         PhraseFail::Transient => {
             let base: i64 = match fails {
                 0 | 1 => 60_000,
@@ -371,17 +433,44 @@ pub fn note_failure(fail: &PhraseFail) {
             base + jitter_ms(base / 4)
         }
     };
-    BACKOFF_UNTIL_MS.store(now_ms() + wait_ms, Ordering::Relaxed);
+    BACKOFF_UNTIL_MS[i].store(now_ms() + wait_ms, Ordering::Relaxed);
 }
 
-pub fn note_success() {
-    CONSECUTIVE_FAILS.store(0, Ordering::Relaxed);
-    BACKOFF_UNTIL_MS.store(0, Ordering::Relaxed);
+pub fn note_success(route_label: &str) {
+    let i = route_idx(route_label);
+    CONSECUTIVE_FAILS[i].store(0, Ordering::Relaxed);
+    BACKOFF_UNTIL_MS[i].store(0, Ordering::Relaxed);
+}
+
+/// Clear ALL phrase backoff + skip state. Called when the reader takes an
+/// action that plausibly fixes the cause: re-activating, saving a new key,
+/// switching provider, or turning the phrases toggle on.
+pub fn reset_backoff() {
+    for i in 0..ROUTES {
+        CONSECUTIVE_FAILS[i].store(0, Ordering::Relaxed);
+        BACKOFF_UNTIL_MS[i].store(0, Ordering::Relaxed);
+    }
+    if let Ok(mut set) = skipped().lock() {
+        set.clear();
+    }
+}
+
+/// Mark a rejected batch's items as permanently skipped (process lifetime).
+fn mark_skipped(items: &[PhraseItem]) {
+    if let Ok(mut set) = skipped().lock() {
+        for it in items {
+            set.insert(it.opening_hash.clone());
+        }
+    }
+}
+
+fn is_skipped(hash: &str) -> bool {
+    skipped().lock().map(|s| s.contains(hash)).unwrap_or(false)
 }
 
 #[cfg(test)]
 pub fn reset_backoff_for_tests() {
-    note_success();
+    reset_backoff();
 }
 
 // ── The wire (docs/PHRASES_API.md §Endpoint / §Builds) ──────────────────────
@@ -457,18 +546,22 @@ async fn fetch_company(
             }
             Ok(PhraseFetch { phrases })
         }
+        400 => Err(PhraseFail::Rejected),
         401 => Err(PhraseFail::Auth),
         402 => Err(PhraseFail::CapHit),
-        429 => {
-            let retry_after = resp
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.trim().parse::<u64>().ok());
-            Err(PhraseFail::RateLimited { retry_after })
-        }
+        429 => Err(PhraseFail::RateLimited {
+            retry_after: retry_after_of(&resp),
+        }),
         _ => Err(PhraseFail::Transient),
     }
+}
+
+/// The Retry-After header, in seconds, when the server sent one.
+fn retry_after_of(resp: &reqwest::Response) -> Option<u64> {
+    resp.headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
 }
 
 /// The shared generation instruction (contract §Appendix) — BYO output must
@@ -539,7 +632,9 @@ async fn fetch_anthropic(
             Ok(PhraseFetch { phrases })
         }
         401 | 403 => Err(PhraseFail::Auth),
-        429 => Err(PhraseFail::RateLimited { retry_after: None }),
+        429 => Err(PhraseFail::RateLimited {
+            retry_after: retry_after_of(&resp),
+        }),
         _ => Err(PhraseFail::Transient),
     }
 }
@@ -591,7 +686,9 @@ async fn fetch_openai_compatible(
             Ok(PhraseFetch { phrases })
         }
         401 | 403 => Err(PhraseFail::Auth),
-        429 => Err(PhraseFail::RateLimited { retry_after: None }),
+        429 => Err(PhraseFail::RateLimited {
+            retry_after: retry_after_of(&resp),
+        }),
         _ => Err(PhraseFail::Transient),
     }
 }
@@ -604,17 +701,27 @@ async fn fetch_openai_compatible(
 pub async fn fetch_and_store(app: tauri::AppHandle, items: Vec<PhraseItem>, auth: PhraseAuth) {
     use tauri::Emitter;
     use tauri::Manager;
-    if items.is_empty() || backoff_active() {
+    let provider = auth.provider_label();
+    if items.is_empty() || backoff_active(provider) {
         return;
     }
-    let provider = auth.provider_label();
     match fetch_batch(&auth, &items).await {
         Ok(got) => {
-            note_success();
+            note_success(provider);
+            // Only hashes we actually ASKED FOR may land (contract §Response:
+            // items are a subset of the request) — the cache is global and
+            // content-addressed, so a stray response hash could otherwise
+            // plant phrases for sittings (even books) never requested.
+            let requested: HashSet<&str> = items.iter().map(|i| i.opening_hash.as_str()).collect();
+            let phrases: Vec<(String, String)> = got
+                .phrases
+                .into_iter()
+                .filter(|(h, _)| requested.contains(h.as_str()))
+                .collect();
             let model = auth.model_name().to_string();
             let now = chrono::Utc::now().to_rfc3339();
             let stored = match app.state::<DbState>().0.lock() {
-                Ok(conn) => upsert_phrases(&conn, &got.phrases, &model, &now).unwrap_or(0),
+                Ok(conn) => upsert_phrases(&conn, &phrases, &model, &now).unwrap_or(0),
                 Err(_) => 0,
             };
             log::log_phrases("ok", provider, items.len(), stored);
@@ -623,11 +730,17 @@ pub async fn fetch_and_store(app: tauri::AppHandle, items: Vec<PhraseItem>, auth
             }
         }
         Err(fail) => {
-            note_failure(&fail);
+            if matches!(fail, PhraseFail::Rejected) {
+                // 400: a deterministic shape disagreement — never re-send
+                // these exact items (contract: permanent skip, log only).
+                mark_skipped(&items);
+            }
+            note_failure(provider, &fail);
             let status = match fail {
                 PhraseFail::RateLimited { .. } => "rate_limited",
                 PhraseFail::CapHit => "cap_hit",
                 PhraseFail::Auth => "auth",
+                PhraseFail::Rejected => "rejected",
                 PhraseFail::Transient => "transient",
             };
             log::log_phrases(status, provider, items.len(), 0);
@@ -688,7 +801,12 @@ fn spawn_missing(
     missing: Vec<MissingSitting>,
     route: PhraseRoute,
 ) {
-    if missing.is_empty() || backoff_active() {
+    // Rejected (400) items are deterministic failures — never re-sent.
+    let missing: Vec<MissingSitting> = missing
+        .into_iter()
+        .filter(|m| !is_skipped(&m.opening_hash))
+        .collect();
+    if missing.is_empty() || backoff_active(route.label()) {
         return;
     }
     let book_id = book_id.to_string();
@@ -1019,34 +1137,95 @@ mod tests {
     #[test]
     fn backoff_honors_retry_after_and_caps_transient_growth() {
         reset_backoff_for_tests();
-        assert!(!backoff_active());
-        note_failure(&PhraseFail::RateLimited {
-            retry_after: Some(30),
-        });
-        let until = BACKOFF_UNTIL_MS.load(Ordering::Relaxed);
+        assert!(!backoff_active("company"));
+        note_failure(
+            "company",
+            &PhraseFail::RateLimited {
+                retry_after: Some(30),
+            },
+        );
+        let until = BACKOFF_UNTIL_MS[route_idx("company")].load(Ordering::Relaxed);
         let wait = until - now_ms();
         assert!(wait >= 29_000, "waits at least retry_after ({wait}ms)");
         assert!(wait <= 60_000, "jitter stays bounded ({wait}ms)");
 
         reset_backoff_for_tests();
-        note_failure(&PhraseFail::Transient);
-        note_failure(&PhraseFail::Transient);
-        note_failure(&PhraseFail::Transient);
-        note_failure(&PhraseFail::Transient);
-        let wait = BACKOFF_UNTIL_MS.load(Ordering::Relaxed) - now_ms();
+        note_failure("company", &PhraseFail::Transient);
+        note_failure("company", &PhraseFail::Transient);
+        note_failure("company", &PhraseFail::Transient);
+        note_failure("company", &PhraseFail::Transient);
+        let wait = BACKOFF_UNTIL_MS[route_idx("company")].load(Ordering::Relaxed) - now_ms();
         assert!(
             wait <= 1_800_000 + 450_000,
             "transient backoff caps at ~30min"
         );
 
         reset_backoff_for_tests();
-        note_failure(&PhraseFail::CapHit);
-        let wait = BACKOFF_UNTIL_MS.load(Ordering::Relaxed) - now_ms();
+        note_failure("company", &PhraseFail::CapHit);
+        let wait = BACKOFF_UNTIL_MS[route_idx("company")].load(Ordering::Relaxed) - now_ms();
         assert!(
             wait >= 23 * 60 * 60 * 1000,
             "cap-hit sleeps ~a day, invisibly"
         );
         reset_backoff_for_tests();
+    }
+
+    #[test]
+    fn backoff_is_per_route_and_resets_on_operator_action() {
+        reset_backoff_for_tests();
+        // A relay cap-hit must not silence the reader's own key (contract
+        // §Builds: the BYO flow is identical and independent).
+        note_failure("company", &PhraseFail::CapHit);
+        assert!(backoff_active("company"));
+        assert!(!backoff_active("anthropic"));
+        assert!(!backoff_active("local"));
+
+        // Auth stops effectively permanently…
+        note_failure("anthropic", &PhraseFail::Auth);
+        let wait = BACKOFF_UNTIL_MS[route_idx("anthropic")].load(Ordering::Relaxed) - now_ms();
+        assert!(
+            wait >= 29 * 24 * 60 * 60 * 1000,
+            "auth stop is long ({wait}ms)"
+        );
+
+        // …until the operator-action reset (re-activation / new key / toggle on).
+        reset_backoff();
+        assert!(!backoff_active("company"));
+        assert!(!backoff_active("anthropic"));
+    }
+
+    #[test]
+    fn rejected_batches_are_skipped_permanently_and_cleared_by_reset() {
+        reset_backoff_for_tests();
+        let items = vec![PhraseItem {
+            opening_hash: H1.into(),
+            label: "L".into(),
+            slice: "words".into(),
+        }];
+        mark_skipped(&items);
+        assert!(is_skipped(H1));
+        assert!(!is_skipped(H2));
+        reset_backoff();
+        assert!(!is_skipped(H1));
+    }
+
+    #[test]
+    fn uppercase_response_hashes_are_dropped() {
+        let conn = mem_db();
+        let upper = "A".repeat(64); // uppercase hex letters, not digits
+        let n = upsert_phrases(&conn, &[(upper, "fine words".to_string())], "m", "t").unwrap();
+        assert_eq!(
+            n, 0,
+            "the join key is lowercase hex; uppercase is a dead row"
+        );
+    }
+
+    #[test]
+    fn single_quoted_and_cr_phrases_are_dropped_but_apostrophes_survive() {
+        assert!(!valid_phrase("'wrapped in singles'"));
+        assert!(!valid_phrase("\u{2018}curly singles\u{2019}"));
+        assert!(!valid_phrase("carriage\rreturn"));
+        assert!(valid_phrase("the day's door")); // interior apostrophe is fine
     }
 
     #[test]

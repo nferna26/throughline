@@ -210,13 +210,23 @@ export default function Settings() {
     invoke<CompanyCredits>("cmd_company_credits")
       .then((c) => alive && setCredits(c))
       .catch(() => alive && setCredits(null));
+    return () => {
+      alive = false;
+    };
+  }, [provider]);
+
+  // Company status is a persisted-flag read (no network, no Keychain) and the
+  // activation door must exist from ANY mode — a failed deep link can land
+  // here while the reader is on local or their own key.
+  useEffect(() => {
+    let alive = true;
     invoke<CompanyStatus>("cmd_company_status")
       .then((st) => alive && setCompanyStatus(st))
       .catch(() => alive && setCompanyStatus(null));
     return () => {
       alive = false;
     };
-  }, [provider]);
+  }, []);
 
   // Audit list.
   useEffect(() => {
@@ -538,11 +548,13 @@ export default function Settings() {
               </p>
 
               {/* Company status: active → say so; not activated → the code door
-                  the activation-failure banner points readers at. */}
-              {mode === "included" && companyStatus && (
-                companyStatus.has_license ? (
-                  <p className="company-active" role="status">Throughline AI is active.</p>
-                ) : (
+                  the activation-failure banner points readers at. The door
+                  renders from EVERY mode (a failed throughline://activate can
+                  arrive while the reader is on local or their own key). */}
+              {mode === "included" && companyStatus?.has_license && (
+                <p className="company-active" role="status">Throughline AI is active.</p>
+              )}
+              {companyStatus && !companyStatus.has_license && (
                   <div className="field">
                     <span className="field-label">Already bought Throughline AI?</span>
                     <p className="field-desc">Enter your activation code; the email receipt carries it.</p>
@@ -567,7 +579,6 @@ export default function Settings() {
                     </div>
                     {activateMsg && <p className="byo-warn" role="alert">{activateMsg}</p>}
                   </div>
-                )
               )}
 
               {/* Allowance meter — shown only in the included mode, real data. */}

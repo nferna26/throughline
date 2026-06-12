@@ -112,6 +112,11 @@ pub fn cmd_set_ai_settings(
             if on { "true" } else { "false" },
         )
         .map_err(AppError::from)?;
+        if on {
+            // Turning phrases ON is an operator action that plausibly fixes
+            // whatever the backoff was waiting out — start fresh.
+            crate::phrases::reset_backoff();
+        }
     }
     if let Some(days) = retention_days {
         // adr-001: clamp to >= 0 (0 disables the sweep / keeps everything).
@@ -150,6 +155,9 @@ pub fn cmd_set_ai_settings(
         if let Some(m) = model.as_deref() {
             settings::set_ai_model_for(&conn, prov, m).map_err(AppError::from)?;
         }
+        // A provider switch moves phrases to a different wire — the old
+        // wire's backoff/cap state must not gate the new one.
+        crate::phrases::reset_backoff();
     } else if let Some(m) = model.as_deref() {
         // No provider in this call → the model edits the CURRENT provider's model
         // (falling back to Local) so Settings can tweak a model without re-choosing.
@@ -191,6 +199,8 @@ pub fn cmd_set_ai_key(
     }
     crate::keystore::set_key(&provider, trimmed)
         .map_err(|e| AppError::config(format!("Could not store the API key: {e}")))?;
+    // A fresh key is the re-activation path for a phrase auth-stop.
+    crate::phrases::reset_backoff();
     let conn = state.0.lock()?;
     settings::mark_key_present(&conn, &provider, true);
     settings::build_dto(&conn).map_err(AppError::from)

@@ -142,16 +142,18 @@ retry any batch after backoff without double-spend (cached hashes are free).
 
 ## Appendix: generation contract (relay-side prompt, shared with BYO)
 
-So relay and BYO outputs match, both use this instruction shape (model:
-relay = its locked Sonnet default; BYO = the user's chosen model):
+So relay and BYO outputs match, both use this EXACT instruction string (model:
+relay = its locked Sonnet default; BYO = the user's chosen model). The bytes
+below are the app's `phrases::GEN_INSTRUCTION` verbatim — pure ASCII on
+purpose, so the prompt never carries the punctuation it bans:
 
-> You name reading sessions for a literary reading app. For each item, read the
-> chapter label and the opening slice, and return a short evocative phrase
-> (1–10 words) naming what the reader is about to meet — drawn only from what
-> the slice itself shows, never beyond it. No spoilers, no invented names, no
-> quotes, no em dashes, no terminal period, sentence case. Return STRICT JSON:
-> `[{"opening_hash": "...", "phrase": "..."}]` — one entry per input item, in
-> order; omit an item rather than guess.
+```
+You name reading sessions for a literary reading app. For each item, read the chapter label and the opening slice, and return a short evocative phrase (1-10 words) naming what the reader is about to meet, drawn only from what the slice itself shows, never beyond it. No spoilers, no invented names, no quotes, no em dashes, no terminal period, sentence case. Return STRICT JSON: [{"opening_hash": "...", "phrase": "..."}] with one entry per input item, in order; omit an item rather than guess.
+```
 
 Temperature low (≤ 0.3); max output tokens ≈ 24 × items. A response that fails
 strict-JSON parsing is dropped whole (log only) — never partially trusted.
+
+*Amendment 2026-06-11 (surfaced per the freeze rule): the appendix prompt was
+restated as the implementation's exact ASCII bytes; the first posting's prose
+used typographic dashes the app side never shipped. No wire-shape change.*
