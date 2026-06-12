@@ -172,6 +172,15 @@ the tutor quotes your selection before explaining. Treat each as an acceptance c
   production binary build. Registered manual: the 7 `#[ignore]` live-API checks in
   `ai_providers.rs` (need real credentials; run before shipping provider/relay
   changes); `verify:ui` screenshot review (human, per UI redesign).
+- **Platform defaults are audit surface.** Every third-party service in a request path
+  gets its default telemetry, caching, and retention enumerated and pinned by config +
+  test — never assumed. (Case law: Cloudflare AI Gateway collected request payloads —
+  reader slice text — by default while our own code was provably clean; the posture now
+  lives in pinned `cf-aig-*` headers with a test, not dashboard state.)
+- **Live credentials are authorized, never inferred.** A real key being readable in the
+  session env is not permission to use it — each use needs explicit per-task
+  authorization. The approved mechanism: shell-expand into a gitignored `.dev.vars`,
+  never echo, scrub after. (Stage 4's live wire replay is the pattern.)
 - Deliver review findings as a ranked list — severity, evidence (file:line), and the
   smallest fix — not as a rewrite. One finding the reader would feel beats ten the linter
   would.
