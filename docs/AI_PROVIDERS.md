@@ -1,30 +1,34 @@
-# AI providers (Local + OpenAI + Anthropic + Codex)
+# AI providers (Throughline AI + Local + OpenAI + Anthropic + Codex)
 
 Throughline's tutor and Deep Study briefing can run **on-device** (LM Studio) or
-through a **cloud provider you control**. The choice is explicit — there is no
-implicit remote default — and every cloud provider shows a "your selected text
-goes to X" disclosure before any call.
+through a **chosen remote provider**. The signed build can activate the included
+Throughline assistant (`ai.readthroughline.com`); source builds can use Local,
+OpenAI, Anthropic, Codex/ChatGPT, or no AI. The choice is explicit and
+`ai_provider` is authoritative.
 
 ## The contract (unchanged guarantees)
 
-- **You choose, per install.** A forced first-run onboarding step picks the
-  provider (Local / OpenAI / Anthropic / Codex / None). Editable anytime in
-  Settings → Assistance. `ai_provider` is authoritative.
+- **You choose at moment of intent.** There is no forced first-run AI chooser.
+  When the reader asks for help, the setup sheet offers activation, BYO keys,
+  Codex/ChatGPT login, Local/LM Studio, or a copy-prompt fallback. Editable
+  anytime in Settings → Assistance.
 - **Only the selection is ever sent** — a passage (tutor) or a section (Deep
   Study), never the whole book. Raw source files still never leave the device.
 - **Reader-initiated only.** No background, timer, or on-launch AI.
 - **Keys live in the macOS Keychain** (`keystore.rs`), never in the DB, a file,
   the repo, logs, or exports. Commands expose only `ai_key_present_*` booleans.
-- **The UI never falsely claims "local".** A cloud call shows a "via &lt;Provider&gt;"
-  badge; the trust summary flips to "remote" and names the provider.
+- **The UI never falsely claims "local".** A remote call names the reader-facing
+  provider (Throughline AI / OpenAI / Anthropic / ChatGPT); Local means the model
+  on this Mac and is loopback-enforced.
 
 ## How each provider works (backend `ai_providers.rs`)
 
 | Provider | Endpoint | Auth | Notes |
 |---|---|---|---|
+| **Throughline AI** | `ai.readthroughline.com/v1/tutor` | Keychain-held activation license | Paid-build default after activation; relay forwards, streams, drops content, and meters usage as reader-facing allowance. |
 | **Local** | `{base}/chat/completions` (loopback only) | none | Unchanged LM Studio path; hard loopback backstop via `validate_base_url`. |
 | **OpenAI** | `api.openai.com/v1/chat/completions` | `Authorization: Bearer <key>` | Reuses the OpenAI-compatible client. GPT-5.x needs `max_completion_tokens` (not `max_tokens`) and `reasoning_effort: "none"` (concise answers; `"minimal"` is unsupported on gpt-5.5). Best model auto-selected from `GET /v1/models`. |
-| **Anthropic** | `api.anthropic.com/v1/messages` | `x-api-key` + `anthropic-version: 2023-06-01` | New named-event SSE state machine (`content_block_delta`/`text_delta` → text, `message_stop` → done, `error` event → fatal). `max_tokens` required; top-level `system`. Default `claude-opus-4-8`. |
+| **Anthropic** | `api.anthropic.com/v1/messages` | `x-api-key` + `anthropic-version: 2023-06-01` | Named-event SSE state machine (`content_block_delta`/`text_delta` → text, `message_stop` → done, `error` event → fatal). `max_tokens` required; top-level `system`. Default `claude-sonnet-4-6`. |
 | **Codex** | `chatgpt.com/backend-api/codex/responses` | `Bearer <access_token>` + `ChatGPT-Account-ID` + `originator: codex_cli_rs` | **App-owned device-code login** (preferred) or the Codex CLI's `~/.codex/auth.json` (fallback); **no shell-out, no OpenClaw**. Reactive 401-refresh via `auth.openai.com/oauth/token` (public client `app_EMoamEEZ73f0CkXaXp7hrann`). Responses API body requires `instructions` + a message-list `input`. |
 
 ### Codex: app-owned device-code login
@@ -51,19 +55,22 @@ writes back to whichever store the creds came from. **Verified end-to-end live**
 reply). The optional api-key token-exchange is skipped — the Responses path uses
 the access token directly.
 
-All four normalize into the existing `StreamEvent` Delta/Done/Error channel, so
+All providers normalize into the existing `StreamEvent` Delta/Done/Error channel, so
 the reader cards are unchanged.
 
 ## Settings (KV) + commands
 
-- `ai_provider` (`local|openai|anthropic|codex|none`), `ai_provider_chosen_at`
-  (onboarding-complete flag), per-provider models (`ai_model`, `ai_model_openai`,
+- `ai_provider` (`company|local|openai|anthropic|codex|none`), `ai_provider_chosen_at`
+  (choice-complete flag), per-provider models (`ai_model`, `ai_model_openai`,
   `ai_model_anthropic`, `ai_model_codex`). Cloud base URLs are **code constants**
   (a typo can't redirect a key); the `ai_base_url` slot is loopback-only.
-- `cmd_set_ai_settings(provider?, baseUrl?, model?, retentionDays?)`,
+- `cmd_activate_company`, `cmd_company_status`, `cmd_company_credits`,
+  `cmd_company_checkout`, `cmd_confirm_cloud_send`.
+- `cmd_set_ai_settings(provider?, baseUrl?, model?, retentionDays?, aiPhrases?)`,
   `cmd_set_ai_key(provider, key)`, `cmd_clear_ai_key(provider)`,
   `cmd_test_ai_connection(provider?, key?)`, `cmd_list_ai_models(provider?)`.
-  `COMMAND_API_VERSION` bumped 2 → 3.
+  Provider command surface was introduced at `COMMAND_API_VERSION` 3 and the
+  current IPC version is 6.
 
 ## Live verification (ignore-gated; never in CI)
 
@@ -75,8 +82,9 @@ behind `#[ignore]`. They read `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` from env an
 cargo test --lib -- --ignored live_anthropic --nocapture
 ```
 
-**All three verified live** (each streamed a one-word reply end-to-end):
-OpenAI `gpt-5.5`, Anthropic `claude-opus-4-8`, Codex via `codex login` (`gpt-5.5`).
+These checks are manual because model catalogues and auth contracts can change.
+Verify the exact model ids against the current provider catalogues before
+shipping cost or marketing copy.
 
 ## Known fragility
 

@@ -182,8 +182,27 @@ pub fn valid_phrase(p: &str) -> bool {
     if t.ends_with('.') {
         return false;
     }
-    let words = t.split_whitespace().count();
-    (1..=MAX_PHRASE_WORDS).contains(&words)
+    let words: Vec<&str> = t.split_whitespace().collect();
+    if !(1..=MAX_PHRASE_WORDS).contains(&words.len()) {
+        return false;
+    }
+    // Sentence case (parity with the relay's validPhrase): reject ALL-CAPS
+    // shouting and Title Casing; a leading capital and mid-phrase proper nouns
+    // stay legal. The relay enforces this before caching; the app re-validates,
+    // so the two must agree or a relay-accepted phrase would be dropped here.
+    if t == t.to_uppercase() && t.chars().any(|c| c.is_uppercase()) {
+        return false;
+    }
+    if words.len() >= 2 {
+        let capped = words
+            .iter()
+            .filter(|w| w.chars().next().is_some_and(char::is_uppercase))
+            .count();
+        if capped > words.len() / 2 {
+            return false;
+        }
+    }
+    true
 }
 
 fn plausible_hash(h: &str) -> bool {
@@ -875,6 +894,15 @@ pub fn spawn_next_phrase(
 mod tests {
     use super::*;
 
+    /// The backoff + skip-list live in process-global statics, so the tests that
+    /// mutate them must not run concurrently with each other (cargo runs tests
+    /// in parallel). Each such test takes this lock first — the same idiom as
+    /// paths::lock_env_for_test for the env-var globals. Poison-tolerant.
+    static GLOBAL_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn lock_global_state() -> std::sync::MutexGuard<'static, ()> {
+        GLOBAL_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn mem_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         crate::migrations::apply_pending(&conn).unwrap();
@@ -1033,6 +1061,10 @@ mod tests {
         ));
         assert!(!valid_phrase(&"x".repeat(81)));
         assert!(!valid_phrase("two\nlines"));
+        // Sentence-case parity with the relay (src/phrases.ts validPhrase):
+        assert!(valid_phrase("a walk with Marius and Cosette")); // proper nouns legal
+        assert!(!valid_phrase("SHOUTING AT THE GATES")); // ALL-CAPS
+        assert!(!valid_phrase("Seeing Good And Bad For What They Are")); // Title Case
     }
 
     #[test]
@@ -1136,6 +1168,7 @@ mod tests {
 
     #[test]
     fn backoff_honors_retry_after_and_caps_transient_growth() {
+        let _g = lock_global_state();
         reset_backoff_for_tests();
         assert!(!backoff_active("company"));
         note_failure(
@@ -1172,6 +1205,7 @@ mod tests {
 
     #[test]
     fn backoff_is_per_route_and_resets_on_operator_action() {
+        let _g = lock_global_state();
         reset_backoff_for_tests();
         // A relay cap-hit must not silence the reader's own key (contract
         // §Builds: the BYO flow is identical and independent).
@@ -1196,6 +1230,7 @@ mod tests {
 
     #[test]
     fn rejected_batches_are_skipped_permanently_and_cleared_by_reset() {
+        let _g = lock_global_state();
         reset_backoff_for_tests();
         let items = vec![PhraseItem {
             opening_hash: H1.into(),

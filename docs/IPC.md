@@ -38,6 +38,8 @@ type AppError =
   | { kind: "Validation"; message: string }
   | { kind: "Config";     message: string }
   | { kind: "NotFound";   resource: string; id: string | null }
+  | { kind: "NeedsCloudConsent"; message: string }
+  | { kind: "CapExhausted"; message: string }
   | { kind: "Internal";   message: string };
 ```
 
@@ -78,19 +80,13 @@ Read-only display of local data locations. Useful for rollback instructions and 
 **Dedup (skip & switch):** if the file's SHA-256 already matches an imported book, no duplicate is created — the existing book is made active (`last_opened_at` bumped) and returned with `created: false`. Re-import is idempotent. The frontend opens the Book Setup Sheet only when `created: true`.
 
 #### `cmd_configure_plan`
-- args: `{ bookId: string; targetFinishDate: string; daysPerWeek: number; sessionMinutes: number; marginHelp?: "quiet" | "guided" | "deep_study" }` — `targetFinishDate` is `YYYY-MM-DD`
+- args: `{ bookId: string; sittingLengthMinutes: number; name?: string }`
 - returns: `ReadingPlan` (the updated plan)
 - errors:
   - `NotFound` — no plan for the book
-  - `Validation` — finish date unparseable or in the past
   - `Db` — sqlite error
 
-Configures a freshly imported book's plan from the Book Setup Sheet: sets the target finish date and days-per-week, recomputes the daily section target, and persists the reading rhythm (`reading_rhythm_minutes`) and `margin_help` settings. `marginHelp` is one of `quiet` | `guided` | `deep_study` (validated against `settings::MARGIN_HELP_LEVELS`; an unrecognized value falls back to the `guided` default). **Does NOT activate the plan** — status stays `plan_ready`, so the book remains "not behind" until the first reading session (Priority 0). Added in `COMMAND_API_VERSION` 2 (new command; additive on its own).
-
-#### `cmd_read_book_bytes`
-- args: `{ bookId: string }`
-- returns: `number[]` — raw bytes of the source file (for `epub.js` to consume)
-- errors: `NotFound` if book doesn't exist; `Io` on read failure; `Validation` if source type is neither `txt` nor `epub`
+Configures a freshly imported book's plan from the Book Setup Sheet: clamps and stores the chosen sitting length, names the attempt (reader-provided or a friendly default), builds the derived `sittings` cache, and kicks off the optional phrase prefetch for the first sittings. **Does NOT activate the plan** — status stays `plan_ready` until `cmd_start_session`, so there is still no "behind" state before the reader begins.
 
 #### `cmd_today`
 - args: none
@@ -101,8 +97,15 @@ The "active book" is the one with the latest `last_opened_at` (or `created_at` i
 
 #### `cmd_read_section_text`
 - args: `{ bookId: string; sectionId: string }`
-- returns: `string` — the section's plain text (only valid for txt books)
+- returns: `string` — the section's plain text (EPUBs are extracted to text on import and read through the same path)
 - errors: `NotFound` if section missing; `Io` on file read failure
+
+#### `cmd_read_section_structure`
+- args: `{ bookId: string; sectionId: string }`
+- returns: `StyleRange[]` — UTF-16 style ranges for headings, emphasis, blockquotes, etc., relative to the section text
+- errors: `Io` (invalid book path)
+
+Reads the per-book `structure.json` sidecar. Missing sidecar or missing section returns `[]`.
 
 #### `cmd_list_sections`
 - args: `{ bookId: string }`
@@ -132,17 +135,21 @@ Makes `bookId` the active book by bumping its `last_opened_at`, so the next `cmd
 
 ### Discover (public-domain catalogue)
 
-> **Network note.** These are the only two commands that reach a remote host that is not an AI provider. Both are **reader-initiated** — they run on a click, never on a timer, launch, or in the background — and only fetch *incoming* public-domain text; no source text or reader data is ever sent out. The upstream catalogue service is intentionally never named in the UI ("the public-domain library"). Added in `COMMAND_API_VERSION` 2 (additive).
+> **Network note.** Search is on-device over the bundled catalogue. Import/download reaches Project Gutenberg only after the reader chooses a title, and only fetches incoming public-domain text; no source text or reader data is ever sent out.
 
 #### `cmd_discover_search`
-- args: `{ query?: string | null; page?: number | null; languages?: string | null }` — `query` empty/omitted ⇒ most-downloaded; `page` is 1-based; `languages` defaults to `en`
-- returns: `DiscoverPage { count: number; next_page: number | null; results: DiscoverBook[]; offline: boolean }` (see types.ts). `count` is the catalogue size for the requested query; `next_page` is null at the end of results; `offline` is `true` when results came from the bundled seed (see below).
-- errors:
-  - `Io { message }` — only if even the offline seed is unavailable (the live path failing no longer errors — it degrades; see below)
+- args: `{ query?: string | null; page?: number | null }` — `query` empty/omitted ⇒ most-downloaded; `page` is 1-based
+- returns: `DiscoverPage { count: number; next_page: number | null; results: DiscoverBook[]; offline: boolean }` (see types.ts). `count` is the catalogue size for the requested query; `next_page` is null at the end of results; `offline` is always `false` for the full bundled catalogue search.
+- errors: none
 
-Results are sorted by popularity. The live path restricts to titles that expose a `text/plain` format (importable) and `DiscoverBook.txt_url` / `epub_url` are opaque download URLs echoed straight back to `cmd_import_from_gutendex`.
+Results are sorted by popularity. `DiscoverBook.txt_url` / `epub_url` are opaque download URLs echoed straight back to `cmd_import_from_gutendex`.
 
-**Offline fallback.** The live catalogue is a single third-party service. If it is unreachable (timeout / connect / non-2xx / unparseable body), the command does **not** error — it falls back to a bundled offline seed (`src-tauri/resources/discover_seed.json`, the top ~200 most-downloaded public-domain books, `include_str!`-embedded) and returns those results with `offline: true`. The seed is searched by case-insensitive substring over title/author, popularity-ordered, paged like the live path; an empty query is idle browse. Seed rows derive their `txt_url`/`epub_url` from the book id (`gutenberg.org/cache/epub/{id}/pg{id}.txt|.epub`), so importing a seeded book never touches the search API. A **successful** live response with zero results is returned as-is (`offline: false`) — only a transport/HTTP/parse failure triggers the fallback, so a genuine "no matches" is never masked by unrelated seed books. The seed is regenerated offline by `scripts/build-discover-seed.mjs`; it is build-time tooling, not shipped or run at runtime.
+The full search index is `src-tauri/resources/discover_catalogue.tsv`; the idle shelves come from `src-tauri/resources/discover_seed.json`. Both are embedded at build time and searched locally.
+
+#### `cmd_discover_seed`
+- args: `{ query?: string | null; page?: number | null }`
+- returns: `DiscoverPage` from the smaller bundled shelf set, with `offline: true` retained for wire compatibility.
+- errors: none
 
 #### `cmd_import_from_gutendex`
 - args: `{ book: { txt_url: string | null; epub_url: string | null } }` — pass the chosen row's URLs verbatim
@@ -155,6 +162,66 @@ Downloads the chosen book and imports it through the **same owned path** as the 
 
 ---
 
+### Plans
+
+Plan rows carry both a pace `status` (`plan_ready` / `active` / `completed`) and a lifecycle (`active` / `paused` / `completed` / `archived` / `superseded`). The reader-facing plan list uses `PlanSummary { id, book_id, name, lifecycle, status, start_date, paused_days_total, session_count, note_count, reached_percent }`.
+
+#### `cmd_list_plans_for_book`
+- args: `{ bookId: string }`
+- returns: `PlanSummary[]`
+- errors: `Db`
+
+Lists non-deleted plans for the book, live attempt first, with session/note counts from `reading_sessions.plan_id`.
+
+#### `cmd_get_active_plan`
+- args: `{ bookId: string }`
+- returns: `PlanSummary | null`
+- errors: `Db`
+
+#### `cmd_start_new_plan`
+- args: `{ bookId: string }`
+- returns: void
+- errors: `Db`
+
+Creates a new plan-ready active attempt. The caller handles whether to keep, pause, or replace any existing live attempt.
+
+#### `cmd_pause_plan`
+- args: `{ planId: string }`
+- returns: void
+- errors: `Db`
+
+Marks the active plan paused and snapshots progress for the plan list.
+
+#### `cmd_resume_plan`
+- args: `{ planId: string }`
+- returns: void
+- errors: `Db`
+
+Reactivates a paused plan and accounts for paused days.
+
+#### `cmd_archive_plan`
+- args: `{ planId: string }`
+- returns: void
+- errors: `Db`
+
+Moves an attempt out of the live plan list while preserving its sessions and notes.
+
+#### `cmd_delete_plan`
+- args: `{ planId: string }`
+- returns: void
+- errors: `Db`
+
+Soft-deletes a plan for the undo window. A retention sweep later purges let-go plans past the window.
+
+#### `cmd_restore_plan`
+- args: `{ planId: string }`
+- returns: void
+- errors: `Db`
+
+Undo path for `cmd_delete_plan`.
+
+---
+
 ### Sessions, progress, plan adjustments
 
 #### `cmd_start_session`
@@ -162,7 +229,7 @@ Downloads the chosen book and imports it through the **same owned path** as the 
 - returns: `ReadingSession`
 - errors: `Db`
 
-Side effects: inserts a row in `reading_sessions`, bumps the book's `last_opened_at`.
+Side effects: inserts a row in `reading_sessions`, stamps the current live `reading_plans.id` into `reading_sessions.plan_id` when one exists, bumps the book's `last_opened_at`, and activates that plan if it was still `plan_ready`.
 
 #### `cmd_end_session`
 - args: `{ sessionId: string; endLocator?: string; minutes?: number; completedSectionIds?: string[]; summarySentence?: string }`
@@ -176,14 +243,7 @@ Side effects: marks every section in `completedSectionIds` as complete in `secti
 - returns: void
 - errors: `Db`
 
-Saves mid-session position for resume.
-
-#### `cmd_extend_finish_date`
-- args: `{ bookId: string; addDays: number }`
-- returns: `RecomputedPlan { new_target_finish_date, new_daily_target_units, remaining_sections, remaining_days }`
-- errors: `NotFound` if no plan for book; `Db`
-
-Recovery action — pushes the plan's finish date and recomputes the daily target over the remaining sections.
+Saves mid-session position for resume and advances `reading_position` with the global body offset.
 
 #### `cmd_restart_current_section`
 - args: `{ bookId: string; sectionId: string }`
@@ -215,6 +275,13 @@ COALESCE semantics: an absent field is left unchanged, so autosave can PATCH jus
 - returns: `Note[]` (newest first)
 - errors: `Db`
 
+#### `cmd_delete_note`
+- args: `{ noteId: string }`
+- returns: void
+- errors: `Db`, `Io` (re-export failure non-fatal)
+
+Deletes the row idempotently and regenerates the owning book's literature note, removing that note's fenced block while preserving reader edits outside Throughline fences.
+
 #### `cmd_quote_warns`
 - args: `{ quote: string }`
 - returns: `boolean` — true if the quote exceeds the ~300 char fair-use threshold
@@ -229,7 +296,7 @@ Regenerates EVERY book's literature note (`{export_root}/Books/{slug}.md`) idemp
 
 ---
 
-### AI (local-only by default; see Settings)
+### AI (reader-chosen provider; Local is loopback-only)
 
 #### `cmd_generate_prompt_preview`
 - args: `{ bookId: string; mode: string; selection: string; chapter?: string; locator?: string; userNote?: string }`
@@ -238,7 +305,14 @@ Regenerates EVERY book's literature note (`{export_root}/Books/{slug}.md`) idemp
 
 **No network call.** The returned `prompt` is the literal text that *would* be sent if you call `cmd_ai_ask`. The `ai_request_id` lets you save the preview as a Note via `cmd_save_ai_preview_as_note`.
 
-`mode` must be one of: `explain`, `historical`, `vocabulary`, `socratic`, `durable_note`, `prepare_next`.
+`mode` must be one of: `explain`, `historical`, `vocabulary`, `socratic`, `durable_note`, `prepare_next`, `section_briefing`.
+
+#### `cmd_ai_preview`
+- args: `{ mode: string; selectedText: string; bookTitle: string; author?: string | null; sectionLabel?: string | null; sectionText?: string | null }`
+- returns: `{ title: string; disclosure: string; prompt: string; copy_label: string }`
+- errors: `Validation` (unknown mode)
+
+Reader-facing, network-free prompt fallback used by the setup sheet's "copy prompt" path. It deliberately omits internal prompt scaffolding.
 
 #### `cmd_save_ai_preview_as_note`
 - args: `{ aiRequestId: string; noteType: string; body: string; locator: string; chapterLabel?: string; anchorStart?: string; anchorEnd?: string; anchoredText?: string; sessionId?: string }`
@@ -252,7 +326,7 @@ The four optional fields are **additive** (a minor change — no integer API bum
 #### `cmd_ai_ask`
 - args: `{ bookId: string; mode: string; selection: string; chapter?: string; locator?: string; userNote?: string; onEvent: Channel<StreamEvent> }`
 - returns: `AskHandle { ai_request_id: string; prompt_sent: string; provider_host: string }`
-- errors: `Validation`, `Config` (no model id set), `NotFound` (book), `Ai` (URL refused, transport failure, circuit open)
+- errors: `Validation`, `Config` (no provider/model/key), `NeedsCloudConsent` (first cloud send not confirmed), `CapExhausted` (included assistant allowance exhausted), `NotFound` (book), `Ai` (URL refused, transport failure, circuit open)
 
 **The bytes in `messages[0].content` of the actual HTTP request equal `prompt_sent` byte-for-byte.** That invariant is pinned by `preview_text_equals_sent_payload` in the test suite.
 
@@ -266,10 +340,101 @@ type StreamEvent =
 
 The call is fronted by a circuit breaker (3 failures / 60s window / 30s cool-down). When Open, the command errors immediately with `AppError::Ai { message: "AI service unavailable: circuit open …" }` instead of hanging.
 
-#### `cmd_list_ai_models`
+#### `cmd_confirm_cloud_send`
 - args: none
-- returns: `string[]` — model ids reported by `{baseUrl}/models`
+- returns: void
+- errors: `Db`
+
+Records first-cloud-call consent. After this, `cmd_ai_ask` no longer returns `NeedsCloudConsent` for the chosen remote provider.
+
+#### `cmd_model_catalog`
+- args: `{ provider: string }`
+- returns: `ModelInfo[]` — static ids, labels, tier, and published per-Mtok prices for the provider picker
+- errors: never
+
+#### `cmd_get_usage_summary`
+- args: none
+- returns: `UsageSummary { total_calls, total_cost_micros, month_cost_micros, spend_cap_cents, by_provider, by_lens, pricing_verified_at }`
+- errors: `Db`
+
+Aggregates locally recorded token usage. Pricing constants are code defaults and must be re-verified before making current pricing claims.
+
+#### `cmd_finalize_ai_request`
+- args: `{ requestId: string; provider: string; model: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreationTokens?: number }`
+- returns: `number` — computed cost in micro-dollars
+- errors: `Db`
+
+Idempotently records a usage row for an AI request. `cmd_ai_ask` also writes usage when provider stream events include it; this command is the explicit upsert path.
+
+#### `cmd_set_monthly_spend_cap`
+- args: `{ cents: number }`
+- returns: void
+- errors: `Db`
+
+Sets the reader's local BYO cloud spend cap in whole cents (`0` = off). Company mode is capped server-side and is exempt from this dollar-denominated local cap.
+
+#### `cmd_list_ai_models`
+- args: `{ provider?: string; baseUrl?: string }`
+- returns: `string[]` — Local returns ids reported by `{baseUrl}/models`; cloud providers return the app's curated ids
 - errors: `Ai` (URL refused or transport failure)
+
+`provider` / `baseUrl` let Settings detect models against an unsaved Local draft without persisting it first. Local remains loopback-validated.
+
+#### `cmd_activate_company`
+- args: `{ activationToken: string }`
+- returns: `CompanyStatus { provider_active: boolean; has_license: boolean }`
+- errors: `Validation` (bad token), `Ai` (relay unreachable), `Io`/`Config` (Keychain failure)
+
+Exchanges a paid-build activation token for a Keychain-held license, switches `ai_provider` to `company`, resets phrase backoff, and stamps first-cloud consent.
+
+#### `cmd_company_status`
+- args: none
+- returns: `CompanyStatus`
+- errors: `Db`
+
+Read-only company-provider state for Settings; uses persisted flags so it can render without prompting Keychain.
+
+#### `cmd_company_checkout`
+- args: none
+- returns: `string` — checkout URL opened in the system browser
+- errors: `Ai`
+
+Reader-initiated paid checkout. The returned URL is also available to the UI as a fallback.
+
+#### `cmd_company_credits`
+- args: none
+- returns: `{ status: string; remaining_fraction: number; approx_questions_left: number }`
+- errors: `Config` (not activated), `Ai` (relay unreachable)
+
+Read-only included-assistant allowance display. The server returns fractions/questions, never dollar amounts.
+
+#### `cmd_open_support_email`
+- args: none
+- returns: void
+- errors: never
+
+Opens a fixed `mailto:` for requesting more included-assistant headroom. It carries no dynamic book, usage, or passage data.
+
+#### `cmd_codex_device_start`
+- args: none
+- returns: `{ device_auth_id: string; user_code: string; verification_url: string; interval: number }`
+- errors: `Ai`
+
+Starts the app-owned ChatGPT/Codex device-code login. No Codex CLI shell-out.
+
+#### `cmd_codex_device_poll`
+- args: `{ deviceAuthId: string; userCode: string }`
+- returns: `{ status: "pending" | "complete" | "denied"; message: string }`
+- errors: `Ai`, `Db`
+
+Polls once. On `complete`, stores app-owned Codex credentials in the Keychain and marks the non-secret credential-present flag.
+
+#### `cmd_codex_logout`
+- args: none
+- returns: `SettingsDto`
+- errors: `Config`, `Db`
+
+Clears app-owned Codex credentials. It does not modify the Codex CLI's own login.
 
 #### `cmd_test_ai_connection`
 - args: `{ provider?: string; key?: string; baseUrl?: string }` — all optional; with none, the saved settings are probed
@@ -327,12 +492,23 @@ type SettingsDto = {
   export_path: string;
   export_path_is_default: boolean;
   app_data_path: string;
-  ai_posture: string;        // "Local-only mode: ON" / "OFF"
+  ai_posture: string;        // human label for the real send target
   ai_base_url: string;
   ai_model: string;
   quote_policy: string;
   quote_warn_chars: number;
   ai_requests_retention_days: number;  // AI audit retention window (adr-001); 0 = keep forever
+  margin_help: "quiet" | "guided" | "deep_study";
+  ai_provider: "local" | "openai" | "anthropic" | "codex" | "company" | "none" | "";
+  ai_provider_chosen: boolean;
+  ai_remote_allowed: boolean;
+  ai_model_openai: string;
+  ai_model_anthropic: string;
+  ai_model_codex: string;
+  ai_key_present_openai: boolean;
+  ai_key_present_anthropic: boolean;
+  ai_codex_creds_present: boolean;
+  ai_phrases: boolean;
 };
 ```
 
@@ -343,6 +519,13 @@ type SettingsDto = {
 - returns: `SettingsDto` (updated)
 - errors: `Config` (bad path), `Io` (mkdir fails)
 
+#### `cmd_check_export_path`
+- args: none
+- returns: `{ path: string; writable: boolean; message: string | null }`
+- errors: never
+
+Launch-time preflight for the effective export root. It does not create the default `~/Documents/Throughline` folder; a missing folder is considered writable until the first reader-initiated export creates it.
+
 #### `cmd_set_ai_settings`
 - args: `{ provider?: string; baseUrl?: string; model?: string; retentionDays?: number; aiPhrases?: boolean }`
 - returns: `SettingsDto` (updated)
@@ -352,12 +535,27 @@ type SettingsDto = {
 
 Backend-emitted event: `tl-phrases-updated` fires after a phrase batch is stored (fire-and-forget upsert); the frontend refreshes the Today card so the phrase slot swaps text in place. Additive, no command-surface change.
 
+#### `cmd_set_ai_key`
+- args: `{ provider: "openai" | "anthropic"; key: string }`
+- returns: `SettingsDto`
+- errors: `Validation` (empty key), `Config` (Keychain failure), `Db`
+
+Stores a BYO provider key in the OS Keychain. The key is never returned; only the matching `ai_key_present_*` flag is exposed.
+
+#### `cmd_clear_ai_key`
+- args: `{ provider: "openai" | "anthropic" }`
+- returns: `SettingsDto`
+- errors: `Config` (Keychain failure), `Db`
+
+Deletes a stored BYO provider key idempotently and refreshes the non-secret presence flag.
+
 ---
 
 ## Privacy invariants
 
-- **Local-only mode (default ON):** `cmd_ai_ask` and `cmd_list_ai_models` refuse any non-loopback URL at the call site via `ai_client::validate_base_url`. Test: `local_only_rejects_remote_and_allows_loopback`.
-- **Selection-only context:** every AI command takes a `selection` field; the book body is never sent in bulk.
+- **Provider is authoritative:** `ai_provider` decides where AI calls go; the legacy `ai_local_only` key is back-compat only and is not exposed to JS.
+- **Local provider is loopback-only:** when `ai_provider = "local"`, `cmd_ai_ask` and `cmd_list_ai_models` refuse non-loopback URLs at the call site via `ai_client::validate_base_url`. Test: `local_only_rejects_remote_and_allows_loopback`.
+- **Selection/section-only context:** tutor lenses send the selected passage; Deep Study sends only the current section after the reader chose Deep Study, started a session, and consented. The book body is never sent in bulk.
 - **Save-by-approval:** `ai_requests.wrote_to_memory` flips to 1 only via the explicit save commands. No autonomous writes from AI output.
 - **Auditable + bounded (adr-001):** every preview and Ask call is logged to `ai_requests` and visible via `cmd_list_ai_requests`; `provider` distinguishes a preview (never sent) from a real call (the host). A launch sweep + `cmd_forget_ai_history` delete rows older than `ai_requests_retention_days` that never became a note, so discarded previews fade while the save-by-approval trace persists.
 - **No telemetry:** structured logs go to `{app_support}/logs/app.log` and never leave the machine.

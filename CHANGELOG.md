@@ -2,7 +2,7 @@
 
 All notable changes to Throughline are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver. The
-Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 5)
+Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 6)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
 ## [0.6.1] - 2026-06-11

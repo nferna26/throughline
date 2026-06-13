@@ -363,6 +363,8 @@ export type AppError =
   | { kind: "Validation"; message: string }
   | { kind: "Config";     message: string }
   | { kind: "NotFound";   resource: string; id: string | null }
+  | { kind: "NeedsCloudConsent"; message: string }
+  | { kind: "CapExhausted"; message: string }
   | { kind: "Internal";   message: string };
 
 /** Best-effort one-line display for any caught error (AppError, native Error,
