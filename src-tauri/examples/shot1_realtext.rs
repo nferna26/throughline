@@ -355,7 +355,7 @@ fn main() -> anyhow::Result<()> {
     println!("    exported → {}", md_path.display());
 
     println!("\n==> SHOT 1 REAL-TEXT OK (furthest step: {})", furthest);
-    println!("    real import → chapter-like sections → 30-day plan → calm Today →");
+    println!("    real import → chapter-like sections → sitting plan → calm Today →");
     println!("    day-1 prose → normal+rescue sessions → safe TutorNote export");
     Ok(())
 }

@@ -27,7 +27,7 @@ use throughline_lib::*;
 /// Build a Project-Gutenberg-shaped plain-text fixture for the Augustine
 /// *Confessions*. Short authentic epigraph + generated body; no long verbatim
 /// reproduction. Enough BOOK/Roman-numeral headings (>= 3) that `import::sectionize`
-/// uses chapter detection, and enough body that the 30-day plan has real days.
+/// uses chapter detection, and enough body that the sitting engine has real work.
 fn confessions_fixture() -> String {
     let mut s = String::new();
     s.push_str("The Project Gutenberg eBook of The Confessions of Saint Augustine\n\n");
@@ -283,7 +283,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     println!("\n==> SHOT 1 ACCEPTANCE OK");
-    println!("    import → 30-day plan → today's section → complete → note → export");
+    println!("    import → sitting plan → today's section → complete → note → export");
     println!(
         "    literature note: type:reading-source ✓  source_private:true ✓  source_sha256 ✓  chapter heading ✓  fence id ✓"
     );

@@ -65,10 +65,40 @@ pub fn cmd_start_session(
     state: State<DbState>,
 ) -> Result<ReadingSession, AppError> {
     let conn = state.0.lock()?;
+    start_session_on(
+        &conn,
+        &book_id,
+        section_id.as_deref(),
+        start_locator.as_deref(),
+    )
+}
+
+fn live_plan_id_for_book(conn: &Connection, book_id: &str) -> rusqlite::Result<Option<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM reading_plans
+         WHERE book_id = ?1 AND lifecycle = 'active' AND deleted_at IS NULL
+         ORDER BY start_date DESC, id DESC
+         LIMIT 1",
+    )?;
+    let mut rows = stmt.query(params![book_id])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(row.get(0)?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn start_session_on(
+    conn: &Connection,
+    book_id: &str,
+    section_id: Option<&str>,
+    start_locator: Option<&str>,
+) -> Result<ReadingSession, AppError> {
     let id = format!("sess_{}", Uuid::new_v4().simple());
     let now = Utc::now().to_rfc3339();
-    let start_loc = start_locator.or_else(|| {
-        section_id.as_ref().and_then(|sid| {
+    let plan_id = live_plan_id_for_book(conn, book_id)?;
+    let start_loc = start_locator.map(str::to_string).or_else(|| {
+        section_id.and_then(|sid| {
             conn.query_row(
                 "SELECT start_locator FROM book_sections WHERE id = ?1",
                 params![sid],
@@ -79,20 +109,22 @@ pub fn cmd_start_session(
         })
     });
     conn.execute(
-        "INSERT INTO reading_sessions (id, book_id, started_at, ended_at, start_locator, end_locator, minutes, completed_assignment, subjective_difficulty)
-         VALUES (?1, ?2, ?3, NULL, ?4, NULL, NULL, 0, NULL)",
-        params![id, book_id, now, start_loc],
+        "INSERT INTO reading_sessions (id, book_id, started_at, ended_at, start_locator, end_locator, minutes, completed_assignment, subjective_difficulty, plan_id)
+         VALUES (?1, ?2, ?3, NULL, ?4, NULL, NULL, 0, NULL, ?5)",
+        params![id, book_id, now, start_loc, plan_id],
     )?;
     // Bump last_opened_at so this book becomes "active" on the Today screen.
-    bump_last_opened_at(&conn, &book_id)?;
+    bump_last_opened_at(conn, book_id)?;
     // Activate the plan on the first reading session: plan_ready → active and
     // stamp activated_at, so the pace clock starts HERE, not at import. Legacy
     // 'active' plans (no plan_ready state) are left untouched.
-    conn.execute(
-        "UPDATE reading_plans SET status = 'active', activated_at = COALESCE(activated_at, ?1)
-         WHERE book_id = ?2 AND status = 'plan_ready'",
-        params![now, book_id],
-    )?;
+    if let Some(plan_id) = &plan_id {
+        conn.execute(
+            "UPDATE reading_plans SET status = 'active', activated_at = COALESCE(activated_at, ?1)
+             WHERE id = ?2 AND status = 'plan_ready'",
+            params![now, plan_id],
+        )?;
+    }
     let mut stmt = conn.prepare(
         "SELECT id, book_id, started_at, ended_at, start_locator, end_locator, minutes, completed_assignment, subjective_difficulty
          FROM reading_sessions WHERE id = ?1",
@@ -221,6 +253,78 @@ fn complete_plan_if_book_done(conn: &Connection, book_id: &str) {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+
+    #[test]
+    fn start_session_links_to_live_plan_for_history_counts() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO books (id,title,author,source_type,source_path,source_sha256,created_at,last_opened_at)
+               VALUES ('b1','T',NULL,'txt','/x','sha','2026-01-01',NULL);
+             INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle)
+               VALUES ('p_old','b1','2026-03-01','plan_ready','archived');
+             INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle,deleted_at)
+               VALUES ('p_gone','b1','2026-04-01','plan_ready','active',datetime('now'));
+             INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle)
+               VALUES ('p_live','b1','2026-02-01','plan_ready','active');
+             INSERT INTO book_sections (id,book_id,label,start_locator,sort_order,assignable)
+               VALUES ('sec1','b1','S1','char:42',0,1);",
+        )
+        .unwrap();
+
+        let session = start_session_on(&conn, "b1", Some("sec1"), None).unwrap();
+
+        let session_plan: Option<String> = conn
+            .query_row(
+                "SELECT plan_id FROM reading_sessions WHERE id = ?1",
+                [&session.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(session_plan.as_deref(), Some("p_live"));
+        assert_eq!(session.start_locator.as_deref(), Some("char:42"));
+
+        let status = |id: &str| -> (String, Option<String>) {
+            conn.query_row(
+                "SELECT status, activated_at FROM reading_plans WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        let (live_status, live_activated_at) = status("p_live");
+        assert_eq!(live_status, "active");
+        assert!(live_activated_at.is_some());
+        assert_eq!(
+            status("p_old").0,
+            "plan_ready",
+            "archived attempts must not be activated by a new session"
+        );
+        assert_eq!(
+            status("p_gone").0,
+            "plan_ready",
+            "let-go attempts must not be activated by a new session"
+        );
+
+        conn.execute(
+            "INSERT INTO notes (id,book_id,session_id,note_type,locator,body,created_at,updated_at)
+             VALUES ('n1','b1',?1,'Observation','char:42','kept note','2026-06-12','2026-06-12')",
+            [&session.id],
+        )
+        .unwrap();
+        let (session_count, note_count): (i64, i64) = conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM reading_sessions s WHERE s.plan_id = 'p_live'),
+                    (SELECT COUNT(*) FROM notes n WHERE n.session_id IN
+                       (SELECT id FROM reading_sessions s WHERE s.plan_id = 'p_live'))",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(session_count, 1);
+        assert_eq!(note_count, 1);
+    }
 
     /// CORE-1022 / P3-24: when the last assignable section completes, only the
     /// LIVE plan may flip to 'completed'. Archived and let-go (soft-deleted)
