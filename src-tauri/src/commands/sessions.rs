@@ -73,11 +73,19 @@ pub fn cmd_start_session(
     )
 }
 
-fn live_plan_id_for_book(conn: &Connection, book_id: &str) -> rusqlite::Result<Option<String>> {
+/// The plan a session reading THIS book belongs to — the SAME plan `cmd_today`
+/// serves. Mirrors `fetch_plan_for_book`'s selection exactly (non-deleted,
+/// active-first, then most recent) so a session can never link to a different
+/// plan than the one the reader sees. Notably this includes a paused plan that
+/// is still `plan_ready` (paused before its first read): the reader can still
+/// open and read it, so its session must link + activate it — a narrower
+/// `lifecycle = 'active'` filter would orphan that session (plan_id NULL,
+/// dropped from the Plans counts and the delete cascade).
+fn owning_plan_id_for_book(conn: &Connection, book_id: &str) -> rusqlite::Result<Option<String>> {
     let mut stmt = conn.prepare(
         "SELECT id FROM reading_plans
-         WHERE book_id = ?1 AND lifecycle = 'active' AND deleted_at IS NULL
-         ORDER BY start_date DESC, id DESC
+         WHERE book_id = ?1 AND deleted_at IS NULL
+         ORDER BY (lifecycle = 'active') DESC, start_date DESC
          LIMIT 1",
     )?;
     let mut rows = stmt.query(params![book_id])?;
@@ -96,7 +104,7 @@ fn start_session_on(
 ) -> Result<ReadingSession, AppError> {
     let id = format!("sess_{}", Uuid::new_v4().simple());
     let now = Utc::now().to_rfc3339();
-    let plan_id = live_plan_id_for_book(conn, book_id)?;
+    let plan_id = owning_plan_id_for_book(conn, book_id)?;
     let start_loc = start_locator.map(str::to_string).or_else(|| {
         section_id.and_then(|sid| {
             conn.query_row(
@@ -324,6 +332,54 @@ mod tests {
             .unwrap();
         assert_eq!(session_count, 1);
         assert_eq!(note_count, 1);
+    }
+
+    /// A plan PAUSED before its first read keeps status 'plan_ready' (pause only
+    /// rewrites active/rebalanced). The reader can still open and read it, so its
+    /// session must LINK to it (plan_id set, not NULL) and activate it — a
+    /// narrower lifecycle='active' selector would orphan the session from the
+    /// Plans counts + delete cascade. (Regression guard for the absorbed
+    /// plan-linkage change.)
+    #[test]
+    fn start_session_links_and_activates_a_paused_but_unstarted_plan() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO books (id,title,author,source_type,source_path,source_sha256,created_at,last_opened_at)
+               VALUES ('b1','T',NULL,'txt','/x','sha','2026-01-01',NULL);
+             INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle)
+               VALUES ('p_paused','b1','2026-02-01','plan_ready','paused');
+             INSERT INTO book_sections (id,book_id,label,start_locator,sort_order,assignable)
+               VALUES ('sec1','b1','S1','char:0',0,1);",
+        )
+        .unwrap();
+
+        let session = start_session_on(&conn, "b1", Some("sec1"), None).unwrap();
+
+        let linked: Option<String> = conn
+            .query_row(
+                "SELECT plan_id FROM reading_sessions WHERE id = ?1",
+                [&session.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            linked.as_deref(),
+            Some("p_paused"),
+            "session must link to the only plan"
+        );
+        let (status, activated): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, activated_at FROM reading_plans WHERE id = 'p_paused'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            status, "active",
+            "first real read activates a paused plan_ready plan"
+        );
+        assert!(activated.is_some());
     }
 
     /// CORE-1022 / P3-24: when the last assignable section completes, only the
