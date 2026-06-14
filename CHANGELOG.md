@@ -5,6 +5,31 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 6)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.7.0] - 2026-06-14
+
+Today opens to your book, and starting one is a single step.
+
+### Added
+
+- **A new Today screen.** Open the app and you land on your current book, on the
+  desk, showing exactly the stretch to read today — one obvious next step instead
+  of a dashboard. Each book is now paced into natural *sittings*, and Today is the
+  one you're on.
+- **AI reading phrases (optional).** With the company-paid AI turned on, your
+  reading sessions can carry a short, descriptive phrase so they're easy to
+  recognize at a glance. Off by default for existing libraries — turn it on in
+  Settings.
+
+### Changed
+
+- **Adding a book is now one question.** The setup sheet asks a single thing to
+  build your reading plan, instead of a multi-field form.
+
+### Fixed
+
+- Starting a session now reliably links to the plan that owns Today, including a
+  plan you had paused before its first sitting.
+
 ## [0.6.1] - 2026-06-11
 
 ### Changed

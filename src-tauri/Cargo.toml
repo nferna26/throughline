@@ -1,6 +1,6 @@
 [package]
 name = "throughline"
-version = "0.6.1"
+version = "0.7.0"
 description = "Throughline — local-first macOS reading app for serious readers"
 authors = ["Nick Fernandez"]
 edition = "2021"
