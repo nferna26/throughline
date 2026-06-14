@@ -132,6 +132,30 @@ the tutor quotes your selection before explaining. Treat each as an acceptance c
 - Quiet by default: no sounds, badges, or interruptions. The book is the interface.
 - If a feature needs documentation to be usable, the feature isn't done.
 
+## Operational guardrails (production is Nick's hand on the wheel)
+
+Hard stops with case law, learned the expensive way. A production-mutating op is
+HANDED to Nick as a ready-to-run command, never executed by the agent.
+
+- **Production routing is a hand-off, not an authorized action.** Any op that can
+  attach, move, or detach a production domain or route — including a deploy whose env
+  config could *inherit* a top-level route — stops and hands to Nick, same tier as
+  prod DB writes. (Case law: `wrangler deploy --env staging` inherited the
+  `custom_domain` route, moved `ai.readthroughline.com` onto the staging worker, downed
+  production tutoring, and briefly exposed a public mint→drain. Stage 5, 2026-06-13.)
+- **Non-prod never combines a production secret with a privileged flag.** Staging/
+  preview gets its own scoped, disposable key; dev-mint and every bypass stay OFF
+  anywhere a public route could resolve. A real key on a domain-reachable worker with
+  dev-mint on is a public drain by construction.
+- **Inspect the tree before any destructive VCS/filesystem op.** `git status` before
+  staging; never `git add -A` / `commit -am` over an un-inspected tree; never act on a
+  config not read end-to-end for inherited/default behavior. (Case law: a blind
+  `git add -A` swept uncommitted in-progress work into a mislabeled commit merged to
+  main. Both Stage-5 incidents trace to acting on un-inspected state.)
+- **Migration tracking is production state; reconciling it is a one-way assertion.**
+  Marking a migration applied asserts its full effects are present — verify against the
+  live schema first; never mark-applied to silence an error.
+
 ## Working agreements
 
 - **Free to do:** read anything, run the full suite, fix bugs, refactor with tests green,
