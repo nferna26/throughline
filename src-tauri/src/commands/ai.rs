@@ -559,7 +559,7 @@ pub async fn cmd_ai_ask(
                     cache_creation_tokens,
                 };
                 if let Ok(conn) = app.state::<DbState>().0.lock() {
-                    let _ = write_usage_row(&conn, &rec_ai_id, &rec_provider, &rec_model, &usage);
+                    record_stream_usage_row(&conn, &rec_ai_id, &rec_provider, &rec_model, &usage);
                 }
                 continue;
             }
@@ -834,8 +834,7 @@ fn company_status_db_bits(conn: &rusqlite::Connection) -> (bool, bool) {
             settings::get_ai_provider(conn),
             settings::AiProvider::Company
         ),
-        settings::get_string(conn, settings::KEY_COMPANY_ACTIVATED).as_deref()
-            == Some("1"),
+        settings::get_string(conn, settings::KEY_COMPANY_ACTIVATED).as_deref() == Some("1"),
     )
 }
 
@@ -1003,6 +1002,29 @@ pub(crate) fn write_usage_row(
         ],
     )?;
     Ok(cost)
+}
+
+fn record_stream_usage_row(
+    conn: &rusqlite::Connection,
+    request_id: &str,
+    provider: &str,
+    model: &str,
+    usage: &crate::ai_providers::TokenUsage,
+) -> Option<i64> {
+    match write_usage_row(conn, request_id, provider, model, usage) {
+        Ok(cost) => Some(cost),
+        Err(e) => {
+            tracing::warn!(
+                category = "ai_usage_write",
+                request_id = request_id,
+                provider = provider,
+                model = model,
+                error = %e,
+                "ai_usage_write_failed"
+            );
+            None
+        }
+    }
 }
 
 /// List selectable models for a provider. Local lists the server's `/models`;
@@ -1309,6 +1331,95 @@ mod tests {
             )
             .unwrap();
         assert_eq!((it, ot, cm), (4750, 400, 20_250));
+    }
+
+    #[test]
+    fn stream_usage_write_failure_is_logged_not_silently_dropped() {
+        use std::collections::BTreeMap;
+        use std::sync::{Arc, Mutex};
+        use tracing::field::{Field, Visit};
+        use tracing::{Event, Subscriber};
+        use tracing_subscriber::layer::Context;
+        use tracing_subscriber::prelude::*;
+        use tracing_subscriber::{Layer, Registry};
+
+        struct CaptureLayer {
+            events: Arc<Mutex<Vec<BTreeMap<String, String>>>>,
+        }
+
+        impl<S> Layer<S> for CaptureLayer
+        where
+            S: Subscriber,
+        {
+            fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+                let mut visitor = FieldCapture::default();
+                event.record(&mut visitor);
+                self.events.lock().unwrap().push(visitor.fields);
+            }
+        }
+
+        #[derive(Default)]
+        struct FieldCapture {
+            fields: BTreeMap<String, String>,
+        }
+
+        impl Visit for FieldCapture {
+            fn record_str(&mut self, field: &Field, value: &str) {
+                self.fields
+                    .insert(field.name().to_string(), value.to_string());
+            }
+
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                self.fields
+                    .insert(field.name().to_string(), format!("{value:?}"));
+            }
+        }
+
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute("DROP TABLE ai_request_usage", []).unwrap();
+        let usage = crate::ai_providers::TokenUsage {
+            input_tokens: 10,
+            output_tokens: 5,
+            ..Default::default()
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = Registry::default().with(CaptureLayer {
+            events: Arc::clone(&events),
+        });
+
+        let result = tracing::subscriber::with_default(subscriber, || {
+            record_stream_usage_row(
+                &conn,
+                "req_missing_usage_table",
+                "anthropic",
+                "claude-sonnet-4-6",
+                &usage,
+            )
+        });
+
+        assert!(
+            result.is_none(),
+            "the live stream path should notice the missed usage write"
+        );
+        let events = events.lock().unwrap();
+        assert!(
+            events.iter().any(|fields| {
+                fields
+                    .get("category")
+                    .is_some_and(|v| v == "ai_usage_write")
+                    && fields
+                        .get("request_id")
+                        .is_some_and(|v| v == "req_missing_usage_table")
+                    && fields
+                        .get("message")
+                        .is_some_and(|v| v.contains("ai_usage_write_failed"))
+                    && fields
+                        .get("error")
+                        .is_some_and(|v| v.contains("ai_request_usage"))
+            }),
+            "missing usage writes must produce a structured local log event, got {events:?}"
+        );
     }
 
     /// CORE-1034: the connection test may probe a DRAFT base URL (the LM Studio
