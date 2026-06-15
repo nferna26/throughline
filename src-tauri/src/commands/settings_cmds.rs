@@ -32,6 +32,25 @@ pub fn cmd_paths_info(state: State<DbState>) -> Result<serde_json::Value, AppErr
     }))
 }
 
+/// Mark that the next process startup is the completion of a reader-approved
+/// update relaunch and should bring Throughline back to the foreground.
+#[tauri::command]
+pub fn cmd_prepare_update_relaunch_focus() -> Result<(), AppError> {
+    crate::relaunch_focus::prepare_update_relaunch_focus().map_err(|e| {
+        AppError::io(format!(
+            "Could not prepare the update relaunch marker: {e:#}"
+        ))
+    })
+}
+
+/// Consume the update-relaunch focus marker. Returns true at most once, and
+/// only for a recent updater-driven relaunch.
+#[tauri::command]
+pub fn cmd_consume_update_relaunch_focus() -> Result<bool, AppError> {
+    crate::relaunch_focus::consume_update_relaunch_focus()
+        .map_err(|e| AppError::io(format!("Could not read the update relaunch marker: {e:#}")))
+}
+
 #[tauri::command]
 pub fn cmd_get_settings(state: State<DbState>) -> Result<settings::SettingsDto, AppError> {
     let conn = state.0.lock()?;

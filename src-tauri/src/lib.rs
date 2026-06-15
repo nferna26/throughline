@@ -47,6 +47,7 @@ pub mod models;
 pub mod paths;
 pub mod phrases;
 pub mod plan;
+pub mod relaunch_focus;
 pub mod settings;
 pub mod sittings;
 
@@ -305,6 +306,8 @@ pub fn run() {
             // ── settings + system info ──
             commands::settings_cmds::cmd_api_version,
             commands::settings_cmds::cmd_paths_info,
+            commands::settings_cmds::cmd_prepare_update_relaunch_focus,
+            commands::settings_cmds::cmd_consume_update_relaunch_focus,
             commands::settings_cmds::cmd_get_settings,
             commands::settings_cmds::cmd_set_export_path,
             commands::settings_cmds::cmd_check_export_path,

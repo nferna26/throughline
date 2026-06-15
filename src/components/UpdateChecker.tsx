@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
@@ -48,6 +49,7 @@ export default function UpdateChecker() {
     setPhase("downloading");
     setMsg("");
     setPct(0);
+    let relaunchMarkerPrepared = false;
     try {
       let total = 0;
       let got = 0;
@@ -58,8 +60,13 @@ export default function UpdateChecker() {
           if (total) setPct(Math.round((got / total) * 100));
         }
       });
+      await invoke("cmd_prepare_update_relaunch_focus");
+      relaunchMarkerPrepared = true;
       await relaunch();
     } catch (e) {
+      if (relaunchMarkerPrepared) {
+        invoke("cmd_consume_update_relaunch_focus").catch(() => {});
+      }
       setMsg(humanizeUpdateError(String((e as { message?: string })?.message ?? e), "download"));
       setPhase("error");
     }

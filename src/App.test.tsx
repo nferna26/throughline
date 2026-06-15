@@ -10,7 +10,11 @@ const mocks = vi.hoisted(() => {
   const invoke = vi.fn((_cmd: string, _args?: Record<string, unknown>): Promise<unknown> => Promise.resolve(null));
   type DragEvent = { payload: { type: string; paths?: string[] } };
   const dragHandlers: Array<(e: DragEvent) => void | Promise<void>> = [];
-  return { invoke, dragHandlers };
+  const appShow = vi.fn(() => Promise.resolve());
+  const windowShow = vi.fn(() => Promise.resolve());
+  const unminimize = vi.fn(() => Promise.resolve());
+  const setFocus = vi.fn(() => Promise.resolve());
+  return { invoke, dragHandlers, appShow, windowShow, unminimize, setFocus };
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -27,6 +31,17 @@ vi.mock("@tauri-apps/api/webview", () => ({
       mocks.dragHandlers.push(h);
       return Promise.resolve(() => {});
     },
+  }),
+}));
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: () => Promise.resolve("0.4.3"),
+  show: mocks.appShow,
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    show: mocks.windowShow,
+    unminimize: mocks.unminimize,
+    setFocus: mocks.setFocus,
   }),
 }));
 
@@ -52,6 +67,10 @@ beforeEach(() => {
   mocks.invoke.mockReset();
   mocks.invoke.mockResolvedValue(null);
   mocks.dragHandlers.length = 0;
+  mocks.appShow.mockClear();
+  mocks.windowShow.mockClear();
+  mocks.unminimize.mockClear();
+  mocks.setFocus.mockClear();
 });
 
 // ── The drop helper: same import + dedup path as the file picker ────────────
@@ -168,6 +187,30 @@ describe("App drag-and-drop import", () => {
       await mocks.dragHandlers[0]({ payload: { type: "leave" } });
     });
     expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_import_book", expect.anything());
+  });
+});
+
+describe("App update-relaunch focus handoff", () => {
+  it("does not focus the window on a normal cold launch", async () => {
+    setAppImpl();
+    render(<App />);
+    await screen.findByText(/Welcome to Throughline/i);
+
+    expect(mocks.invoke).toHaveBeenCalledWith("cmd_consume_update_relaunch_focus");
+    expect(mocks.appShow).not.toHaveBeenCalled();
+    expect(mocks.windowShow).not.toHaveBeenCalled();
+    expect(mocks.unminimize).not.toHaveBeenCalled();
+    expect(mocks.setFocus).not.toHaveBeenCalled();
+  });
+
+  it("brings the fresh process forward after an updater-driven relaunch", async () => {
+    setAppImpl({ cmd_consume_update_relaunch_focus: true });
+    render(<App />);
+
+    await waitFor(() => expect(mocks.setFocus).toHaveBeenCalledTimes(1));
+    expect(mocks.appShow).toHaveBeenCalledTimes(1);
+    expect(mocks.windowShow).toHaveBeenCalledTimes(1);
+    expect(mocks.unminimize).toHaveBeenCalledTimes(1);
   });
 });
 

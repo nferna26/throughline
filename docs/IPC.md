@@ -65,6 +65,25 @@ Use this from the frontend on startup to detect a backend that has moved to a ma
 
 Read-only display of local data locations. Useful for rollback instructions and diagnostics.
 
+#### `cmd_prepare_update_relaunch_focus`
+- args: none
+- returns: void
+- errors: `Io` if the update-relaunch marker cannot be written
+
+Called only after a reader-approved update has installed and immediately before
+`@tauri-apps/plugin-process.relaunch()`. It writes a one-shot app-support marker
+so the fresh process can bring Throughline back to the foreground. Additive;
+`COMMAND_API_VERSION` stays `6`.
+
+#### `cmd_consume_update_relaunch_focus`
+- args: none
+- returns: `boolean`
+- errors: `Io` if the update-relaunch marker cannot be read
+
+Called on startup by the frontend before any focus call. Returns `true` at most
+once, only for a recent updater-driven relaunch; normal cold launches return
+`false` and keep the platform's default focus behavior.
+
 ---
 
 ### Books
