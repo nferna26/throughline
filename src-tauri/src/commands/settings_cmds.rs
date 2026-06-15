@@ -1,7 +1,7 @@
 //! Settings + small system-info commands. Named `settings_cmds` to avoid
 //! conflict with `crate::settings` (the storage layer).
 
-use tauri::State;
+use tauri::{State, WebviewWindow};
 
 use crate::db::DbState;
 use crate::error::AppError;
@@ -30,6 +30,98 @@ pub fn cmd_paths_info(state: State<DbState>) -> Result<serde_json::Value, AppErr
         "db_path": db.to_string_lossy(),
         "export_root": export.to_string_lossy(),
     }))
+}
+
+/// Mark that the next process startup is the completion of a reader-approved
+/// update relaunch and should bring Throughline back to the foreground.
+#[tauri::command]
+pub fn cmd_prepare_update_relaunch_focus() -> Result<(), AppError> {
+    crate::relaunch_focus::prepare_update_relaunch_focus().map_err(|e| {
+        AppError::io(format!(
+            "Could not prepare the update relaunch marker: {e:#}"
+        ))
+    })
+}
+
+/// Consume the update-relaunch focus marker. Returns true at most once, and
+/// only for a recent updater-driven relaunch.
+#[tauri::command]
+pub fn cmd_consume_update_relaunch_focus() -> Result<bool, AppError> {
+    crate::relaunch_focus::consume_update_relaunch_focus()
+        .map_err(|e| AppError::io(format!("Could not read the update relaunch marker: {e:#}")))
+}
+
+/// Bring the relaunched app frontmost after an updater-driven restart. On macOS
+/// `set_focus` alone can focus a window without activating the app, so the
+/// updater path follows it with AppKit activation.
+#[tauri::command]
+pub fn cmd_focus_main_window_after_update_relaunch(window: WebviewWindow) -> Result<(), AppError> {
+    focus_main_window_after_update_relaunch(window)
+}
+
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn focus_main_window_after_update_relaunch(window: WebviewWindow) -> Result<(), AppError> {
+    if objc2::MainThreadMarker::new().is_some() {
+        return focus_main_window_after_update_relaunch_on_main(&window).map_err(|e| {
+            AppError::internal(format!(
+                "Could not focus Throughline after update relaunch: {e}"
+            ))
+        });
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let window_for_main = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let result = focus_main_window_after_update_relaunch_on_main(&window_for_main);
+            let _ = tx.send(result);
+        })
+        .map_err(|e| AppError::internal(format!("Could not schedule relaunch focus: {e}")))?;
+
+    rx.recv()
+        .map_err(|e| AppError::internal(format!("Could not finish relaunch focus: {e}")))?
+        .map_err(|e| {
+            AppError::internal(format!(
+                "Could not focus Throughline after update relaunch: {e}"
+            ))
+        })
+}
+
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn focus_main_window_after_update_relaunch_on_main(window: &WebviewWindow) -> Result<(), String> {
+    window.show().map_err(|e| e.to_string())?;
+    window.unminimize().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
+
+    let mtm = objc2::MainThreadMarker::new()
+        .ok_or_else(|| "AppKit activation did not run on the main thread".to_string())?;
+    let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+    app.activateIgnoringOtherApps(true);
+    if let Some(main_window) = app.mainWindow().or_else(|| app.keyWindow()) {
+        main_window.makeKeyAndOrderFront(None);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn focus_main_window_after_update_relaunch(window: WebviewWindow) -> Result<(), AppError> {
+    window.show().map_err(|e| {
+        AppError::internal(format!(
+            "Could not show Throughline after update relaunch: {e}"
+        ))
+    })?;
+    window.unminimize().map_err(|e| {
+        AppError::internal(format!(
+            "Could not unminimize Throughline after update relaunch: {e}"
+        ))
+    })?;
+    window.set_focus().map_err(|e| {
+        AppError::internal(format!(
+            "Could not focus Throughline after update relaunch: {e}"
+        ))
+    })
 }
 
 #[tauri::command]

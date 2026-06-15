@@ -18,6 +18,7 @@ import type { TodayCard, Book, ImportOutcome, ExportPathStatus, PlanSummary } fr
 import { errorMessage } from "./types";
 import { purgeLegacyBriefings } from "./sectionBriefing";
 import { migrateLegacyLocalStorageKeys } from "./legacyStorage";
+import { focusAfterUpdateRelaunchIfNeeded } from "./updateRelaunchFocus";
 
 type BookTab = "today" | "notes";
 
@@ -102,6 +103,7 @@ export default function App() {
   }
 
   useEffect(() => {
+    void focusAfterUpdateRelaunchIfNeeded();
     refreshToday();
     // One-time cleanup: builds before v0.3.x persisted Deep Study briefings in
     // localStorage. The counsel posture (CLAUDE.md §3) is "non-persistent
