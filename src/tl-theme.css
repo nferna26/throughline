@@ -1141,7 +1141,7 @@
 .tl-modal .prompt { font-size: 15px; color: var(--tl-ink); margin: 0; line-height: 1.5; }
 .tl-warn-text { color: var(--tl-warn); font-size: 12.5px; line-height: 1.5; margin: 0; }
 
-/* ── AI status lines (CodexLogin, UpdateChecker) ── */
+/* ── AI status lines (CodexLogin) ── */
 .tl-onboard-hint { font-size: 0.85em; color: var(--tl-muted); margin: 6px 0 0; line-height: 1.45; }
 .tl-onboard-ok { display: inline-flex; align-items: center; gap: 5px; font-size: 0.88em; color: color-mix(in oklab, #2ea043 80%, var(--tl-ink)); }
 .tl-onboard-bad { display: inline-flex; align-items: center; gap: 5px; font-size: 0.88em; color: #c0392b; }
@@ -1200,8 +1200,37 @@
   .tl-q-card, .tl-qc-dot, .tl-link-quiet { transition: none; }
 }
 
-/* ════════ Software updates (Settings) ════════ */
-.tl-update { display: flex; flex-direction: column; gap: var(--tl-2); align-items: flex-end; }
-.tl-update-row { display: flex; align-items: center; gap: var(--tl-3); }
-.tl-update-ver { font-size: 13px; color: var(--tl-muted); font-variant-numeric: tabular-nums; }
-.tl-update-avail { display: flex; flex-direction: column; gap: var(--tl-2); align-items: flex-end; text-align: right; }
+/* ════════ Software updates (Today pill) ════════ */
+.tl-update-pill {
+  position: fixed; left: 22px; bottom: 22px; z-index: 62;
+  display: inline-flex; flex-direction: column; align-items: stretch; justify-content: center;
+  min-width: 0; max-width: calc(100vw - 44px); min-height: 34px;
+  padding: 8px 12px; border: 1px solid var(--tl-line); border-radius: var(--tl-r-pill);
+  background: color-mix(in oklab, var(--tl-panel) 92%, transparent);
+  color: var(--tl-ink); box-shadow: var(--tl-shadow-sm);
+  font-family: var(--tl-sans); font-size: 12.5px; font-weight: 650; line-height: 1;
+  cursor: pointer; backdrop-filter: blur(12px);
+}
+.tl-update-pill:hover { border-color: var(--tl-ink-10); background: var(--tl-panel); }
+.tl-update-pill.updating { cursor: default; }
+.tl-update-pill.fallback {
+  color: color-mix(in oklab, var(--tl-accent) 78%, #9d5d38);
+  border-color: color-mix(in oklab, var(--tl-accent) 42%, var(--tl-line));
+}
+.tl-update-pill-main { display: inline-flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap; }
+.tl-update-progress {
+  display: block; height: 2px; margin-top: 7px; overflow: hidden;
+  background: var(--tl-line); border-radius: 999px;
+}
+.tl-update-progress span {
+  display: block; height: 100%; background: var(--tl-accent); border-radius: inherit;
+  transition: width 150ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-update-progress span { transition: none; }
+}
+
+@media (max-width: 560px) {
+  .tl-update-pill { left: 14px; bottom: 14px; max-width: calc(100vw - 28px); }
+}

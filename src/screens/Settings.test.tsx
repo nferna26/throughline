@@ -7,9 +7,6 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
 const mockInvoke = vi.mocked(invoke);
 
-// UpdateChecker calls getVersion via @tauri-apps/api/app — keep it inert.
-vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.4.2") }));
-
 function wire(
   dto: Partial<SettingsDto>,
   opts: { credits?: CompanyCredits | null; requests?: AiRequest[] } = {},

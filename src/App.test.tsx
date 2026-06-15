@@ -37,6 +37,8 @@ vi.mock("@tauri-apps/api/app", () => ({
   getVersion: () => Promise.resolve("0.4.3"),
   show: mocks.appShow,
 }));
+vi.mock("@tauri-apps/plugin-updater", () => ({ check: vi.fn(() => Promise.resolve(null)) }));
+vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(() => Promise.resolve()) }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     show: mocks.windowShow,
@@ -46,6 +48,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import App, { handleDroppedPaths, importErrorText } from "./App";
+import { resetUpdateCheckGate } from "./components/UpdateChecker";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { errorMessage } from "./types";
 import type { TodayCard } from "./types";
@@ -64,6 +67,7 @@ const BOOK = {
 beforeEach(() => {
   cleanup();
   localStorage.clear();
+  resetUpdateCheckGate();
   mocks.invoke.mockReset();
   mocks.invoke.mockResolvedValue(null);
   mocks.dragHandlers.length = 0;

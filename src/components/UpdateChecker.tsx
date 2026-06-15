@@ -1,55 +1,130 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { getVersion } from "@tauri-apps/api/app";
-import TLIcon from "./TLIcon";
-import { humanizeUpdateError } from "../updateErrors";
+import TLIcon, { type IconName } from "./TLIcon";
 
-/**
- * Reader-initiated auto-update. The app NEVER checks on launch or a timer (that
- * would break the no-background-network posture) — only when you click. On an
- * available update it downloads the signed package, installs it, and relaunches
- * into the new version, like the Claude desktop app.
- */
-type Phase = "idle" | "checking" | "uptodate" | "available" | "downloading" | "error";
+export const LATEST_RELEASE_URL = "https://github.com/nferna26/throughline/releases/latest";
+export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-export default function UpdateChecker() {
-  const [version, setVersion] = useState("");
-  const [phase, setPhase] = useState<Phase>("idle");
+export type UpdatePillPhase = "hidden" | "ready" | "updating" | "restart" | "fallback";
+type FallbackReason = "check" | "download" | "restart";
+
+type PillView = {
+  label: "Update ready" | "Updating" | "Restart to update" | "Download update";
+  icon: IconName;
+  busy: boolean;
+  fallback: boolean;
+};
+
+let seenTodayUpdateSurface = false;
+let lastBackgroundCheckAt: number | null = null;
+
+export function resetUpdateCheckGate() {
+  seenTodayUpdateSurface = false;
+  lastBackgroundCheckAt = null;
+}
+
+export function shouldStartBackgroundUpdateCheck(now = Date.now()): boolean {
+  if (!seenTodayUpdateSurface) {
+    seenTodayUpdateSurface = true;
+    lastBackgroundCheckAt = now;
+    return false;
+  }
+
+  if (lastBackgroundCheckAt === null || now - lastBackgroundCheckAt >= UPDATE_CHECK_INTERVAL_MS) {
+    lastBackgroundCheckAt = now;
+    return true;
+  }
+
+  return false;
+}
+
+export function msUntilNextBackgroundUpdateCheck(now = Date.now()): number {
+  if (!seenTodayUpdateSurface || lastBackgroundCheckAt === null) return 0;
+  return Math.max(0, UPDATE_CHECK_INTERVAL_MS - (now - lastBackgroundCheckAt));
+}
+
+export function updatePillView(phase: Exclude<UpdatePillPhase, "hidden">): PillView {
+  switch (phase) {
+    case "ready":
+      return { label: "Update ready", icon: "download", busy: false, fallback: false };
+    case "updating":
+      return { label: "Updating", icon: "download", busy: true, fallback: false };
+    case "restart":
+      return { label: "Restart to update", icon: "restart", busy: false, fallback: false };
+    case "fallback":
+      return { label: "Download update", icon: "download", busy: false, fallback: true };
+  }
+}
+
+function logUpdateFallback(reason: FallbackReason, err: unknown) {
+  console.warn(`[throughline:update] ${reason} failed; falling back to GitHub releases.`, err);
+}
+
+type Props = {
+  visible?: boolean;
+  now?: () => number;
+};
+
+const defaultNow = () => Date.now();
+
+export default function UpdateChecker({ visible = true, now = defaultNow }: Props) {
+  const [phase, setPhase] = useState<UpdatePillPhase>("hidden");
   const [update, setUpdate] = useState<Update | null>(null);
-  const [msg, setMsg] = useState("");
   const [pct, setPct] = useState(0);
+  const checkingRef = useRef(false);
 
-  useEffect(() => {
-    getVersion().then(setVersion).catch(() => {});
+  const enterFallback = useCallback((reason: FallbackReason, err: unknown) => {
+    logUpdateFallback(reason, err);
+    setUpdate(null);
+    setPct(0);
+    setPhase("fallback");
   }, []);
 
-  async function checkNow() {
-    setPhase("checking");
-    setMsg("");
+  const checkQuietly = useCallback(async () => {
+    if (checkingRef.current) return;
+    checkingRef.current = true;
     try {
       const u = await check();
       if (u) {
         setUpdate(u);
-        setPhase("available");
-      } else {
-        setPhase("uptodate");
+        setPct(0);
+        setPhase("ready");
       }
-    } catch (e) {
-      // The plugin raises raw plumbing ("…release JSON from the remote") —
-      // humanize it; the reader never sees the wire detail (FT-15).
-      setMsg(humanizeUpdateError(String((e as { message?: string })?.message ?? e), "check"));
-      setPhase("error");
+    } catch (err) {
+      enterFallback("check", err);
+    } finally {
+      checkingRef.current = false;
     }
-  }
+  }, [enterFallback]);
 
-  async function installAndRestart() {
-    if (!update) return;
-    setPhase("downloading");
-    setMsg("");
+  useEffect(() => {
+    if (!visible || phase !== "hidden") return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = () => {
+      if (cancelled) return;
+      if (shouldStartBackgroundUpdateCheck(now())) {
+        void checkQuietly();
+      }
+      const delay = msUntilNextBackgroundUpdateCheck(now());
+      timer = setTimeout(tick, delay);
+    };
+
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [checkQuietly, now, phase, visible]);
+
+  async function startUpdate() {
+    if (!update || phase !== "ready") return;
+    setPhase("updating");
     setPct(0);
-    let relaunchMarkerPrepared = false;
     try {
       let total = 0;
       let got = 0;
@@ -57,57 +132,65 @@ export default function UpdateChecker() {
         if (ev.event === "Started") total = ev.data.contentLength ?? 0;
         else if (ev.event === "Progress") {
           got += ev.data.chunkLength;
-          if (total) setPct(Math.round((got / total) * 100));
+          if (total) setPct(Math.min(100, Math.round((got / total) * 100)));
         }
       });
-      await invoke("cmd_prepare_update_relaunch_focus");
-      relaunchMarkerPrepared = true;
-      await relaunch();
-    } catch (e) {
-      if (relaunchMarkerPrepared) {
-        invoke("cmd_consume_update_relaunch_focus").catch(() => {});
-      }
-      setMsg(humanizeUpdateError(String((e as { message?: string })?.message ?? e), "download"));
-      setPhase("error");
+      setPct(100);
+      setPhase("restart");
+    } catch (err) {
+      enterFallback("download", err);
     }
   }
 
-  return (
-    <div className="tl-update">
-      <div className="tl-update-row">
-        <span className="tl-update-ver">Throughline{version && ` v${version}`}</span>
-        {phase === "idle" && (
-          <button className="tl-btn tl-btn-ghost" style={{ padding: "6px 12px", fontSize: 13 }} onClick={checkNow}>
-            Check for updates
-          </button>
-        )}
-        {phase === "checking" && <span className="tl-note-meta">Checking…</span>}
-        {phase === "uptodate" && (
-          <span className="tl-note-meta"><TLIcon name="check" size={14} /> You’re up to date</span>
-        )}
-        {(phase === "error" || phase === "available") && (
-          <button className="tl-btn tl-btn-ghost" style={{ padding: "6px 12px", fontSize: 13 }} onClick={checkNow}>
-            Check again
-          </button>
-        )}
-      </div>
+  async function restartToUpdate() {
+    if (phase !== "restart") return;
+    let relaunchMarkerPrepared = false;
+    try {
+      await invoke("cmd_prepare_update_relaunch_focus");
+      relaunchMarkerPrepared = true;
+      await relaunch();
+    } catch (err) {
+      if (relaunchMarkerPrepared) {
+        invoke("cmd_consume_update_relaunch_focus").catch(() => {});
+      }
+      enterFallback("restart", err);
+    }
+  }
 
-      {phase === "available" && update && (
-        <div className="tl-update-avail">
-          <p className="tl-note-meta">Version {update.version} is available. The app will restart to finish.</p>
-          <button className="tl-btn tl-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={installAndRestart}>
-            <TLIcon name="download" size={16} /> Update &amp; restart
-          </button>
-        </div>
-      )}
-      {phase === "downloading" && (
-        <p className="tl-note-meta">
-          Downloading{pct > 0 ? ` ${pct}%` : "…"} — the app will close and reopen in the new version.
-        </p>
-      )}
-      {phase === "error" && msg && (
-        <p className="tl-onboard-bad" style={{ marginTop: "var(--tl-2)" }}>{msg}</p>
-      )}
-    </div>
+  function openFallbackDownload() {
+    window.open(LATEST_RELEASE_URL, "_blank", "noopener,noreferrer");
+  }
+
+  if (!visible || phase === "hidden") return null;
+
+  const view = updatePillView(phase);
+  const className = `tl-update-pill${view.fallback ? " fallback" : ""}${view.busy ? " updating" : ""}`;
+  const progress = Math.max(4, Math.min(100, pct));
+
+  if (phase === "updating") {
+    return (
+      <div className={className} role="status" aria-live="polite" aria-busy="true">
+        <span className="tl-update-pill-main">
+          <TLIcon name={view.icon} size={15} />
+          <span>{view.label}</span>
+        </span>
+        <span className="tl-update-progress" aria-hidden="true">
+          <span style={{ width: `${progress}%` }} />
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      className={className}
+      type="button"
+      onClick={phase === "ready" ? startUpdate : phase === "restart" ? restartToUpdate : openFallbackDownload}
+    >
+      <span className="tl-update-pill-main">
+        <TLIcon name={view.icon} size={15} />
+        <span>{view.label}</span>
+      </span>
+    </button>
   );
 }
