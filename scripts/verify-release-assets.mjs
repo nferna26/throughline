@@ -2,6 +2,8 @@
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_REPO = "nferna26/throughline";
+const DEFAULT_RETRIES = 5;
+const DEFAULT_RETRY_DELAY_MS = 2_000;
 
 function usage() {
   return `Usage: node scripts/verify-release-assets.mjs [--repo owner/name] [--tag vX.Y.Z] [--expected-version vX.Y.Z]
@@ -54,15 +56,74 @@ function sigUrlFor(payloadUrl) {
   return `${payloadUrl}.sig`;
 }
 
-async function fetchText(fetchImpl, url, label) {
-  const res = await fetchImpl(url, {
-    redirect: "follow",
-    headers: { "user-agent": "throughline-release-asset-guard" },
-  });
-  if (!res || res.status !== 200) {
-    throw new Error(`${label} did not resolve (${res?.status ?? "no response"}): ${url}`);
+function positiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function nonNegativeInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function envRetryOptions(env = process.env) {
+  return {
+    attempts: positiveInt(env.VERIFY_RETRIES, DEFAULT_RETRIES),
+    delayMs: nonNegativeInt(env.VERIFY_RETRY_DELAY_MS, DEFAULT_RETRY_DELAY_MS),
+  };
+}
+
+function sleep(ms) {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+function resolveRetryOptions(retry = {}) {
+  const fromEnv = envRetryOptions();
+  return {
+    attempts: positiveInt(retry.attempts, fromEnv.attempts),
+    delayMs: nonNegativeInt(retry.delayMs, fromEnv.delayMs),
+  };
+}
+
+function errorMessage(err) {
+  if (err && typeof err === "object" && "message" in err) return String(err.message);
+  return String(err);
+}
+
+function retryMessage(label, url, attempt, attempts, delayMs, reason) {
+  return `↻ ${label} did not resolve (${reason}); retry ${attempt + 1}/${attempts} in ${delayMs}ms: ${url}`;
+}
+
+async function fetchText(fetchImpl, url, label, { retry = {}, log = console.log } = {}) {
+  const { attempts, delayMs } = resolveRetryOptions(retry);
+  let lastError = null;
+  let lastStatus = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const res = await fetchImpl(url, {
+        redirect: "follow",
+        headers: { "user-agent": "throughline-release-asset-guard" },
+      });
+      if (res?.status === 200) return res.text();
+      lastStatus = res?.status ?? "no response";
+      lastError = null;
+    } catch (err) {
+      lastStatus = null;
+      lastError = errorMessage(err);
+    }
+
+    if (attempt < attempts) {
+      const reason = lastError ? `network error: ${lastError}` : lastStatus;
+      log(retryMessage(label, url, attempt, attempts, delayMs, reason));
+      await sleep(delayMs);
+    }
   }
-  return res.text();
+
+  if (lastError) {
+    throw new Error(`${label} did not resolve (network error: ${lastError}): ${url}`);
+  }
+  throw new Error(`${label} did not resolve (${lastStatus ?? "no response"}): ${url}`);
 }
 
 function parseManifest(raw, url) {
@@ -87,11 +148,12 @@ export async function verifyReleaseAssets({
   expectedVersion = null,
   fetchImpl = globalThis.fetch,
   log = console.log,
+  retry = {},
 } = {}) {
   if (typeof fetchImpl !== "function") throw new Error("fetch is not available");
 
   const latestJsonUrl = manifestUrlFor(repo, tag);
-  const manifestRaw = await fetchText(fetchImpl, latestJsonUrl, "latest.json");
+  const manifestRaw = await fetchText(fetchImpl, latestJsonUrl, "latest.json", { retry, log });
   log(`✓ latest.json resolved: ${latestJsonUrl}`);
 
   const manifest = parseManifest(manifestRaw, latestJsonUrl);
@@ -121,7 +183,7 @@ export async function verifyReleaseAssets({
     }
 
     if (!resolvedPayloads.has(value.url)) {
-      await fetchText(fetchImpl, value.url, `${platform} updater payload`);
+      await fetchText(fetchImpl, value.url, `${platform} updater payload`, { retry, log });
       resolvedPayloads.add(value.url);
       log(`✓ updater payload resolved: ${value.url}`);
     }
@@ -129,7 +191,7 @@ export async function verifyReleaseAssets({
     const sigUrl = sigUrlFor(value.url);
     let sigText = resolvedSigs.get(sigUrl);
     if (sigText === undefined) {
-      sigText = await fetchText(fetchImpl, sigUrl, `${platform} updater signature`);
+      sigText = await fetchText(fetchImpl, sigUrl, `${platform} updater signature`, { retry, log });
       resolvedSigs.set(sigUrl, sigText);
       log(`✓ updater signature resolved: ${sigUrl}`);
     }
@@ -142,7 +204,7 @@ export async function verifyReleaseAssets({
   const releaseTag = tag || `v${manifestVersion}`;
   const dmgName = `Throughline_${manifestVersion}_universal.dmg`;
   const dmgUrl = `${releaseDownloadBase(repo, releaseTag)}/${dmgName}`;
-  await fetchText(fetchImpl, dmgUrl, "universal DMG");
+  await fetchText(fetchImpl, dmgUrl, "universal DMG", { retry, log });
   log(`✓ universal DMG resolved: ${dmgUrl}`);
   log(`✓ release assets verified for ${repo} ${manifest.version}`);
 

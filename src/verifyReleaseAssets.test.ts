@@ -12,12 +12,25 @@ function response(body: string, status = 200) {
   return new Response(body, { status, headers: { "content-type": "text/plain" } });
 }
 
-function fetchFrom(fixtures: Record<string, string | number>, seen: string[] = []) {
+type FixtureValue = string | number | Error;
+type FixtureMap = Record<string, FixtureValue | FixtureValue[]>;
+
+function fetchFrom(fixtures: FixtureMap, seen: string[] = []) {
+  const calls = new Map<string, number>();
+
   return async (url: string | URL) => {
-    seen.push(String(url));
-    const hit = fixtures[String(url)];
-    if (!hit) return response("not found", 404);
-    return typeof hit === "number" ? response("", hit) : response(hit);
+    const key = String(url);
+    seen.push(key);
+    if (!Object.prototype.hasOwnProperty.call(fixtures, key)) return response("not found", 404);
+
+    const hit = fixtures[key];
+    const values = Array.isArray(hit) ? hit : [hit];
+    const index = calls.get(key) ?? 0;
+    calls.set(key, index + 1);
+
+    const value = values[Math.min(index, values.length - 1)];
+    if (value instanceof Error) throw value;
+    return typeof value === "number" ? response("", value) : response(value);
   };
 }
 
@@ -50,6 +63,7 @@ describe("verifyReleaseAssets", () => {
         seen,
       ),
       log: (line: string) => logs.push(line),
+      retry: { attempts: 1, delayMs: 0 },
     });
 
     expect(result).toMatchObject({
@@ -70,8 +84,56 @@ describe("verifyReleaseAssets", () => {
         repo,
         fetchImpl: fetchFrom({ [manifestUrl]: 404 }),
         log: () => {},
+        retry: { attempts: 1, delayMs: 0 },
       }),
     ).rejects.toThrow("latest.json did not resolve (404)");
+  });
+
+  it("retries transient release propagation failures before succeeding", async () => {
+    const seen: string[] = [];
+    const logs: string[] = [];
+
+    const result = await verifyReleaseAssets({
+      repo,
+      fetchImpl: fetchFrom(
+        {
+          [manifestUrl]: [404, new Error("cdn reset"), manifest()],
+          [payloadUrl]: [404, "app bytes"],
+          [sigUrl]: "sig-text",
+          [dmgUrl]: [503, "dmg bytes"],
+        },
+        seen,
+      ),
+      log: (line: string) => logs.push(line),
+      retry: { attempts: 3, delayMs: 0 },
+    });
+
+    expect(result).toMatchObject({ repo, version: "1.2.3", dmgUrl });
+    expect(seen.filter((url) => url === manifestUrl)).toHaveLength(3);
+    expect(seen.filter((url) => url === payloadUrl)).toHaveLength(2);
+    expect(seen.filter((url) => url === sigUrl)).toHaveLength(1);
+    expect(seen.filter((url) => url === dmgUrl)).toHaveLength(2);
+    expect(logs.join("\n")).toContain("retry 2/3");
+    expect(logs.join("\n")).toContain("retry 3/3");
+    expect(logs.join("\n")).toContain("network error: cdn reset");
+  });
+
+  it("stops retrying after the configured attempt limit", async () => {
+    const seen: string[] = [];
+    const logs: string[] = [];
+
+    await expect(
+      verifyReleaseAssets({
+        repo,
+        fetchImpl: fetchFrom({ [manifestUrl]: 404 }, seen),
+        log: (line: string) => logs.push(line),
+        retry: { attempts: 2, delayMs: 0 },
+      }),
+    ).rejects.toThrow("latest.json did not resolve (404)");
+
+    expect(seen).toEqual([manifestUrl, manifestUrl]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("retry 2/2");
   });
 
   it("fails when latest.json and the .sig asset disagree", async () => {
@@ -84,6 +146,7 @@ describe("verifyReleaseAssets", () => {
           [sigUrl]: "asset-sig",
         }),
         log: () => {},
+        retry: { attempts: 1, delayMs: 0 },
       }),
     ).rejects.toThrow("signature in latest.json does not match");
   });
