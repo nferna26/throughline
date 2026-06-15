@@ -111,3 +111,6 @@ jobs:
           echo "Re-uploading the stapled .dmg over the release asset"
           gh release upload "${{ github.ref_name }}" "$DMG" --clobber -R "${{ github.repository }}"
           echo "✓ .dmg notarized, stapled, re-uploaded"
+
+      - name: Verify published updater and download assets resolve
+        run: node scripts/verify-release-assets.mjs --repo "${{ github.repository }}" --expected-version "${{ github.ref_name }}"
