@@ -29,6 +29,7 @@ const PATHS: Record<string, string> = {
   pencil: "M13.5 4.2 15.8 6.5 7 15.3l-3 0.8 0.8-3zM12 5.7l2.3 2.3",
   flag: "M5 16V3.5M5 4.2h8.5L11.7 7l1.8 2.8H5",
   refresh: "M15.5 6.5A6 6 0 1 0 16 10M15.5 3.5v3h-3",
+  restart: "M15.5 6.5A6 6 0 1 0 16 10M15.5 3.5v3h-3M10 7v4l2.4 1.5",
   // Added for Discover (the handoff's discover.jsx references these but its icon
   // set omits them); authored here in the same 20-grid / 1.6-stroke style.
   search: "M8.5 14a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zM16.5 16.5 12.7 12.7",

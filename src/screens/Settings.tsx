@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import ModelSelect from "../components/ModelSelect";
 import CodexLogin from "../components/CodexLogin";
-import UpdateChecker from "../components/UpdateChecker";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
 import {
   AI_PROVIDERS,
@@ -1006,17 +1005,6 @@ export default function Settings() {
                 <span className="quiet-line">
                   <Icon d={ICON.check} size={15} /> Always on
                 </span>
-              </div>
-            </div>
-            <div className="row">
-              <div className="about-row">
-                <div className="row-main">
-                  <p className="row-title">Updates</p>
-                  <p className="row-desc">Throughline checks only when you ask — never on its own.</p>
-                </div>
-                <div className="about-control">
-                  <UpdateChecker />
-                </div>
               </div>
             </div>
           </div>

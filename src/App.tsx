@@ -12,6 +12,7 @@ import PlansView from "./components/PlansView";
 import RePlanDialog from "./components/RePlanDialog";
 import TLIcon from "./components/TLIcon";
 import ThroughlineMark from "./components/ThroughlineMark";
+import UpdateChecker from "./components/UpdateChecker";
 import "./App.css";
 import "./tl-theme.css";
 import type { TodayCard, Book, ImportOutcome, ExportPathStatus, PlanSummary } from "./types";
@@ -505,6 +506,7 @@ export default function App() {
         )}
         {view.kind === "settings" && <Settings />}
       </main>
+      <UpdateChecker visible={view.kind === "today" && (today === null || tab === "today")} />
     </div>
   );
 }
