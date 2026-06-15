@@ -84,6 +84,17 @@ Called on startup by the frontend before any focus call. Returns `true` at most
 once, only for a recent updater-driven relaunch; normal cold launches return
 `false` and keep the platform's default focus behavior.
 
+#### `cmd_focus_main_window_after_update_relaunch`
+- args: none
+- returns: void
+- errors: `Internal` if the platform focus handoff fails
+
+Called only after `cmd_consume_update_relaunch_focus` returns `true`. On macOS
+it shows/unminimizes/focuses the Tauri window, then uses native AppKit activation
+(`NSApplication.activateIgnoringOtherApps(true)` and `makeKeyAndOrderFront`) so
+an updater relaunch becomes the frontmost app. Normal cold launches never call
+this command. Additive; `COMMAND_API_VERSION` stays `6`.
+
 ---
 
 ### Books

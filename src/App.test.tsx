@@ -197,6 +197,7 @@ describe("App update-relaunch focus handoff", () => {
     await screen.findByText(/Welcome to Throughline/i);
 
     expect(mocks.invoke).toHaveBeenCalledWith("cmd_consume_update_relaunch_focus");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_focus_main_window_after_update_relaunch");
     expect(mocks.appShow).not.toHaveBeenCalled();
     expect(mocks.windowShow).not.toHaveBeenCalled();
     expect(mocks.unminimize).not.toHaveBeenCalled();
@@ -207,10 +208,13 @@ describe("App update-relaunch focus handoff", () => {
     setAppImpl({ cmd_consume_update_relaunch_focus: true });
     render(<App />);
 
-    await waitFor(() => expect(mocks.setFocus).toHaveBeenCalledTimes(1));
-    expect(mocks.appShow).toHaveBeenCalledTimes(1);
-    expect(mocks.windowShow).toHaveBeenCalledTimes(1);
-    expect(mocks.unminimize).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("cmd_focus_main_window_after_update_relaunch"),
+    );
+    expect(mocks.appShow).not.toHaveBeenCalled();
+    expect(mocks.windowShow).not.toHaveBeenCalled();
+    expect(mocks.unminimize).not.toHaveBeenCalled();
+    expect(mocks.setFocus).not.toHaveBeenCalled();
   });
 });
 

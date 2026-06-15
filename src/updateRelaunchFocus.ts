@@ -8,15 +8,7 @@ export async function consumeUpdateRelaunchFocusIntent(): Promise<boolean> {
 }
 
 async function focusCurrentWindow(): Promise<void> {
-  const [{ show: showApp }, { getCurrentWindow }] = await Promise.all([
-    import("@tauri-apps/api/app"),
-    import("@tauri-apps/api/window"),
-  ]);
-  await showApp().catch(() => {});
-  const win = getCurrentWindow();
-  await win.show().catch(() => {});
-  await win.unminimize().catch(() => {});
-  await win.setFocus();
+  await invoke("cmd_focus_main_window_after_update_relaunch");
 }
 
 export async function focusAfterUpdateRelaunchIfNeeded(

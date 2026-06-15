@@ -4598,6 +4598,8 @@ dependencies = [
  "futures-util",
  "hex",
  "keyring",
+ "objc2",
+ "objc2-app-kit",
  "proptest",
  "reqwest 0.12.28",
  "rusqlite",
