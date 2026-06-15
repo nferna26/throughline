@@ -828,19 +828,42 @@ pub async fn cmd_activate_company(
     })
 }
 
-/// Whether company mode is active + a license is present. Reads a persisted flag
-/// (not the Keychain), so it's safe to call on every Settings render.
-#[tauri::command]
-pub fn cmd_company_status(state: State<DbState>) -> Result<CompanyStatus, AppError> {
-    let conn = state.0.lock()?;
-    Ok(CompanyStatus {
-        provider_active: matches!(
-            settings::get_ai_provider(&conn),
+fn company_status_db_bits(conn: &rusqlite::Connection) -> (bool, bool) {
+    (
+        matches!(
+            settings::get_ai_provider(conn),
             settings::AiProvider::Company
         ),
-        has_license: settings::get_string(&conn, settings::KEY_COMPANY_ACTIVATED).as_deref()
+        settings::get_string(conn, settings::KEY_COMPANY_ACTIVATED).as_deref()
             == Some("1"),
-    })
+    )
+}
+
+fn company_status_from_bits(
+    provider_active: bool,
+    activation_flag: bool,
+    keychain_license_present: bool,
+) -> CompanyStatus {
+    CompanyStatus {
+        provider_active,
+        has_license: activation_flag && keychain_license_present,
+    }
+}
+
+/// Whether company mode is selected and a usable license is present. The DB flag
+/// says activation once succeeded; Keychain presence says future tutor/credits
+/// calls can actually authenticate. UI "activated" must imply both.
+#[tauri::command]
+pub fn cmd_company_status(state: State<DbState>) -> Result<CompanyStatus, AppError> {
+    let (provider_active, activation_flag) = {
+        let conn = state.0.lock()?;
+        company_status_db_bits(&conn)
+    };
+    Ok(company_status_from_bits(
+        provider_active,
+        activation_flag,
+        crate::keystore::has_key("company"),
+    ))
 }
 
 /// Open the system browser at the URL (reader-initiated, validated https only).
@@ -1164,6 +1187,43 @@ mod tests {
         // must never hit the dollar-denominated local refusal. Local never spends.
         assert!(!local_spend_cap_applies(AiProvider::Company));
         assert!(!local_spend_cap_applies(AiProvider::Local));
+    }
+
+    #[test]
+    fn company_status_requires_keychain_license_not_just_db_flag() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        crate::keystore::clear_key("company").unwrap();
+        settings::set_string(&conn, settings::KEY_AI_PROVIDER, "company").unwrap();
+        settings::set_string(&conn, settings::KEY_COMPANY_ACTIVATED, "1").unwrap();
+
+        let (provider_active, activation_flag) = company_status_db_bits(&conn);
+        let status = company_status_from_bits(
+            provider_active,
+            activation_flag,
+            crate::keystore::has_key("company"),
+        );
+
+        assert!(
+            status.provider_active,
+            "the selected provider can still be company"
+        );
+        assert!(
+            !status.has_license,
+            "DB activation without the Keychain license must not render as activated"
+        );
+
+        crate::keystore::set_key("company", "lic_test.abc").unwrap();
+        let status = company_status_from_bits(
+            provider_active,
+            activation_flag,
+            crate::keystore::has_key("company"),
+        );
+        assert!(
+            status.has_license,
+            "the happy path remains active when DB flag and Keychain license agree"
+        );
+        crate::keystore::clear_key("company").unwrap();
     }
 
     #[test]
