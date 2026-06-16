@@ -670,7 +670,10 @@ mod tests {
         // must not flip the chosen flag (it only reads).
         assert!(!reading_rhythm_chosen(&conn));
         assert_eq!(get_reading_rhythm_minutes(&conn), DEFAULT_RHYTHM_MINUTES);
-        assert!(!reading_rhythm_chosen(&conn), "reading the pace must not mark it chosen");
+        assert!(
+            !reading_rhythm_chosen(&conn),
+            "reading the pace must not mark it chosen"
+        );
 
         // An explicit set clamps to the humane band and marks the pace chosen, so
         // a returning reader skips the step thereafter.

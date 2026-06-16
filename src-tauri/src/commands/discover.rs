@@ -423,7 +423,13 @@ fn catalogue_search(query: Option<&str>, page: u32) -> DiscoverPage {
 /// (they're a fixed id list, not a search). A duplicate id keeps its last row.
 fn catalogue_by_id() -> &'static HashMap<i64, usize> {
     static IDX: OnceLock<HashMap<i64, usize>> = OnceLock::new();
-    IDX.get_or_init(|| catalogue().iter().enumerate().map(|(i, r)| (r.id, i)).collect())
+    IDX.get_or_init(|| {
+        catalogue()
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.id, i))
+            .collect()
+    })
 }
 
 /// Map a parsed catalogue row to the wire DTO, deriving download URLs from the

@@ -48,6 +48,7 @@ function wire(
       case "cmd_list_ai_requests": return Promise.resolve(requests);
       case "cmd_model_catalog": return Promise.resolve([]);
       case "cmd_test_ai_connection": return Promise.resolve({ reachable: true, first_model_id: "m", message: "Connected." });
+      case "cmd_get_reading_pace": return Promise.resolve({ minutes: 25, chosen: false });
       default: return Promise.resolve(undefined);
     }
   });

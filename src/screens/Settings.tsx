@@ -123,7 +123,7 @@ export default function Settings() {
   const [paceMinutes, setPaceMinutes] = useState<number | null>(null);
   useEffect(() => {
     invoke<{ minutes: number; chosen: boolean }>("cmd_get_reading_pace")
-      .then((p) => setPaceMinutes(p.minutes))
+      .then((p) => setPaceMinutes(p?.minutes ?? null))
       .catch(() => setPaceMinutes(null));
   }, []);
   async function changePace(minutes: number) {
