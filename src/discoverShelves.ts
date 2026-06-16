@@ -126,9 +126,10 @@ export const SHELVES: Shelf[] = [
         blurb: "Three ghosts, one cold man, and a single night to change him." },
       { id: 43, title: "Dr Jekyll and Mr Hyde", author: "R. L. Stevenson",
         blurb: "A respectable doctor, a darker self, and the door between them." },
-      // SUBSTITUTE (operator approval pending): the brief's "The Old Man and the
-      // Sea" is not public domain. The Time Machine fills the third weekend slot;
-      // its blurb is drafted in the design voice, not from the copy tables.
+      // SUBSTITUTE (operator-approved): the brief's "The Old Man and the Sea" is
+      // not public domain, so The Time Machine fills the third weekend slot. Its
+      // blurb was drafted in the design voice (not from the copy tables) and
+      // approved by the operator.
       { id: 35, title: "The Time Machine", author: "H. G. Wells",
         blurb: "An afternoon's experiment carries one man to the world's last, dying light." },
     ],
