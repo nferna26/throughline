@@ -5,6 +5,33 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 6)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.8.0] - 2026-06-16
+
+The first run is a calm bookshop — open to a book you mean to finish.
+
+### Added
+
+- **A redesigned first run.** Opening Throughline for the first time now leads
+  with a serif invitation and three cloth-bound covers — pick one to start
+  reading at once. Every book wears a cover generated from its title and author
+  (no stock art), and the same cover follows you from the front door through the
+  library to Today.
+- **A warmer library.** Browsing is cover-forward now: a few hand-picked doorways
+  (Short classics, Familiar names, A little philosophy, Finish in a weekend),
+  each book with a line on what it's like to read, and a quiet search across the
+  whole public-domain catalogue. Choosing a book is "Start reading."
+- **One calm question about pace.** When you start a book, Throughline asks what
+  feels like a good sitting — a few pages, a chapter, or a long read — in reading
+  terms, never minutes and never a timer. It's optional, lives in Settings, and
+  is only asked once.
+- **Enter your code on the welcome screen.** Bought Throughline? You can activate
+  right on the first screen now — reading stays free either way.
+
+### Changed
+
+- Today's first-day line now reads "The first chapter, at the pace you set. No
+  clock but your own."
+
 ## [0.7.0] - 2026-06-14
 
 Today opens to your book, and starting one is a single step.
