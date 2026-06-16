@@ -80,6 +80,9 @@ export default function BookSetupSheet({ book, onDone }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cardRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  // Two sequential screens: the book chosen, then the reading pace.
+  const [step, setStep] = useState<"chosen" | "pace">("chosen");
+  const paceHeadingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,6 +119,12 @@ export default function BookSetupSheet({ book, onDone }: Props) {
     // book.id is stable for this sheet's lifetime; onDone is a stable callback.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id]);
+
+  // Advancing to the pace step moves focus to its heading so the new screen is
+  // announced (screen readers) and keyboard users land on it.
+  useEffect(() => {
+    if (step === "pace") paceHeadingRef.current?.focus();
+  }, [step]);
 
   // Commit the pace and proceed. `persist` writes the GLOBAL preference (so future
   // books default to it and the step is skipped next time) AND marks it chosen;
@@ -157,87 +166,102 @@ export default function BookSetupSheet({ book, onDone }: Props) {
   return (
     <div className="tl-journey-screen">
       <div className="tl-journey-scroll">
-        {/* ── The book you chose (the cover rises to centre) ── */}
-        <div className="tl-chosen">
-          <Cover title={book.title} author={book.author} size="full" />
-          <p className="tl-chosen-eyebrow">Added to Today</p>
-          <h1 className="tl-chosen-h">{book.title} is yours to begin.</h1>
-          <p className="tl-chosen-line">
-            It's waiting on Today now. One last thing before you start: how do you like to read?
-          </p>
-        </div>
-
-        {/* ── Your reading pace ── */}
-        <div className="tl-pace">
-          <p className="tl-pace-eyebrow">How you like to read</p>
-          <h2 className="tl-pace-q">What feels like a good sitting?</h2>
-          <p className="tl-pace-sub">
-            This just sizes each day's reading. There's no timer, and you can change it anytime.
-          </p>
-
-          <div className="tl-pace-opts" role="radiogroup" aria-label="What feels like a good sitting?">
-            {PACES.map((p, i) => {
-              const on = p.minutes === pace;
-              return (
+        <div className="tl-journey-step">
+          {step === "chosen" ? (
+            // Screen A: the book you chose — the cover rises to centre.
+            <div className="tl-chosen">
+              <Cover title={book.title} author={book.author} size="full" />
+              <p className="tl-chosen-eyebrow">Added to Today</p>
+              <h1 className="tl-chosen-h">{book.title} is yours to begin.</h1>
+              <p className="tl-chosen-line">
+                It's waiting on Today now. One last thing before you start: how do you like to read?
+              </p>
+              <div className="tl-chosen-actions">
                 <button
                   type="button"
-                  key={p.minutes}
-                  ref={(el) => {
-                    cardRefs.current[i] = el;
-                  }}
-                  className={on ? "tl-pace-opt on" : "tl-pace-opt"}
-                  role="radio"
-                  aria-checked={on}
-                  tabIndex={on ? 0 : -1}
-                  onClick={() => setPace(p.minutes)}
-                  onKeyDown={(e) => onCardKey(e, i)}
+                  className="tl-btn tl-btn-primary"
+                  onClick={() => setStep("pace")}
                 >
-                  <span className="tl-pace-ico">
-                    <PaceIcon minutes={p.minutes} />
-                  </span>
-                  <span className="tl-pace-name">{p.name}</span>
-                  <span className="tl-pace-desc">{p.desc}</span>
-                  <svg
-                    className="tl-pace-check"
-                    viewBox="0 0 20 20"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M16.5 6.5L8.5 14.5 4 10" />
-                  </svg>
+                  Continue
                 </button>
-              );
-            })}
-          </div>
+              </div>
+            </div>
+          ) : (
+            // Screen B: your reading pace.
+            <div className="tl-pace">
+              <p className="tl-pace-eyebrow">How you like to read</p>
+              <h2 className="tl-pace-q" tabIndex={-1} ref={paceHeadingRef}>
+                What feels like a good sitting?
+              </h2>
+              <p className="tl-pace-sub">
+                This just sizes each day's reading. There's no timer, and you can change it anytime.
+              </p>
 
-          {error && (
-            <p className="tl-warn-text" role="alert" style={{ marginTop: "var(--tl-3)" }}>
-              Couldn't save your pace: {error}
-            </p>
+              <div className="tl-pace-opts" role="radiogroup" aria-label="What feels like a good sitting?">
+                {PACES.map((p, i) => {
+                  const on = p.minutes === pace;
+                  return (
+                    <button
+                      type="button"
+                      key={p.minutes}
+                      ref={(el) => {
+                        cardRefs.current[i] = el;
+                      }}
+                      className={on ? "tl-pace-opt on" : "tl-pace-opt"}
+                      role="radio"
+                      aria-checked={on}
+                      tabIndex={on ? 0 : -1}
+                      onClick={() => setPace(p.minutes)}
+                      onKeyDown={(e) => onCardKey(e, i)}
+                    >
+                      <span className="tl-pace-ico">
+                        <PaceIcon minutes={p.minutes} />
+                      </span>
+                      <span className="tl-pace-name">{p.name}</span>
+                      <span className="tl-pace-desc">{p.desc}</span>
+                      <svg
+                        className="tl-pace-check"
+                        viewBox="0 0 20 20"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M16.5 6.5L8.5 14.5 4 10" />
+                      </svg>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {error && (
+                <p className="tl-warn-text" role="alert" style={{ marginTop: "var(--tl-3)" }}>
+                  Couldn't save your pace: {error}
+                </p>
+              )}
+
+              <div className="tl-pace-actions">
+                <button
+                  type="button"
+                  className="tl-btn tl-btn-primary"
+                  disabled={submitting}
+                  onClick={() => commit(true, pace, true)}
+                >
+                  Start reading
+                </button>
+                <button
+                  type="button"
+                  className="tl-pace-skip"
+                  disabled={submitting}
+                  onClick={() => commit(false, DEFAULT_PACE, false)}
+                >
+                  I'll decide as I go
+                </button>
+              </div>
+            </div>
           )}
-
-          <div className="tl-pace-actions">
-            <button
-              type="button"
-              className="tl-btn tl-btn-primary"
-              disabled={submitting}
-              onClick={() => commit(true, pace, true)}
-            >
-              Start reading
-            </button>
-            <button
-              type="button"
-              className="tl-pace-skip"
-              disabled={submitting}
-              onClick={() => commit(false, DEFAULT_PACE, false)}
-            >
-              I'll decide as I go
-            </button>
-          </div>
         </div>
       </div>
     </div>

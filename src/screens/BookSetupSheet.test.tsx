@@ -35,30 +35,41 @@ function wire(opts: { chosen?: boolean; minutes?: number; configureRejects?: unk
   });
 }
 
+/** Screen A (book chosen) → Continue → Screen B (reading pace). The two are now
+ *  separate sequential screens, so a test that drives the pace must advance first. */
+async function advanceToPace() {
+  fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+  await screen.findByText("What feels like a good sitting?");
+}
+
 describe("BookSetupSheet — book chosen → reading pace", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
     wire();
   });
 
-  it("rises the chosen cover and asks the one pace question, a chapter preselected", async () => {
+  it("shows the book-chosen screen first, then the pace question on a separate screen", async () => {
     render(<BookSetupSheet book={book} onDone={() => {}} />);
 
-    // The chosen hero, verbatim.
+    // Screen A — the chosen hero, verbatim. The pace question is NOT here yet.
     expect(await screen.findByText("Added to Today")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Thinking in Systems is yours to begin\./ })).toBeInTheDocument();
     expect(screen.getByText(/One last thing before you start: how do you like to read\?/)).toBeInTheDocument();
+    expect(screen.queryByText("What feels like a good sitting?")).toBeNull();
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
 
-    // The pace question, in reading terms.
-    expect(screen.getByText("What feels like a good sitting?")).toBeInTheDocument();
-    const radios = screen.getAllByRole("radio");
-    expect(radios).toHaveLength(3);
+    // Continue → Screen B — the pace question, a chapter preselected, and the
+    // chosen hero is gone (separate screens, no combined scroll).
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByText("What feels like a good sitting?")).toBeInTheDocument();
+    expect(screen.queryByText("Added to Today")).toBeNull();
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
     expect(screen.getByRole("radio", { name: /A chapter/ })).toHaveAttribute("aria-checked", "true");
   });
 
   it("never shows a minute count, a finish date, or a book length — pace is reading terms only", async () => {
     const { container } = render(<BookSetupSheet book={book} onDone={() => {}} />);
-    await screen.findByText("What feels like a good sitting?");
+    await advanceToPace();
     const t = container.textContent ?? "";
     // No number at all on the pace screen → no minute count, no finish date.
     expect(t).not.toMatch(/\d/);
@@ -74,7 +85,7 @@ describe("BookSetupSheet — book chosen → reading pace", () => {
   it("Start reading persists the pace globally AND on the book's plan, then begins", async () => {
     const onDone = vi.fn();
     render(<BookSetupSheet book={book} onDone={onDone} />);
-    await screen.findByText("What feels like a good sitting?");
+    await advanceToPace();
 
     fireEvent.click(screen.getByRole("radio", { name: /A long read/ }));
     fireEvent.click(screen.getByRole("button", { name: "Start reading" }));
@@ -90,7 +101,7 @@ describe("BookSetupSheet — book chosen → reading pace", () => {
   it("'I'll decide as I go' never blocks: default sitting, and it does NOT lock in a pace", async () => {
     const onDone = vi.fn();
     render(<BookSetupSheet book={book} onDone={onDone} />);
-    await screen.findByText("What feels like a good sitting?");
+    await advanceToPace();
 
     fireEvent.click(screen.getByRole("button", { name: /I'll decide as I go/ }));
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(false));
@@ -103,7 +114,7 @@ describe("BookSetupSheet — book chosen → reading pace", () => {
 
   it("arrow keys move the radio selection (WAI-ARIA radio pattern)", async () => {
     render(<BookSetupSheet book={book} onDone={() => {}} />);
-    await screen.findByText("What feels like a good sitting?");
+    await advanceToPace();
     const chapter = screen.getByRole("radio", { name: /A chapter/ });
     fireEvent.keyDown(chapter, { key: "ArrowRight" });
     expect(screen.getByRole("radio", { name: /A long read/ })).toHaveAttribute("aria-checked", "true");
@@ -115,7 +126,7 @@ describe("BookSetupSheet — book chosen → reading pace", () => {
     wire({ configureRejects: { kind: "Db", message: "The library is busy right now." } });
     const onDone = vi.fn();
     render(<BookSetupSheet book={book} onDone={onDone} />);
-    await screen.findByText("What feels like a good sitting?");
+    await advanceToPace();
 
     fireEvent.click(screen.getByRole("button", { name: "Start reading" }));
     const alert = await screen.findByRole("alert");

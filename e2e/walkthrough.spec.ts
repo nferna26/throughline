@@ -166,6 +166,7 @@ test("begin-reading-never-opens-a-sectionless-reader", async ({ page }) => {
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Start a plan" }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
   // The pace step's primary is "Start reading"; with no section it must land on
   // Today, never a dead reader.
   await page.getByRole("button", { name: "Start reading" }).click();
@@ -188,30 +189,35 @@ test("reader", async ({ page }) => {
   await shoot(page, "02-reader");
 });
 
-test("book-chosen-and-pace", async ({ page }) => {
-  // The first-journey beat: a new book → the cover rises ("Added to Today"),
-  // then the ONE pace question in reading terms → Start reading lands in the
-  // first sitting. (A plan-less book → Start a plan reaches the same screen.)
+test("book-chosen-then-reading-pace", async ({ page }) => {
+  // The first-journey beat, now TWO separate screens: a new book → the cover
+  // rises ("Added to Today") → Continue → the ONE pace question in reading terms
+  // → Start reading lands in the first sitting.
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_NO_PLAN__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Start a plan" }).click();
 
-  // Book chosen.
+  // Screen A — book chosen. The pace question is NOT here yet.
   await expect(page.getByText("Added to Today")).toBeVisible();
   await expect(page.getByRole("heading", { name: /Meditations is yours to begin/ })).toBeVisible();
-  // Reading pace, in reading terms, a chapter preselected.
+  await expect(page.getByText("What feels like a good sitting?")).toHaveCount(0);
+  await shoot(page, "25-book-chosen");
+
+  // Continue → Screen B — reading pace, a chapter preselected; the chosen hero is gone.
+  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText("What feels like a good sitting?")).toBeVisible();
+  await expect(page.getByText("Added to Today")).toHaveCount(0);
   await expect(page.getByRole("radio", { name: /A chapter/ })).toHaveAttribute("aria-checked", "true");
   // Never a clock: no minute count, finish date, or timer readout on the cards.
   await expect(page.getByText(/you'd finish|finish by|of reading|\d+\s*minutes?\b/i)).toHaveCount(0);
   await expect(page.getByText(/days a week|margin help|name this plan|behind|streak/i)).toHaveCount(0);
-  await shoot(page, "25-chosen-pace");
+  await shoot(page, "25b-reading-pace");
 
   await page.getByRole("button", { name: "Start reading" }).click();
   await expect(page.getByText(/Begin the morning by saying to thyself/).first()).toBeVisible();
 });
 
-test("book-chosen-and-pace-dark", async ({ page }) => {
+test("book-chosen-then-reading-pace-dark", async ({ page }) => {
   await page.addInitScript(() => {
     const w = window as unknown as Record<string, unknown>;
     w.__TL_FAKE_NO_PLAN__ = true;
@@ -219,8 +225,11 @@ test("book-chosen-and-pace-dark", async ({ page }) => {
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Start a plan" }).click();
+  await expect(page.getByText("Added to Today")).toBeVisible();
+  await shoot(page, "25c-book-chosen-dark");
+  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText("What feels like a good sitting?")).toBeVisible();
-  await shoot(page, "25b-chosen-pace-dark");
+  await shoot(page, "25d-reading-pace-dark");
 });
 
 test("returning-reader-skips-the-pace-step", async ({ page }) => {

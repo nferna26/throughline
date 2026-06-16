@@ -17,9 +17,22 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+}
+/* Each step is its own screen now (book chosen, then reading pace). margin:auto
+   centres the single screen on both axes and still scrolls to the top if it ever
+   exceeds the viewport (no flex top-clip). */
+.tl-journey-step {
+  margin: auto;
+  padding: var(--tl-8) var(--tl-7) var(--tl-9);
+  display: flex;
+  flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: var(--tl-8) var(--tl-7) var(--tl-9);
+  width: 100%;
+  max-width: 540px;
+}
+.tl-chosen-actions {
+  margin-top: 28px;
 }
 
 /* ── the book you chose ── */
@@ -63,10 +76,12 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  margin-top: var(--tl-9);
-  padding-top: var(--tl-7);
-  border-top: 1px solid var(--tl-line);
   width: 100%;
+}
+/* The pace heading is focused on entering the step (announces the new screen);
+   it must not show a focus outline as a non-interactive heading. */
+.tl-pace-q:focus {
+  outline: none;
 }
 .tl-pace-eyebrow {
   font-size: 11px;
