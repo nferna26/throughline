@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import Cover from "../components/Cover";
+import Cover, { decollideCovers } from "../components/Cover";
 import { STARTERS, resolveStarters } from "../discoverShelves";
+
+// The three starter covers are shown together, so de-collide their cloth up front
+// (deterministic, since STARTERS is fixed) — Meditations / Walden / Pride &
+// Prejudice render as three clearly distinct colours, never two near-purples.
+const TRIO_CLOTH = decollideCovers(STARTERS.map((s) => ({ title: s.title, author: s.author })));
 import { errorMessage, type DiscoverBook, type ImportOutcome } from "../types";
 import "./FrontDoor.css";
 
@@ -165,7 +170,7 @@ export default function FrontDoor({ onDiscover, onImport, onPicked }: Props) {
             the authored STARTERS (stable keys, no remount flash); each cover is
             inert until its catalogue row resolves to give it import URLs. */}
         <div className="tl-fd-shelf">
-          {STARTERS.map((s) => {
+          {STARTERS.map((s, i) => {
             const resolved = starters.find((r) => r.book.id === s.id) ?? null;
             const loading = resolved != null && importingId === resolved.book.id;
             const disabled = resolved == null || importingId != null;
@@ -179,7 +184,7 @@ export default function FrontDoor({ onDiscover, onImport, onPicked }: Props) {
                 aria-label={`Start reading ${s.title} by ${s.author}`}
                 aria-busy={loading}
               >
-                <Cover title={s.title} author={s.author} size="trio" />
+                <Cover title={s.title} author={s.author} size="trio" cloth={TRIO_CLOTH[i]} />
                 {loading && <span className="tl-fd-book-loading">Opening…</span>}
               </button>
             );

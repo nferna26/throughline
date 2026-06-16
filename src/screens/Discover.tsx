@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import Cover from "../components/Cover";
+import Cover, { decollideCovers } from "../components/Cover";
 import { errorMessage, type DiscoverBook, type DiscoverPage, type ImportOutcome } from "../types";
 import { resolveShelves, indexBooks, DOORWAY_IDS, type ResolvedShelf } from "../discoverShelves";
 import "./Discover.css";
@@ -181,6 +181,14 @@ export default function Discover({ onBack, onPicked }: Props) {
   }
 
   const searching = d.query.trim().length > 0;
+  // The search grid reflows, so de-collide with a rolling window: each cover
+  // avoids its recent neighbours' colours (the most visible adjacency), keeping
+  // covers shown together visibly distinct without forcing all-distinct on a long
+  // list. Curated shelf rows (above) get the all-distinct treatment instead.
+  const resultCloth = decollideCovers(
+    d.results.map((b) => ({ title: b.title, author: b.author })),
+    2,
+  );
 
   return (
     <div className="tl-body">
@@ -227,14 +235,19 @@ export default function Discover({ onBack, onPicked }: Props) {
           {/* ── Idle: the curated doorways are the navigation ── */}
           {!searching ? (
             shelves.length > 0 ? (
-              shelves.map((shelf) => (
+              shelves.map((shelf) => {
+                // De-collide the row so no two covers shown together share a colour.
+                const rowCloth = decollideCovers(
+                  shelf.items.map((it) => ({ title: it.title, author: it.author })),
+                );
+                return (
                 <section className="tl-shelf" key={shelf.key} aria-label={shelf.title}>
                   <div className="tl-shelf-h">
                     <h2 className="tl-shelf-label">{shelf.title}</h2>
                     <span className="tl-shelf-desc">{shelf.description}</span>
                   </div>
                   <div className="tl-shelf-grid">
-                    {shelf.items.map(({ book, title, author, blurb }) => (
+                    {shelf.items.map(({ book, title, author, blurb }, idx) => (
                       <button
                         type="button"
                         key={book.id}
@@ -244,7 +257,7 @@ export default function Discover({ onBack, onPicked }: Props) {
                         aria-label={`Start reading ${title} by ${author}`}
                         aria-busy={dl[book.id] === "loading"}
                       >
-                        <Cover title={title} author={author} size="shelf" />
+                        <Cover title={title} author={author} size="shelf" cloth={rowCloth[idx]} />
                         <span className="tl-cell-t">{title}</span>
                         <span className="tl-cell-a">{author}</span>
                         <span className="tl-cell-blurb">{blurb}</span>
@@ -253,7 +266,8 @@ export default function Discover({ onBack, onPicked }: Props) {
                     ))}
                   </div>
                 </section>
-              ))
+                );
+              })
             ) : (
               <div className="tl-lib-empty">
                 <span>Gathering the shelves…</span>
@@ -287,7 +301,7 @@ export default function Discover({ onBack, onPicked }: Props) {
               ) : (
                 <>
                   <div className="tl-results-grid">
-                    {d.results.map((b) => {
+                    {d.results.map((b, idx) => {
                       const importable = b.has_txt || b.has_epub;
                       return (
                         <button
@@ -299,7 +313,7 @@ export default function Discover({ onBack, onPicked }: Props) {
                           aria-label={`Start reading ${b.title}${b.author ? ` by ${b.author}` : ""}`}
                           aria-busy={dl[b.id] === "loading"}
                         >
-                          <Cover title={b.title} author={b.author} size="search" />
+                          <Cover title={b.title} author={b.author} size="search" cloth={resultCloth[idx]} />
                           <span className="tl-cell-t">{b.title}</span>
                           <span className="tl-cell-a">{b.author || "Unknown author"}</span>
                           {dl[b.id] === "loading" && <span className="tl-cell-loading">Opening…</span>}

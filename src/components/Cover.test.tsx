@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
-import Cover, { clothIndex } from "./Cover";
+import Cover, { clothIndex, decollideCovers } from "./Cover";
+
+// c3 (#69474c) and c5 (#5b4a6b) read as the same muted purple, so they share a
+// visual class — covers shown together must never pair them.
+const cls = (slot: number) => (slot === 5 ? 3 : slot);
 
 describe("Cover — the generated cloth book", () => {
   it("paints the title and author on the cloth", () => {
@@ -39,5 +43,38 @@ describe("Cover — the generated cloth book", () => {
     ];
     const seen = new Set(titles.map((t) => clothIndex(t, "Author")));
     expect(seen.size).toBeGreaterThan(1);
+  });
+});
+
+describe("decollideCovers — covers shown together stay distinct", () => {
+  it("makes the front-door trio three visually distinct cloths (never two purples)", () => {
+    const trio = [
+      { title: "Meditations", author: "Marcus Aurelius" },
+      { title: "Walden", author: "Henry D. Thoreau" },
+      { title: "Pride & Prejudice", author: "Jane Austen" },
+    ];
+    const colours = decollideCovers(trio);
+    expect(new Set(colours.map(cls)).size).toBe(3); // three distinct visual classes
+    // c3 and c5 read alike, so at most one of them may appear in the trio.
+    expect(colours.filter((c) => c === 3 || c === 5).length).toBeLessThanOrEqual(1);
+  });
+
+  it("makes any small group (up to the five visual classes) fully distinct", () => {
+    const five = Array.from({ length: 5 }, (_, i) => ({ title: `Quintet ${i}`, author: `Auth ${i}` }));
+    expect(new Set(decollideCovers(five).map(cls)).size).toBe(5);
+  });
+
+  it("a windowed group never pairs adjacent covers (incl. c3/c5) — for the search grid", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({ title: `Result ${i}`, author: "" }));
+    const colours = decollideCovers(many, 2);
+    for (let i = 1; i < colours.length; i++) {
+      expect(cls(colours[i]), `adjacent ${i - 1}/${i}`).not.toBe(cls(colours[i - 1]));
+    }
+  });
+
+  it("keeps a lone cover's deterministic base colour and is itself deterministic", () => {
+    expect(decollideCovers([{ title: "Solo", author: "One" }])[0]).toBe(clothIndex("Solo", "One"));
+    const group = [{ title: "Dracula", author: "Bram Stoker" }, { title: "X", author: "Y" }];
+    expect(decollideCovers(group)).toEqual(decollideCovers(group));
   });
 });
