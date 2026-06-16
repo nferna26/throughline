@@ -147,6 +147,10 @@ function setAppImpl(overrides: Record<string, unknown> = {}) {
         return Promise.resolve({ path: "/tmp/x", writable: true, message: null });
       case "cmd_assignable_sections":
         return Promise.resolve([]);
+      case "cmd_get_reading_pace":
+        // Default: the reader has not chosen a pace yet, so the chosen → pace
+        // step asks (the first-journey flow). Overridable per test.
+        return Promise.resolve({ minutes: 25, chosen: false });
       default:
         return Promise.resolve(null);
     }
@@ -157,22 +161,22 @@ describe("App drag-and-drop import", () => {
   it("registers a drag-drop listener and routes a new book to the Book Setup Sheet", async () => {
     setAppImpl({ cmd_import_book: { book: BOOK, created: true } });
     render(<App />);
-    await screen.findByText(/Welcome to Throughline/i);
+    await screen.findByText(/Begin with a book you mean to finish/i);
     await waitFor(() => expect(mocks.dragHandlers.length).toBeGreaterThan(0));
 
     await act(async () => {
       await mocks.dragHandlers[0]({ payload: { type: "drop", paths: ["/tmp/confessions.epub"] } });
     });
 
-    // The Book Setup Sheet (same as the picker's created:true path).
-    expect(await screen.findByText("New on your desk")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Confessions" })).toBeInTheDocument();
+    // The book-chosen → pace step (same as the picker's created:true path).
+    expect(await screen.findByText("Added to Today")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Confessions is yours to begin/ })).toBeInTheDocument();
   });
 
   it("shows the calm notice (not silence) for an unsupported drop", async () => {
     setAppImpl();
     render(<App />);
-    await screen.findByText(/Welcome to Throughline/i);
+    await screen.findByText(/Begin with a book you mean to finish/i);
     await waitFor(() => expect(mocks.dragHandlers.length).toBeGreaterThan(0));
 
     await act(async () => {
@@ -198,7 +202,7 @@ describe("App update-relaunch focus handoff", () => {
   it("does not focus the window on a normal cold launch", async () => {
     setAppImpl();
     render(<App />);
-    await screen.findByText(/Welcome to Throughline/i);
+    await screen.findByText(/Begin with a book you mean to finish/i);
 
     expect(mocks.invoke).toHaveBeenCalledWith("cmd_consume_update_relaunch_focus");
     expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_focus_main_window_after_update_relaunch");
@@ -263,7 +267,7 @@ describe("App command failures use the in-app banner (CORE-1041)", () => {
     vi.mocked(openDialog).mockResolvedValueOnce("/tmp/locked.epub");
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: /Import a file instead/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /Import a \.txt or \.epub/i }));
 
     const banner = await screen.findByRole("alert");
     expect(banner).toHaveTextContent("Import failed: this EPUB looks DRM-protected.");
@@ -314,7 +318,7 @@ describe("titlebar brand mark", () => {
   it("renders the Throughline T beside the wordmark in the home button", async () => {
     setAppImpl();
     render(<App />);
-    await screen.findByText(/Welcome to Throughline/i);
+    await screen.findByText(/Begin with a book you mean to finish/i);
 
     const brand = screen.getByRole("button", { name: /Throughline — home/i });
     expect(brand).toHaveTextContent(/Throughline/i);

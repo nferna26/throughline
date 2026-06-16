@@ -117,6 +117,25 @@ const KEY_PROVIDERS = AI_PROVIDERS.filter((p) => p.id === "anthropic" || p.id ==
 export default function Settings() {
   const [dto, setDto] = useState<SettingsDto | null>(null);
 
+  // Reading pace — the global sitting size the first-journey pace step sets, also
+  // editable here ("changeable anytime"). Reading terms only on screen; the
+  // minutes are the backstage mapping (10 / 25 / 60), never a timer.
+  const [paceMinutes, setPaceMinutes] = useState<number | null>(null);
+  useEffect(() => {
+    invoke<{ minutes: number; chosen: boolean }>("cmd_get_reading_pace")
+      .then((p) => setPaceMinutes(p.minutes))
+      .catch(() => setPaceMinutes(null));
+  }, []);
+  async function changePace(minutes: number) {
+    setPaceMinutes(minutes); // optimistic; the backend clamps + persists
+    try {
+      const p = await invoke<{ minutes: number; chosen: boolean }>("cmd_set_reading_pace", { minutes });
+      setPaceMinutes(p.minutes);
+    } catch {
+      /* leave the optimistic value; a later read reconciles */
+    }
+  }
+
   // Files
   const [savingExport, setSavingExport] = useState(false);
   const [exportMsg, setExportMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -487,6 +506,35 @@ export default function Settings() {
       <div className="col2">
         <h2 className="page-title">Settings</h2>
         <p className="page-sub">Throughline · a calm place to read</p>
+
+        {/* ═══════════════ READING PACE ═══════════════ */}
+        <section className="section">
+          <h3 className="section-h">Reading pace</h3>
+          <div className="card">
+            <div className="row row-flex">
+              <div className="row-main">
+                <p className="row-title">What feels like a good sitting</p>
+                <p className="row-desc">
+                  This just sizes each day's reading — there's no timer, and you can change it
+                  anytime.
+                </p>
+              </div>
+              <div className="row-control">
+                <select
+                  className="select"
+                  aria-label="Reading pace"
+                  value={String([10, 25, 60].includes(paceMinutes ?? 25) ? (paceMinutes ?? 25) : 25)}
+                  onChange={(e) => void changePace(Number(e.target.value))}
+                  disabled={paceMinutes == null}
+                >
+                  <option value="10">A few pages</option>
+                  <option value="25">A chapter</option>
+                  <option value="60">A long read</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </section>
 
         {/* ═══════════════ 1 · READING ASSISTANT ═══════════════ */}
         <section className="section">

@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Throughline · First-run screen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400;1,8..60,500&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --paper:#F4F1EA; --surface:#FBFAF6; --card:#FFFFFF;
+  --primary:#2E4A37; --primary-deep:#243B2C; --accent:#3E7A4E; --accent-soft:rgba(62,122,78,.10);
+  --ink:#1A1A18; --ink-70:rgba(26,26,24,.70); --muted:#6B6B66; --faint:#98937F;
+  --border:#E5E1D8; --border-strong:#D8D3C6; --on-primary:#F4F1EA;
+  --clay:#B4663C; --clay-soft:rgba(180,102,60,.10);
+  --serif:"Source Serif 4",Georgia,serif; --sans:Inter,-apple-system,system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  --shadow-win:0 30px 60px -18px rgba(30,28,18,.28),0 8px 20px -8px rgba(30,28,18,.16),0 0 0 1px rgba(40,36,24,.06);
+  --shadow-sm:0 1px 2px rgba(40,36,24,.05),0 0 0 1px rgba(40,36,24,.05);
+  --shadow-book:0 12px 24px -10px rgba(30,28,18,.32),0 2px 5px rgba(30,28,18,.14);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:#E6E3DB;color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.6;}
+.page{max-width:1180px;margin:0 auto;padding:56px 32px 120px;}
+
+.doc-head{max-width:760px;margin-bottom:14px;}
+.doc-kicker{font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 14px;}
+.doc-head h1{font-family:var(--serif);font-weight:500;font-size:40px;line-height:1.08;letter-spacing:-.02em;margin:0 0 14px;}
+.doc-head p{font-size:15.5px;color:var(--ink-70);margin:0;max-width:68ch;}
+
+.sec{margin-top:58px;}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:18px;}
+.sec-num{font-family:var(--serif);font-style:italic;font-size:20px;color:var(--accent);}
+.sec-head h2{font-family:var(--serif);font-weight:500;font-size:26px;letter-spacing:-.01em;margin:0;}
+.sec-tag{font-size:11.5px;font-weight:600;color:var(--faint);letter-spacing:.04em;border:1px solid var(--border-strong);border-radius:999px;padding:3px 10px;margin-left:auto;white-space:nowrap;}
+.sec-intro{font-size:14.5px;color:var(--muted);max-width:78ch;margin:0 0 24px;}
+.sec-intro b{color:var(--ink);font-weight:600;}
+
+.frame-label{display:flex;align-items:center;gap:10px;font-size:12px;color:#736f64;margin:0 0 12px 4px;}
+.frame-label b{color:#4a463d;font-weight:600;font-size:12.5px;}
+.frame-label .dot{width:5px;height:5px;border-radius:50%;background:#a39d8d;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px;}
+@media(max-width:1000px){.grid2{grid-template-columns:1fr;}}
+
+/* ===== window ===== */
+.win{border-radius:13px;overflow:hidden;box-shadow:var(--shadow-win);background:var(--paper);}
+.win.dark{--paper:#1C1914;--surface:#242018;--card:#2A251D;--ink:#ECE7DC;--ink-70:rgba(236,231,220,.72);
+  --muted:#9C968A;--faint:#7B7567;--border:#383329;--border-strong:#443E31;--primary:#A7C5B1;--primary-deep:#B9D2C1;
+  --accent:#A7C5B1;--accent-soft:rgba(167,197,177,.13);--on-primary:#16140F;--clay:#C99A6A;--clay-soft:rgba(201,154,106,.14);
+  --shadow-book:0 12px 24px -10px rgba(0,0,0,.5),0 2px 5px rgba(0,0,0,.3);--shadow-sm:0 1px 2px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.04);}
+.winbar{height:44px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:13px;padding:0 16px;}
+.tl{display:flex;gap:8px;}
+.tl i{width:12px;height:12px;border-radius:50%;display:block;}
+.tl .r{background:#E06B5C;}.tl .y{background:#E3B24C;}.tl .g{background:#6FA85B;}
+.winbar .bwm{display:inline-flex;align-items:center;gap:8px;margin-left:4px;}
+.winbar .bwm .m{width:21px;height:21px;border-radius:6px;background:var(--primary);display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:600;color:var(--on-primary);font-size:13px;}
+.winbar .bwm .t{font-family:var(--serif);font-size:14.5px;color:var(--ink);}
+.winbar .bwm .t b{font-weight:700;}
+.winbar .bartools{margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--faint);}
+.winbar .bartools button{background:none;border:none;color:var(--faint);cursor:pointer;width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;}
+.winbar .bartools button:hover{background:var(--paper);color:var(--muted);}
+.winbar .bartools svg{width:17px;height:17px;}
+
+/* ===== first-run content, directly on paper (no card-in-card) ===== */
+.fr{padding:58px 40px 42px;display:flex;flex-direction:column;align-items:center;text-align:center;}
+.fr-eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 16px;}
+.fr h1{font-family:var(--serif);font-weight:500;font-size:35px;line-height:1.07;letter-spacing:-.025em;margin:0 0 15px;max-width:15ch;text-wrap:balance;font-optical-sizing:auto;color:var(--ink);}
+.fr .lede{font-size:15px;color:var(--ink-70);line-height:1.55;margin:0;max-width:42ch;}
+
+/* shelf — covers as real cloth-bound book objects, the primary invitation */
+.shelf{display:flex;justify-content:center;align-items:flex-end;gap:24px;margin:46px 0 6px;}
+.book{cursor:pointer;transition:transform .24s cubic-bezier(.2,.7,.2,1);will-change:transform;}
+.book:hover{transform:translateY(-7px);}
+.cover{
+  width:112px;height:164px;border-radius:2px 5px 5px 2px;position:relative;overflow:hidden;
+  display:flex;flex-direction:column;justify-content:center;align-items:center;padding:0 15px;text-align:center;
+  background-color:#2E4A37;
+  background-image:
+    repeating-linear-gradient(90deg,rgba(255,255,255,.022) 0 1px,transparent 1px 3px),
+    repeating-linear-gradient(0deg,rgba(0,0,0,.04) 0 1px,transparent 1px 3px),
+    linear-gradient(108deg,rgba(255,255,255,.07),transparent 40%);
+  box-shadow:inset 10px 0 11px -8px rgba(0,0,0,.55),inset -1px 0 0 rgba(255,255,255,.05),var(--shadow-book);
+}
+.cover::before{content:"";position:absolute;left:8px;top:0;bottom:0;width:1px;background:rgba(255,255,255,.13);}
+.cover::after{content:"";position:absolute;inset:10px 10px 10px 16px;border:1px solid rgba(216,186,128,.34);border-radius:1px;pointer-events:none;}
+.cover .ct{font-family:var(--serif);font-size:14px;font-weight:600;line-height:1.16;letter-spacing:.015em;text-shadow:0 1px 0 rgba(0,0,0,.22),0 -.5px 0 rgba(255,255,255,.06);}
+.cover .ca{font-family:var(--serif);font-style:italic;font-size:9.5px;margin-top:10px;letter-spacing:.02em;opacity:.78;text-shadow:0 1px 0 rgba(0,0,0,.18);}
+.cover.c1{background-color:#2E4A37;color:#ECE5D2;}
+.cover.c2{background-color:#7A5E3C;color:#F3EAD4;}
+.cover.c3{background-color:#69474C;color:#F1E4E1;}
+.win.dark .cover.c1{background-color:#33523E;}.win.dark .cover.c2{background-color:#6E573B;}.win.dark .cover.c3{background-color:#5F454A;}
+
+/* actions */
+.fr-actions{display:flex;align-items:center;gap:18px;margin-top:36px;}
+.btn-primary{display:inline-flex;align-items:center;gap:8px;font-family:var(--sans);font-size:14px;font-weight:600;background:var(--primary);color:var(--on-primary);border:none;border-radius:10px;padding:12px 22px;cursor:pointer;transition:background .15s;}
+.btn-primary:hover{background:var(--primary-deep);}
+.btn-primary svg{width:16px;height:16px;}
+.linkact{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:500;color:var(--muted);cursor:pointer;background:none;border:none;}
+.linkact:hover{color:var(--ink);}
+.linkact svg{width:15px;height:15px;}
+
+/* trust */
+.trust{font-size:12.5px;color:var(--faint);margin-top:30px;line-height:1.55;max-width:50ch;}
+
+/* activation affordance */
+.actbar{margin-top:36px;padding-top:30px;border-top:1px solid var(--border);width:100%;max-width:440px;display:flex;flex-direction:column;align-items:center;}
+.act-rest{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);background:none;border:none;cursor:pointer;}
+.act-rest:hover{color:var(--ink);}
+.act-rest .k{width:15px;height:15px;color:var(--accent);}
+.act-rest u{text-decoration:none;color:var(--primary);font-weight:600;}
+.win.dark .act-rest u{color:var(--accent);}
+
+/* expanded entry */
+.act-expand{width:100%;max-width:380px;text-align:center;}
+.act-expand .ah{font-size:13px;color:var(--ink);font-weight:500;margin:0 0 4px;}
+.act-expand .asub{font-size:12px;color:var(--muted);margin:0 0 14px;line-height:1.5;}
+.codefield{display:flex;gap:8px;}
+.codefield input{flex:1;font-family:var(--mono);font-weight:600;font-size:15px;letter-spacing:.06em;color:var(--ink);background:var(--card);border:1px solid var(--border-strong);border-radius:9px;padding:11px 13px;text-align:center;text-transform:uppercase;}
+.codefield input::placeholder{color:var(--faint);font-weight:500;letter-spacing:.06em;}
+.codefield input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+.codefield input.err{border-color:var(--clay);box-shadow:0 0 0 3px var(--clay-soft);}
+.codefield .go{flex:none;font-family:var(--sans);font-size:13.5px;font-weight:600;background:var(--primary);color:var(--on-primary);border:none;border-radius:9px;padding:0 18px;cursor:pointer;}
+.codefield .go:hover{background:var(--primary-deep);}
+.act-msg{display:flex;gap:8px;align-items:flex-start;justify-content:center;font-size:12px;line-height:1.5;margin-top:12px;text-align:left;max-width:38ch;margin-left:auto;margin-right:auto;}
+.act-msg svg{width:14px;height:14px;flex:none;margin-top:2px;}
+.act-msg.clay{color:var(--clay);}
+.act-msg.clay a{color:var(--clay);font-weight:600;}
+.act-msg.muted{color:var(--muted);}
+.act-cancel{font-size:11.5px;color:var(--faint);background:none;border:none;cursor:pointer;margin-top:12px;}
+.act-cancel:hover{color:var(--muted);text-decoration:underline;}
+
+/* success banner — matches the app's activation banner */
+.actbanner{display:flex;gap:12px;align-items:flex-start;text-align:left;width:100%;max-width:420px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:12px;box-shadow:var(--shadow-sm);padding:15px 16px;}
+.actbanner .bi{width:32px;height:32px;border-radius:9px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;flex:none;color:var(--accent);}
+.actbanner .bi svg{width:18px;height:18px;}
+.actbanner h4{font-size:13.5px;font-weight:600;margin:0 0 3px;color:var(--ink);}
+.actbanner p{font-size:12.5px;color:var(--muted);margin:0;line-height:1.5;}
+
+/* ===== state cards (section 2) ===== */
+.states{display:grid;grid-template-columns:repeat(2,1fr);gap:22px;}
+@media(max-width:900px){.states{grid-template-columns:1fr;}}
+.statecard{background:var(--paper);border:1px solid var(--border);border-radius:14px;overflow:hidden;}
+.statecard .sc-cap{display:flex;align-items:center;gap:9px;padding:13px 18px;border-bottom:1px solid var(--border);background:var(--surface);}
+.statecard .sc-cap .sn{font-family:var(--serif);font-style:italic;font-size:14px;color:var(--accent);}
+.statecard .sc-cap h4{font-size:13px;font-weight:600;margin:0;color:var(--ink);}
+.statecard .sc-cap .badge{margin-left:auto;font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;}
+.badge.ok{color:var(--accent);background:var(--accent-soft);}
+.badge.clay{color:var(--clay);background:var(--clay-soft);}
+.sc-body{padding:26px 22px;display:flex;flex-direction:column;align-items:center;min-height:150px;justify-content:center;}
+
+/* ===== copy sheet ===== */
+.copy{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;}
+.copy-row{display:grid;grid-template-columns:170px 1fr;border-bottom:1px solid var(--border);}
+.copy-row:last-child{border-bottom:none;}
+.copy-k{padding:14px 18px;background:var(--surface);font-size:12px;font-weight:600;color:var(--ink);border-right:1px solid var(--border);}
+.copy-v{padding:14px 18px;font-size:12.5px;color:var(--ink-70);line-height:1.55;}
+.copy-v .mono{font-family:var(--mono);font-size:11.5px;background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:1px 6px;color:var(--ink-70);}
+.copy-v em{color:var(--muted);font-style:italic;}
+@media(max-width:720px){.copy-row{grid-template-columns:1fr;}.copy-k{border-right:none;border-bottom:1px solid var(--border);}}
+
+.note{background:var(--accent-soft);border:1px solid rgba(62,122,78,.22);border-radius:13px;padding:18px 20px;margin-top:18px;}
+.note h4{font-size:13px;font-weight:600;margin:0 0 8px;display:flex;align-items:center;gap:8px;}
+.note h4 svg{width:16px;height:16px;color:var(--accent);}
+.note p{font-size:12.5px;color:var(--ink-70);margin:0 0 9px;line-height:1.6;}
+.note p:last-child{margin-bottom:0;}
+.note b{color:var(--ink);font-weight:600;}
+
+.flag{display:flex;gap:11px;align-items:flex-start;background:var(--clay-soft);border:1px solid rgba(180,102,60,.22);border-radius:13px;padding:16px 18px;margin-top:16px;}
+.flag svg{width:17px;height:17px;color:var(--clay);flex:none;margin-top:1px;}
+.flag p{font-size:12.5px;color:var(--ink-70);margin:0;line-height:1.55;}
+.flag b{color:var(--ink);font-weight:600;}
+
+.subhead{font-size:12px;font-weight:600;letter-spacing:.04em;color:var(--faint);text-transform:uppercase;margin:0 0 14px;}
+.foot{margin-top:60px;text-align:center;font-size:12px;color:#8a8576;}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="doc-head">
+    <p class="doc-kicker">Throughline · first run</p>
+    <h1>The first screen, the right way in</h1>
+    <p>The welcome and empty state, rebuilt to the brand: no card floating in a card, no generic glyph, no checkmark wall. Two calm jobs in one screen, get a new reader into a book, and let a paying buyer enter their code, with reading always free and activation calm but discoverable. Light and dark, then the full activation flow as states.</p>
+  </div>
+
+  <!-- ===== SECTION 1: FULL SCREEN ===== -->
+  <div class="sec">
+    <div class="sec-head">
+      <span class="sec-num">1</span>
+      <h2>The first-run screen</h2>
+      <span class="sec-tag">welcome + empty state</span>
+    </div>
+    <div class="grid2">
+      <!-- LIGHT -->
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Throughline</b> &nbsp;no books yet &middot; light</p>
+        <div class="win">
+          <div class="winbar">
+            <span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+            <span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span>
+            <span class="bartools">
+              <button aria-label="Settings"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="2.5"/><path d="M10 2.5v2M10 15.5v2M17.5 10h-2M4.5 10h-2M15 5l-1.5 1.5M6.5 13.5L5 15M15 15l-1.5-1.5M6.5 6.5L5 5"/></svg></button>
+              <button aria-label="Dark mode"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16 11.5A6.5 6.5 0 0 1 8.5 4a6.5 6.5 0 1 0 7.5 7.5z"/></svg></button>
+            </span>
+          </div>
+          <div class="fr">
+            <p class="fr-eyebrow">A quiet place to read</p>
+            <h1>Begin with a book you mean to finish.</h1>
+            <p class="lede">Read it a few pages a day, with a tutor in the margin for the passages that lose you.</p>
+
+            <div class="shelf">
+              <div class="book"><div class="cover c1"><div class="ct">Meditations</div><div class="ca">Marcus Aurelius</div></div></div>
+              <div class="book"><div class="cover c2"><div class="ct">Walden</div><div class="ca">Henry D. Thoreau</div></div></div>
+              <div class="book"><div class="cover c3"><div class="ct">Pride &amp; Prejudice</div><div class="ca">Jane Austen</div></div></div>
+            </div>
+
+            <div class="fr-actions">
+              <button class="btn-primary"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="5.5"/><path d="M13.5 13.5L17 17"/></svg>Browse the library</button>
+              <button class="linkact"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13V4M6.5 7.5L10 4l3.5 3.5"/><path d="M4 16h12"/></svg>Import a .txt or .epub</button>
+            </div>
+
+            <p class="trust">Thousands of free public-domain books. Everything stays on this Mac, no account, no cloud, nothing tracked.</p>
+
+            <div class="actbar">
+              <button class="act-rest"><svg class="k" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="10" r="3"/><path d="M10 10h7M14.5 10v3M17 10v2.5"/></svg>Bought Throughline? <u>Enter your code</u></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DARK -->
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Throughline</b> &nbsp;no books yet &middot; dark</p>
+        <div class="win dark">
+          <div class="winbar">
+            <span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+            <span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span>
+            <span class="bartools">
+              <button aria-label="Settings"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="2.5"/><path d="M10 2.5v2M10 15.5v2M17.5 10h-2M4.5 10h-2M15 5l-1.5 1.5M6.5 13.5L5 15M15 15l-1.5-1.5M6.5 6.5L5 5"/></svg></button>
+              <button aria-label="Light mode"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="3.5"/><path d="M10 1.5v2M10 16.5v2M18.5 10h-2M3.5 10h-2M16 4l-1.4 1.4M5.4 14.6L4 16M16 16l-1.4-1.4M5.4 5.4L4 4"/></svg></button>
+            </span>
+          </div>
+          <div class="fr">
+            <p class="fr-eyebrow">A quiet place to read</p>
+            <h1>Begin with a book you mean to finish.</h1>
+            <p class="lede">Read it a few pages a day, with a tutor in the margin for the passages that lose you.</p>
+
+            <div class="shelf">
+              <div class="book"><div class="cover c1"><div class="ct">Meditations</div><div class="ca">Marcus Aurelius</div></div></div>
+              <div class="book"><div class="cover c2"><div class="ct">Walden</div><div class="ca">Henry D. Thoreau</div></div></div>
+              <div class="book"><div class="cover c3"><div class="ct">Pride &amp; Prejudice</div><div class="ca">Jane Austen</div></div></div>
+            </div>
+
+            <div class="fr-actions">
+              <button class="btn-primary"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="5.5"/><path d="M13.5 13.5L17 17"/></svg>Browse the library</button>
+              <button class="linkact"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13V4M6.5 7.5L10 4l3.5 3.5"/><path d="M4 16h12"/></svg>Import a .txt or .epub</button>
+            </div>
+
+            <p class="trust">Thousands of free public-domain books. Everything stays on this Mac, no account, no cloud, nothing tracked.</p>
+
+            <div class="actbar">
+              <button class="act-rest"><svg class="k" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="10" r="3"/><path d="M10 10h7M14.5 10v3M17 10v2.5"/></svg>Bought Throughline? <u>Enter your code</u></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="sec-intro" style="margin-top:20px;">The three covers are the invitation and the primary action, click one to start reading immediately. <b>Browse the library</b> opens the full public-domain catalogue; <b>Import</b> takes a .txt or .epub (the only formats). Trust is one quiet line, not a wall. The activation way-in sits just below, calm but spotted in under two seconds.</p>
+  </div>
+
+  <!-- ===== SECTION 2: ACTIVATION STATES ===== -->
+  <div class="sec">
+    <div class="sec-head">
+      <span class="sec-num">2</span>
+      <h2>The activation flow</h2>
+      <span class="sec-tag">resting → entering → success → errors</span>
+    </div>
+    <p class="sec-intro">Reading never needs a code. This is the calm path for a buyer who just paid and is looking for where the code goes. It expands inline, right where the affordance sits, never a modal, never a gate. Errors are honest and warm, in clay, never red.</p>
+
+    <div class="states">
+      <!-- resting -->
+      <div class="statecard">
+        <div class="sc-cap"><span class="sn">a</span><h4>Resting affordance</h4></div>
+        <div class="sc-body">
+          <button class="act-rest"><svg class="k" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="10" r="3"/><path d="M10 10h7M14.5 10v3M17 10v2.5"/></svg>Bought Throughline? <u>Enter your code</u></button>
+        </div>
+      </div>
+
+      <!-- entering -->
+      <div class="statecard">
+        <div class="sc-cap"><span class="sn">b</span><h4>Entering</h4></div>
+        <div class="sc-body">
+          <div class="act-expand">
+            <p class="ah">Enter your activation code</p>
+            <p class="asub">Reading is free. Your code lights up the tutor in the margin.</p>
+            <div class="codefield"><input type="text" value="56HA-N460-C47S" /><button class="go">Activate</button></div>
+            <button class="act-cancel">Not now</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- success -->
+      <div class="statecard">
+        <div class="sc-cap"><span class="sn">c</span><h4>Activated</h4><span class="badge ok">success</span></div>
+        <div class="sc-body">
+          <div class="actbanner">
+            <span class="bi"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></span>
+            <div><h4>You're activated. Welcome in.</h4><p>The tutor is ready in the margin, whenever a passage gives you pause.</p></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- error: wrong -->
+      <div class="statecard">
+        <div class="sc-cap"><span class="sn">d</span><h4>Not recognized</h4><span class="badge clay">error</span></div>
+        <div class="sc-body">
+          <div class="act-expand">
+            <div class="codefield"><input class="err" type="text" value="56HA-N460-C47X" /><button class="go">Activate</button></div>
+            <p class="act-msg clay"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="M10 6.5v4M10 13.5h.01"/></svg><span>That code doesn't look right. Check for a typo and try again.</span></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- error: expired -->
+      <div class="statecard">
+        <div class="sc-cap"><span class="sn">e</span><h4>No longer active</h4><span class="badge clay">error</span></div>
+        <div class="sc-body">
+          <div class="act-expand">
+            <div class="codefield"><input class="err" type="text" value="56HA-N460-C47S" /><button class="go">Activate</button></div>
+            <p class="act-msg clay"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="M10 6v4M10 13.5h.01"/></svg><span>This code is no longer active. Email <a href="#">hello@readthroughline.com</a> and I'll make it right.</span></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- error: already used -->
+      <div class="statecard">
+        <div class="sc-cap"><span class="sn">f</span><h4>Already used &middot; recovery</h4><span class="badge clay">error</span></div>
+        <div class="sc-body">
+          <div class="act-expand">
+            <div class="codefield"><input class="err" type="text" value="56HA-N460-C47S" /><button class="go">Activate</button></div>
+            <p class="act-msg clay"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="M7 10l2 2 4-4"/></svg><span>This code's already in use on another Mac. If that wasn't you, email <a href="#">hello@readthroughline.com</a> and I'll resend one.</span></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SECTION 3: COPY + NOTES ===== -->
+  <div class="sec">
+    <div class="sec-head">
+      <span class="sec-num">3</span>
+      <h2>Copy &amp; interaction</h2>
+      <span class="sec-tag">final words</span>
+    </div>
+
+    <p class="subhead">Every line on the screen</p>
+    <div class="copy">
+      <div class="copy-row"><div class="copy-k">Eyebrow</div><div class="copy-v">A quiet place to read</div></div>
+      <div class="copy-row"><div class="copy-k">Headline</div><div class="copy-v">Begin with a book you mean to finish.</div></div>
+      <div class="copy-row"><div class="copy-k">Lede</div><div class="copy-v">Read it a few pages a day, with a tutor in the margin for the passages that lose you.</div></div>
+      <div class="copy-row"><div class="copy-k">Shelf</div><div class="copy-v">Three rotating starter titles (Meditations, Walden, Pride &amp; Prejudice). Click a cover to start reading at once.</div></div>
+      <div class="copy-row"><div class="copy-k">Primary action</div><div class="copy-v">Browse the library</div></div>
+      <div class="copy-row"><div class="copy-k">Secondary</div><div class="copy-v">Import a .txt or .epub</div></div>
+      <div class="copy-row"><div class="copy-k">Trust line</div><div class="copy-v">Thousands of free public-domain books. Everything stays on this Mac, no account, no cloud, nothing tracked.</div></div>
+      <div class="copy-row"><div class="copy-k">Activation, resting</div><div class="copy-v">Bought Throughline? <em>Enter your code</em></div></div>
+      <div class="copy-row"><div class="copy-k">Activation, expanded</div><div class="copy-v">Enter your activation code &middot; <em>Reading is free. Your code lights up the tutor in the margin.</em> &middot; field placeholder <span class="mono">56HA-N460-C47S</span> &middot; button: Activate &middot; Not now</div></div>
+      <div class="copy-row"><div class="copy-k">Success</div><div class="copy-v">You're activated. Welcome in. <em>The tutor is ready in the margin, whenever a passage gives you pause.</em></div></div>
+      <div class="copy-row"><div class="copy-k">Error · typo</div><div class="copy-v">That code doesn't look right. Check for a typo and try again.</div></div>
+      <div class="copy-row"><div class="copy-k">Error · expired</div><div class="copy-v">This code is no longer active. Email hello@readthroughline.com and I'll make it right.</div></div>
+      <div class="copy-row"><div class="copy-k">Error · already used</div><div class="copy-v">This code's already in use on another Mac. If that wasn't you, email hello@readthroughline.com and I'll resend one.</div></div>
+    </div>
+
+    <div class="note">
+      <h4><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15z"/><path d="M10 13.5v-4M10 6.5h.01"/></svg>Interaction note</h4>
+      <p><b>Where it lives:</b> the code entry sits on this first-run screen, just under the reading actions, separated by a hairline so it reads as secondary. It is also kept in Settings for later. A free or open-source reader can ignore it entirely and just open a book.</p>
+      <p><b>How it expands:</b> clicking "Enter your code" replaces the one-line affordance in place with the mono field, helper line, and Activate, no modal, no navigation. "Not now" collapses it back to the resting line.</p>
+      <p><b>After success:</b> the field becomes the confirmation banner ("You're activated. Welcome in."). The rest of the screen stays, so the reader still picks a book; the tutor is now lit in the margin once they're reading. This is the same banner the deep link shows, so <span style="font-family:var(--mono);font-size:11px;">throughline://activate</span> buyers and manual-entry buyers land on an identical confirmation.</p>
+      <p><b>Reading is never gated:</b> activation only enables the included tutor (~400 explanations, then bring-your-own-key or local). The covers, Browse, and Import all work with no code and no account.</p>
+    </div>
+
+    <div class="flag">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5v15M5 3.5h9l-1.5 3L14 9.5H5"/></svg>
+      <p><b>Repoint flag:</b> the "enter your code in Settings" line now has a more obvious home. Update the fulfillment email, the FAQ, and the success page to point here, e.g. "open Throughline and enter your code on the welcome screen." Keep Settings working as the later path.</p>
+    </div>
+  </div>
+
+  <!-- ===== SECTION 4: CRAFT RAISED ===== -->
+  <div class="sec">
+    <div class="sec-head">
+      <span class="sec-num">4</span>
+      <h2>What craft I raised</h2>
+      <span class="sec-tag">reference pass</span>
+    </div>
+    <div class="copy">
+      <div class="copy-row"><div class="copy-k">Covers</div><div class="copy-v">The hero got the most care. Each is now a real cloth-bound object: a spine ridge and inner shadow on the left edge, a faint cloth weave, a gilt inner frame, and letterpress titles (a hair of deboss). Deeper grounding shadows sit them on a shelf; they lift on hover. Tactile enough to want to touch, the Apple Books lesson without cloning it.</div></div>
+      <div class="copy-row"><div class="copy-k">Type</div><div class="copy-v">Tighter display tracking and leading on the serif headline (optical sizing on), a measured 15-character line, and a calm sans lede at a comfortable measure. The Things 3 / iA Writer standard: nothing shouts, every value considered.</div></div>
+      <div class="copy-row"><div class="copy-k">Rhythm</div><div class="copy-v">More confident whitespace between hero, shelf, actions, and the hairline above the code whisper, so the screen breathes like a well-kept bookshop, not a form.</div></div>
+    </div>
+    <div class="note">
+      <h4><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg>Clear of every Matter anti-pattern</h4>
+      <p>One calm screen, no multi-step funnel. <b>No streaks, daily goals, "X books a year," or habit framing.</b> No aspirational-pressure or guilt copy, it invites, never pressures. No quizzes, occupation or topic pickers, or "favorite thinkers." No account, sign-in, magic link, trial, or paywall. No line-drawing mascots. Warm paper is home; dark is warm, not black. The covers are the welcome; the code is a whisper at the bottom, never a gate.</p>
+    </div>
+  </div>
+
+  <p class="foot">Throughline · first-run screen · welcome + empty state + activation · light, dark, and every state</p>
+
+</div>
+
+<script>
+document.querySelectorAll('.act-rest').forEach(function(b){
+  b.addEventListener('click',function(){ /* demo: would expand inline */ });
+});
+</script>
+</body>
+</html>

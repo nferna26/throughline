@@ -23,10 +23,18 @@ async function serious(page: Page) {
   return v;
 }
 
-test("a11y: welcome", async ({ page }) => {
+test("a11y: front door", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EMPTY__ = true; });
   await page.goto("/");
-  await page.getByRole("heading", { name: /Welcome/i }).waitFor();
+  await page.getByRole("heading", { name: /Begin with a book you mean to finish/i }).waitFor();
+  expect(await serious(page)).toEqual([]);
+});
+
+test("a11y: the library (browse, cover-forward)", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EMPTY__ = true; });
+  await page.goto("/");
+  await page.getByRole("button", { name: /Browse the library/i }).click();
+  await page.getByText("Short classics").waitFor();
   expect(await serious(page)).toEqual([]);
 });
 
@@ -43,11 +51,13 @@ test("a11y: reader", async ({ page }) => {
   expect(await serious(page)).toEqual([]);
 });
 
-test("a11y: plan setup (one question)", async ({ page }) => {
+test("a11y: book chosen + reading pace", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_NO_PLAN__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Start a plan" }).click();
-  await page.getByText("How much feels right at a sitting?").waitFor();
+  await page.getByText("What feels like a good sitting?").waitFor();
+  // The pace radiogroup is the one new interactive surface: a labeled radiogroup
+  // with a default selection (selection not by colour alone — accent + ring + check).
   expect(await serious(page)).toEqual([]);
 });
 

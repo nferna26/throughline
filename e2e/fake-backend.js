@@ -231,7 +231,28 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       }
       case "cmd_list_ai_requests": return [];
       case "cmd_discover_seed": return DISCOVER_PAGE;
-      case "cmd_discover_search": return DISCOVER_PAGE;
+      case "cmd_discover_search":
+        // The empty (mounted) query reports the whole-catalogue scale for the
+        // header count; a typed query returns the seeded results.
+        return (args && args.query) == null
+          ? Object.assign({}, DISCOVER_PAGE, { count: 77386 })
+          : DISCOVER_PAGE;
+      case "cmd_discover_books_by_ids":
+        // The curated doorways + front-door starters resolve through this. The
+        // cell shows the AUTHORED title/author/blurb (from discoverShelves.ts);
+        // the row only needs to exist + carry import URLs.
+        return ((args && args.ids) || []).map((id) => ({
+          id, title: "Catalogue " + id, author: "Author", language: "en",
+          download_count: 100, has_txt: true, has_epub: true, txt_url: "x", epub_url: "y",
+        }));
+      case "cmd_get_reading_pace":
+        // Default: not chosen yet → the chosen → pace step asks. A flag flips it
+        // to a returning reader who skips the step.
+        return window.__TL_FAKE_PACE_CHOSEN__
+          ? { minutes: 25, chosen: true }
+          : { minutes: 25, chosen: false };
+      case "cmd_set_reading_pace":
+        return { minutes: (args && args.minutes) || 25, chosen: true };
       case "cmd_check_export_path":
         return window.__TL_FAKE_EXPORT_BROKEN__
           ? { path: "/Volumes/USB/GBrain/Reading", writable: false, message: "Throughline can't save notes to this folder (No such file or directory)." }

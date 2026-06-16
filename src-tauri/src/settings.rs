@@ -440,6 +440,25 @@ pub fn get_reading_rhythm_minutes(conn: &Connection) -> i64 {
         .unwrap_or(DEFAULT_RHYTHM_MINUTES)
 }
 
+/// Whether the reader has explicitly chosen a reading pace (sitting size). The
+/// first-journey pace step asks once; once chosen, future new books default to
+/// it and the step is skipped (a returning reader lands straight on Today).
+/// Derived from the presence of the setting — it is written ONLY by the reader's
+/// choice (set_reading_rhythm_minutes), never seeded, so presence == chosen.
+pub fn reading_rhythm_chosen(conn: &Connection) -> bool {
+    get_string(conn, KEY_READING_RHYTHM_MINUTES).is_some()
+}
+
+/// Store the global reading pace (sitting size), clamped to the same humane
+/// 5..=120 band `get_reading_rhythm_minutes` reads back, and return the stored
+/// value. The reader only ever sees the reading-term label (a few pages / a
+/// chapter / a long read); the minutes stay backstage.
+pub fn set_reading_rhythm_minutes(conn: &Connection, minutes: i64) -> Result<i64> {
+    let clamped = minutes.clamp(5, 120);
+    set_string(conn, KEY_READING_RHYTHM_MINUTES, &clamped.to_string())?;
+    Ok(clamped)
+}
+
 /// Margin-help preference ("quiet" | "guided" | "deep_study"). Defaults to
 /// `DEFAULT_MARGIN_HELP`. Any unrecognised stored value falls back to the
 /// default rather than erroring.
@@ -641,6 +660,28 @@ mod tests {
         assert_eq!(get_reading_rhythm_minutes(&conn), DEFAULT_RHYTHM_MINUTES);
         set_string(&conn, KEY_READING_RHYTHM_MINUTES, "40").unwrap();
         assert_eq!(get_reading_rhythm_minutes(&conn), 40);
+    }
+
+    #[test]
+    fn reading_pace_chosen_only_after_an_explicit_set() {
+        let conn = mem();
+        // Fresh install: a sensible default (a chapter), but NOT chosen — the
+        // first-journey pace step should ask. Reading get_reading_rhythm_minutes
+        // must not flip the chosen flag (it only reads).
+        assert!(!reading_rhythm_chosen(&conn));
+        assert_eq!(get_reading_rhythm_minutes(&conn), DEFAULT_RHYTHM_MINUTES);
+        assert!(!reading_rhythm_chosen(&conn), "reading the pace must not mark it chosen");
+
+        // An explicit set clamps to the humane band and marks the pace chosen, so
+        // a returning reader skips the step thereafter.
+        let stored = set_reading_rhythm_minutes(&conn, 600).unwrap();
+        assert_eq!(stored, 120, "clamped to the humane ceiling");
+        assert!(reading_rhythm_chosen(&conn));
+        assert_eq!(get_reading_rhythm_minutes(&conn), 120);
+
+        let stored = set_reading_rhythm_minutes(&conn, 10).unwrap();
+        assert_eq!(stored, 10, "a few pages round-trips");
+        assert!(reading_rhythm_chosen(&conn));
     }
 
     #[test]

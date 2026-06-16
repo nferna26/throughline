@@ -267,6 +267,7 @@ pub fn run() {
             // ── discover (public-domain catalogue; reader-initiated egress) ──
             commands::discover::cmd_discover_search,
             commands::discover::cmd_discover_seed,
+            commands::discover::cmd_discover_books_by_ids,
             commands::discover::cmd_import_from_gutendex,
             // ── sessions / plan / progress ──
             commands::sessions::cmd_start_session,
@@ -323,6 +324,8 @@ pub fn run() {
             commands::settings_cmds::cmd_set_ai_settings,
             commands::settings_cmds::cmd_set_ai_key,
             commands::settings_cmds::cmd_clear_ai_key,
+            commands::settings_cmds::cmd_get_reading_pace,
+            commands::settings_cmds::cmd_set_reading_pace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,18 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import BookSetupSheet, { horizonSentence, lengthPhrase } from "./BookSetupSheet";
-import type { Book, BookSection } from "../types";
+import BookSetupSheet from "./BookSetupSheet";
+import type { Book } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-// The old sheet asked five questions (finish date, session minutes, days a
-// week, margin help, plan name) and footed itself with defensive copy ("No
-// streak to break", "you are not behind"). The Stage-2 screen asks exactly
-// ONE question — how much feels right at a sitting — and the old tests'
-// behaviors are replaced accordingly: the rhythm choice still round-trips to
-// cmd_configure_plan (new signature), deferring still never blocks, and the
-// banned surfaces are pinned absent rather than configured.
+// The first-journey screen is the book-chosen → reading-pace beat: the cover you
+// picked rises to centre, then ONE calm question sizes each day's reading in
+// reading terms (a few pages / a chapter / a long read), never minutes, never a
+// timer. The pace persists globally + on the book's plan, is skippable, and a
+// returning reader who already set it skips the question and lands on Today.
 
 const book: Book = {
   id: "b1",
@@ -25,154 +23,123 @@ const book: Book = {
   last_opened_at: null,
 };
 
-function sections(): BookSection[] {
-  // 40 sections × 9000 chars ≈ 72k words ≈ 6 hours of reading.
-  return Array.from({ length: 40 }, (_, i) => ({
-    id: `s${i}`,
-    book_id: "b1",
-    label: `Chapter ${i + 1}`,
-    href: `c${i}.html`,
-    start_locator: null,
-    end_locator: null,
-    estimated_units: 9000,
-    sort_order: i,
-  }));
+/** Wire the pace + plan commands; `chosen` toggles the returning-reader skip. */
+function wire(opts: { chosen?: boolean; minutes?: number; configureRejects?: unknown } = {}) {
+  vi.mocked(invoke).mockImplementation((cmd: string) => {
+    if (cmd === "cmd_get_reading_pace")
+      return Promise.resolve({ minutes: opts.minutes ?? 25, chosen: opts.chosen ?? false });
+    if (cmd === "cmd_set_reading_pace") return Promise.resolve({ minutes: opts.minutes ?? 25, chosen: true });
+    if (cmd === "cmd_configure_plan")
+      return opts.configureRejects ? Promise.reject(opts.configureRejects) : Promise.resolve({});
+    return Promise.resolve(undefined);
+  });
 }
 
-describe("BookSetupSheet — one question", () => {
+describe("BookSetupSheet — book chosen → reading pace", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
-    vi.mocked(invoke).mockImplementation((cmd: string) => {
-      if (cmd === "cmd_assignable_sections") return Promise.resolve(sections());
-      if (cmd === "cmd_configure_plan") return Promise.resolve({});
-      return Promise.resolve(undefined);
-    });
+    wire();
   });
 
-  it("asks exactly one question, with a steady sitting preselected", async () => {
+  it("rises the chosen cover and asks the one pace question, a chapter preselected", async () => {
     render(<BookSetupSheet book={book} onDone={() => {}} />);
-    expect(screen.getByRole("heading", { name: /Thinking in Systems/ })).toBeInTheDocument();
-    expect(screen.getByText("How much feels right at a sitting?")).toBeInTheDocument();
 
+    // The chosen hero, verbatim.
+    expect(await screen.findByText("Added to Today")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Thinking in Systems is yours to begin\./ })).toBeInTheDocument();
+    expect(screen.getByText(/One last thing before you start: how do you like to read\?/)).toBeInTheDocument();
+
+    // The pace question, in reading terms.
+    expect(screen.getByText("What feels like a good sitting?")).toBeInTheDocument();
     const radios = screen.getAllByRole("radio");
     expect(radios).toHaveLength(3);
-    expect(screen.getByRole("radio", { name: /A steady sitting/ })).toHaveAttribute("aria-checked", "true");
-    // The author + length line reads in plain words, never decimals.
-    await waitFor(() => expect(screen.getByText(/Donella Meadows · about six hours of reading/)).toBeInTheDocument());
+    expect(screen.getByRole("radio", { name: /A chapter/ })).toHaveAttribute("aria-checked", "true");
   });
 
-  it("removed every surface where debt can form: no dates, cadence, margin help, name, or defensive copy", async () => {
+  it("never shows a minute count, a finish date, or a book length — pace is reading terms only", async () => {
     const { container } = render(<BookSetupSheet book={book} onDone={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/of reading/)).toBeInTheDocument());
-
-    expect(container.querySelector('input[type="date"]')).toBeNull();
-    expect(container.querySelector("input")).toBeNull(); // no plan-name field either
-    expect(screen.queryByText(/Finish by/i)).toBeNull();
-    expect(screen.queryByText(/days a week/i)).toBeNull();
-    expect(screen.queryByText(/margin help|guided|deep study/i)).toBeNull();
-    expect(screen.queryByText(/decide later/i)).toBeNull();
-    // Defensive copy raises the very ideas the product never mentions.
-    expect(container.textContent).not.toMatch(/behind|streak/i);
-    // No exact dates or decimal hours anywhere.
-    expect(container.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}/);
-    expect(container.textContent).not.toMatch(/\d+\.\d+/);
+    await screen.findByText("What feels like a good sitting?");
+    const t = container.textContent ?? "";
+    // No number at all on the pace screen → no minute count, no finish date.
+    expect(t).not.toMatch(/\d/);
+    expect(t).not.toMatch(/of reading/i);
+    expect(t).not.toMatch(/you'd finish|finish by|finish around/i);
+    // The option cards describe in reading terms — never a duration READOUT. (The
+    // sub line legitimately reassures "There's no timer"; the guarantee is that no
+    // time/clock value is ever shown.)
+    const group = screen.getByRole("radiogroup");
+    expect(group.textContent ?? "").not.toMatch(/minute|hour|\bmin\b|o'?clock/i);
   });
 
-  it("configures the chosen sitting and begins reading", async () => {
+  it("Start reading persists the pace globally AND on the book's plan, then begins", async () => {
     const onDone = vi.fn();
     render(<BookSetupSheet book={book} onDone={onDone} />);
+    await screen.findByText("What feels like a good sitting?");
 
     fireEvent.click(screen.getByRole("radio", { name: /A long read/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Begin reading" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start reading" }));
 
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(true));
-    const call = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_configure_plan");
-    expect(call).toBeTruthy();
-    expect(call![1]).toEqual({ bookId: "b1", sittingLengthMinutes: 60, name: null });
+    // Global preference (so future books default to it + the step is skipped).
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("cmd_set_reading_pace", { minutes: 60 });
+    // The book's own plan (the per-book pacing the engine reads).
+    const cfg = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_configure_plan");
+    expect(cfg![1]).toEqual({ bookId: "b1", sittingLengthMinutes: 60, name: null });
   });
 
-  it("the horizon reuses the card's words and lands around a month, in conditional mood", async () => {
-    render(<BookSetupSheet book={book} onDone={() => {}} />);
-    await waitFor(() =>
-      expect(screen.getByText(/At a steady sitting most evenings, you'd finish around (early|mid|late) [A-Z]/)).toBeInTheDocument(),
-    );
-    // Selection updates only the horizon sentence.
-    fireEvent.click(screen.getByRole("radio", { name: /A few pages/ }));
-    expect(screen.getByText(/At a few pages most evenings, you'd finish around (early|mid|late) [A-Z]/)).toBeInTheDocument();
-  });
-
-  it("'I'll decide as I go' never blocks: it proceeds on the default sitting", async () => {
+  it("'I'll decide as I go' never blocks: default sitting, and it does NOT lock in a pace", async () => {
     const onDone = vi.fn();
     render(<BookSetupSheet book={book} onDone={onDone} />);
+    await screen.findByText("What feels like a good sitting?");
 
     fireEvent.click(screen.getByRole("button", { name: /I'll decide as I go/ }));
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(false));
-    const call = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_configure_plan");
-    expect((call![1] as { sittingLengthMinutes: number }).sittingLengthMinutes).toBe(25);
+
+    const cfg = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_configure_plan");
+    expect((cfg![1] as { sittingLengthMinutes: number }).sittingLengthMinutes).toBe(25);
+    // Skipping is "decide as I go" — it must NOT persist a chosen pace.
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_set_reading_pace")).toBe(false);
   });
 
   it("arrow keys move the radio selection (WAI-ARIA radio pattern)", async () => {
     render(<BookSetupSheet book={book} onDone={() => {}} />);
-    const steady = screen.getByRole("radio", { name: /A steady sitting/ });
-    fireEvent.keyDown(steady, { key: "ArrowRight" });
+    await screen.findByText("What feels like a good sitting?");
+    const chapter = screen.getByRole("radio", { name: /A chapter/ });
+    fireEvent.keyDown(chapter, { key: "ArrowRight" });
     expect(screen.getByRole("radio", { name: /A long read/ })).toHaveAttribute("aria-checked", "true");
     fireEvent.keyDown(screen.getByRole("radio", { name: /A long read/ }), { key: "ArrowLeft" });
-    expect(steady).toHaveAttribute("aria-checked", "true");
+    expect(chapter).toHaveAttribute("aria-checked", "true");
   });
 
   it("says what happened when saving fails, and stays open to retry", async () => {
-    vi.mocked(invoke).mockImplementation((cmd: string) => {
-      if (cmd === "cmd_assignable_sections") return Promise.resolve(sections());
-      if (cmd === "cmd_configure_plan") return Promise.reject({ kind: "Db", message: "The library is busy right now." });
-      return Promise.resolve(undefined);
-    });
+    wire({ configureRejects: { kind: "Db", message: "The library is busy right now." } });
     const onDone = vi.fn();
     render(<BookSetupSheet book={book} onDone={onDone} />);
+    await screen.findByText("What feels like a good sitting?");
 
-    fireEvent.click(screen.getByRole("button", { name: "Begin reading" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start reading" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("The library is busy right now.");
     expect(onDone).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Begin reading" })).toBeEnabled();
-  });
-
-  it("discloses the phrases payload in the operator's exact words", async () => {
-    render(<BookSetupSheet book={book} onDone={() => {}} />);
-    expect(
-      screen.getByText(
-        "To name your sessions, Throughline sends each chapter's opening lines — never the full text.",
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it("stays silent about length and horizon when the book's length is unknown", async () => {
-    vi.mocked(invoke).mockImplementation((cmd: string) => {
-      if (cmd === "cmd_assignable_sections") return Promise.resolve([]);
-      return Promise.resolve(undefined);
-    });
-    const { container } = render(<BookSetupSheet book={book} onDone={() => {}} />);
-    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("cmd_assignable_sections", { bookId: "b1" }));
-    expect(container.textContent).not.toContain("of reading");
-    expect(container.textContent).not.toContain("you'd finish");
-    // The question itself still stands — silence about length never blocks.
-    expect(screen.getByText("How much feels right at a sitting?")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start reading" })).toBeEnabled();
   });
 });
 
-describe("plan-screen phrasing helpers", () => {
-  it("lengthPhrase speaks plain words at every magnitude", () => {
-    expect(lengthPhrase(5)).toBe("a few minutes of reading");
-    expect(lengthPhrase(40)).toBe("about forty minutes of reading");
-    expect(lengthPhrase(70)).toBe("about an hour of reading");
-    expect(lengthPhrase(120)).toBe("about two hours of reading");
-    expect(lengthPhrase(540)).toBe("about nine hours of reading");
+// The returning-reader skip needs its own wiring (chosen: true) — a focused block.
+describe("BookSetupSheet — returning reader (pace already chosen)", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    wire({ chosen: true, minutes: 10 });
   });
 
-  it("horizonSentence is silent without a length, and never emits a date", () => {
-    expect(horizonSentence("A steady sitting", null, 25)).toBeNull();
-    expect(horizonSentence("A steady sitting", 0, 25)).toBeNull();
-    const s = horizonSentence("A steady sitting", 360, 25)!;
-    expect(s).toMatch(/^At a steady sitting most evenings, you'd finish around (early|mid|late) [A-Z][a-z]+( next year)?\.$/);
-    expect(s).not.toMatch(/\d/);
+  it("configures this book with the saved pace and never asks again", async () => {
+    const onDone = vi.fn();
+    render(<BookSetupSheet book={book} onDone={onDone} />);
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(false));
+    expect(screen.queryByText("What feels like a good sitting?")).toBeNull();
+    const cfg = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_configure_plan");
+    expect((cfg![1] as { sittingLengthMinutes: number }).sittingLengthMinutes).toBe(10);
+    // It must not re-persist (the reader already chose); only configure this book.
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_set_reading_pace")).toBe(false);
   });
 });

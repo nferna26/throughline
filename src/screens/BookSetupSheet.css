@@ -1,0 +1,195 @@
+/* ════════════════════════════════════════════════════════════════════
+   Book chosen → your reading pace — one continuous beat. The cover you picked
+   rises to centre (the same cloth object, carried forward); then the one calm
+   question sizes each day's reading, in reading terms, never a timer. Pulls
+   colours/type from the app's --tl-* tokens.
+   ──────────────────────────────────────────────────────────────────── */
+
+.tl-journey-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tl-journey-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--tl-8) var(--tl-7) var(--tl-9);
+}
+
+/* ── the book you chose ── */
+.tl-chosen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.tl-chosen .tl-cover {
+  margin-bottom: 26px;
+}
+.tl-chosen-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tl-accent);
+  margin: 0 0 12px;
+}
+.tl-chosen-h {
+  font-family: var(--tl-serif);
+  font-weight: 500;
+  font-size: 26px;
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+  color: var(--tl-ink);
+  margin: 0 0 10px;
+  max-width: 20ch;
+}
+.tl-chosen-line {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--tl-ink-soft);
+  margin: 0;
+  max-width: 42ch;
+}
+
+/* ── your reading pace ── */
+.tl-pace {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: var(--tl-9);
+  padding-top: var(--tl-7);
+  border-top: 1px solid var(--tl-line);
+  width: 100%;
+}
+.tl-pace-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tl-accent);
+  margin: 0 0 14px;
+}
+.tl-pace-q {
+  font-family: var(--tl-serif);
+  font-weight: 500;
+  font-size: 27px;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+  color: var(--tl-ink);
+  margin: 0 0 10px;
+  max-width: 18ch;
+}
+.tl-pace-sub {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--tl-ink-soft);
+  margin: 0 0 32px;
+  max-width: 40ch;
+}
+
+.tl-pace-opts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 14px;
+}
+.tl-pace-opt {
+  width: 142px;
+  min-width: 0;
+  background: var(--tl-panel);
+  border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-lg);
+  padding: 20px 16px 18px;
+  cursor: pointer;
+  text-align: center;
+  font-family: var(--tl-sans);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.tl-pace-opt:hover {
+  border-color: var(--tl-line-strong);
+}
+/* Selected: accent border + ring + check — never colour alone. */
+.tl-pace-opt.on {
+  border-color: var(--tl-accent);
+  box-shadow: 0 0 0 1px var(--tl-accent);
+}
+.tl-pace-ico {
+  width: 30px;
+  height: 30px;
+  margin: 0 auto 12px;
+  color: var(--tl-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tl-pace-ico svg {
+  width: 26px;
+  height: 26px;
+}
+.tl-pace-name {
+  font-family: var(--tl-serif);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--tl-ink);
+  margin-bottom: 4px;
+}
+.tl-pace-desc {
+  font-size: 11px;
+  color: var(--tl-muted);
+  line-height: 1.4;
+}
+.tl-pace-check {
+  width: 16px;
+  height: 16px;
+  margin: 10px auto 0;
+  color: var(--tl-accent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.tl-pace-opt.on .tl-pace-check {
+  opacity: 1;
+}
+
+.tl-pace-actions {
+  margin-top: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.tl-pace-skip {
+  font-family: var(--tl-sans);
+  font-size: 12px;
+  /* muted, not faint: a quiet skip is still a real control needing AA contrast. */
+  color: var(--tl-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+.tl-pace-skip:hover {
+  color: var(--tl-ink);
+  text-decoration: underline;
+}
+.tl-pace-skip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-pace-opt,
+  .tl-pace-check {
+    transition: none;
+  }
+}

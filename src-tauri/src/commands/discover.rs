@@ -19,6 +19,7 @@
 //! one place — a downloaded book is indistinguishable from a file-picker import
 //! once it lands.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
@@ -417,6 +418,14 @@ fn catalogue_search(query: Option<&str>, page: u32) -> DiscoverPage {
     }
 }
 
+/// id → catalogue row index, built once, for O(1) lookup of a known book by id.
+/// The curated doorways and the front-door starter covers resolve through this
+/// (they're a fixed id list, not a search). A duplicate id keeps its last row.
+fn catalogue_by_id() -> &'static HashMap<i64, usize> {
+    static IDX: OnceLock<HashMap<i64, usize>> = OnceLock::new();
+    IDX.get_or_init(|| catalogue().iter().enumerate().map(|(i, r)| (r.id, i)).collect())
+}
+
 /// Map a parsed catalogue row to the wire DTO, deriving download URLs from the
 /// id (every catalogue book has both a `.txt` and a `.epub` on the file server).
 fn cat_to_book(row: &CatRow) -> DiscoverBook {
@@ -456,6 +465,21 @@ pub fn cmd_discover_seed(query: Option<String>, page: Option<u32>) -> DiscoverPa
 #[tauri::command]
 pub fn cmd_discover_search(query: Option<String>, page: Option<u32>) -> DiscoverPage {
     catalogue_search(query.as_deref(), page.unwrap_or(1))
+}
+
+/// Resolve a fixed set of catalogue ids to their rows, in the order requested.
+/// The curated doorways and the front-door starter covers are a known id list
+/// (not a search), so they hydrate through this instead of paging the seed —
+/// which lets a doorway curate ANY of the ~77k books, not only the 200 most
+/// popular. Unknown ids are simply skipped (a pick that ever falls out of the
+/// catalogue drops from its shelf). Network-free; the catalogue is on-device.
+#[tauri::command]
+pub fn cmd_discover_books_by_ids(ids: Vec<i64>) -> Vec<DiscoverBook> {
+    let rows = catalogue();
+    let idx = catalogue_by_id();
+    ids.iter()
+        .filter_map(|id| idx.get(id).map(|&i| cat_to_book(&rows[i])))
+        .collect()
 }
 
 /// Download a chosen public-domain book and import it through the owned path.
@@ -623,6 +647,27 @@ mod tests {
             Some(gutenberg_txt_url(1063).as_str()),
             "txt_url must be derived from the id"
         );
+    }
+
+    #[test]
+    fn books_by_ids_resolves_known_skips_unknown_preserves_order() {
+        // The curated doorways resolve through this: known ids come back as full
+        // rows in the requested order; an unknown id is dropped, never faked.
+        // 1342 = Pride and Prejudice, 84 = Frankenstein (both reliably present);
+        // a 9-digit id can't exist in the catalogue.
+        let books = cmd_discover_books_by_ids(vec![1342, 999_999_999, 84]);
+        assert_eq!(books.len(), 2, "the unknown id is skipped, not faked");
+        assert_eq!(books[0].id, 1342, "order is preserved");
+        assert_eq!(books[1].id, 84);
+        assert!(books[0].title.to_lowercase().contains("pride"));
+        // Every resolved row carries derived import URLs, like a search result.
+        assert!(books[0].has_txt && books[0].has_epub);
+        assert_eq!(
+            books[0].txt_url.as_deref(),
+            Some(gutenberg_txt_url(1342).as_str())
+        );
+        // An empty request resolves to nothing (no panic, no whole-catalogue dump).
+        assert!(cmd_discover_books_by_ids(vec![]).is_empty());
     }
 
     #[test]

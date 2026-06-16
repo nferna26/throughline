@@ -18,16 +18,44 @@ async function shoot(page: Page, name: string) {
   await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: true });
 }
 
-test("welcome-first-run", async ({ page }) => {
+test("front-door-first-run", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EMPTY__ = true; });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /Welcome to Throughline/i })).toBeVisible();
-  // The privacy + durability promise (the switching-anxiety answer) is stated
-  // plainly — and truthfully: books stay local; an opted-in tutor sends only
-  // the selected passage (review P1-4, CORE-1002).
-  await expect(page.getByText(/only the passage you select is sent, never the book/i)).toBeVisible();
-  await expect(page.getByText(/Markdown that outlives the app/i)).toBeVisible();
-  await shoot(page, "00-welcome");
+  // The front door: serif hero, the three cloth covers as the primary invitation,
+  // Browse + Import, the trust line, and the quiet activation whisper.
+  await expect(page.getByRole("heading", { name: /Begin with a book you mean to finish/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Browse the library/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Import a \.txt or \.epub/i })).toBeVisible();
+  await expect(page.getByText(/Everything stays on this Mac, no account, no cloud, nothing tracked/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /Bought Throughline\? Enter your code/i })).toBeVisible();
+  // A starter cover resolves into a real "Start reading" button (the cover thread).
+  await expect(page.getByRole("button", { name: /Start reading Meditations by Marcus Aurelius/i })).toBeVisible();
+  await shoot(page, "00-frontdoor");
+});
+
+test("front-door-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_EMPTY__ = true;
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: /Begin with a book you mean to finish/i })).toBeVisible();
+  await shoot(page, "00b-frontdoor-dark");
+});
+
+test("front-door-activation-states", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EMPTY__ = true; });
+  await page.goto("/");
+  // Entering: the mono field, helper line, Activate, Not now.
+  await page.getByRole("button", { name: /Bought Throughline\? Enter your code/i }).click();
+  await expect(page.getByText("Enter your activation code")).toBeVisible();
+  await page.getByLabel("Activation code").fill("56HA-N460-C47S");
+  await shoot(page, "29-activation-entering");
+  // Success: the same confirmation the deep link shows.
+  await page.getByRole("button", { name: "Activate" }).click();
+  await expect(page.getByText("You're activated. Welcome in.")).toBeVisible();
+  await shoot(page, "30-activation-success");
 });
 
 test("returning-after-a-lapse", async ({ page }) => {
@@ -93,7 +121,7 @@ test("day-one-does-not-preprint-the-opening", async ({ page }) => {
   // section's opening is NOT pre-printed (CORE-1049): the reader meets it the
   // instant they tap Begin reading.
   await expect(page.getByText("Beginning today")).toBeVisible();
-  await expect(page.getByText("We've set an unhurried pace.")).toBeVisible();
+  await expect(page.getByText("The first chapter, at the pace you set. No clock but your own.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Begin reading" })).toBeVisible();
   await expect(page.getByText(/Begin the morning by saying to thyself/)).toHaveCount(0);
   await shoot(page, "24-day-one");
@@ -138,7 +166,9 @@ test("begin-reading-never-opens-a-sectionless-reader", async ({ page }) => {
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Start a plan" }).click();
-  await page.getByRole("button", { name: "Begin reading" }).click();
+  // The pace step's primary is "Start reading"; with no section it must land on
+  // Today, never a dead reader.
+  await page.getByRole("button", { name: "Start reading" }).click();
 
   await expect(page.getByText(/There's no plan right now/)).toBeVisible();
   await expect(page.locator(".tl-readcol")).toHaveCount(0);
@@ -158,23 +188,54 @@ test("reader", async ({ page }) => {
   await shoot(page, "02-reader");
 });
 
-test("plan-setup-one-question", async ({ page }) => {
-  // The app-level loop segment: a plan-less book → Start a plan → the ONE
-  // question → Begin reading lands straight in the first sitting.
+test("book-chosen-and-pace", async ({ page }) => {
+  // The first-journey beat: a new book → the cover rises ("Added to Today"),
+  // then the ONE pace question in reading terms → Start reading lands in the
+  // first sitting. (A plan-less book → Start a plan reaches the same screen.)
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_NO_PLAN__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Start a plan" }).click();
 
-  await expect(page.getByText("New on your desk")).toBeVisible();
-  await expect(page.getByText("How much feels right at a sitting?")).toBeVisible();
-  await expect(page.getByRole("radio", { name: /A steady sitting/ })).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByText(/you'd finish around (early|mid|late) /)).toBeVisible();
-  // Every debt-forming surface is gone.
-  await expect(page.getByText(/finish by|days a week|margin help|name this plan|behind|streak/i)).toHaveCount(0);
-  await shoot(page, "25-plan-one-question");
+  // Book chosen.
+  await expect(page.getByText("Added to Today")).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Meditations is yours to begin/ })).toBeVisible();
+  // Reading pace, in reading terms, a chapter preselected.
+  await expect(page.getByText("What feels like a good sitting?")).toBeVisible();
+  await expect(page.getByRole("radio", { name: /A chapter/ })).toHaveAttribute("aria-checked", "true");
+  // Never a clock: no minute count, finish date, or timer readout on the cards.
+  await expect(page.getByText(/you'd finish|finish by|of reading|\d+\s*minutes?\b/i)).toHaveCount(0);
+  await expect(page.getByText(/days a week|margin help|name this plan|behind|streak/i)).toHaveCount(0);
+  await shoot(page, "25-chosen-pace");
 
-  await page.getByRole("button", { name: "Begin reading" }).click();
+  await page.getByRole("button", { name: "Start reading" }).click();
   await expect(page.getByText(/Begin the morning by saying to thyself/).first()).toBeVisible();
+});
+
+test("book-chosen-and-pace-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_NO_PLAN__ = true;
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start a plan" }).click();
+  await expect(page.getByText("What feels like a good sitting?")).toBeVisible();
+  await shoot(page, "25b-chosen-pace-dark");
+});
+
+test("returning-reader-skips-the-pace-step", async ({ page }) => {
+  // A reader who already set a pace lands straight on Today — the question is
+  // never re-asked. Start a plan goes through configure → Today, no pace UI.
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_NO_PLAN__ = true;
+    w.__TL_FAKE_PACE_CHOSEN__ = true;
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start a plan" }).click();
+  // No pace question; the book's plan is configured and Today shows the reading card.
+  await expect(page.getByText("What feels like a good sitting?")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Meditations" })).toBeVisible();
 });
 
 test("sitting-bounded-reader", async ({ page }) => {
@@ -502,15 +563,41 @@ test("settings", async ({ page }) => {
   await shoot(page, "05-settings");
 });
 
-test("discover", async ({ page }) => {
+test("browse-library-shelves", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EMPTY__ = true; });
   await page.goto("/");
-  // The book switcher / Today both expose a route to the catalogue.
-  const find = page.getByRole("button", { name: /find another book|discover|browse/i }).first();
-  if (await find.count()) {
-    await find.click();
-    await expect(page.getByText(/Pride and Prejudice|Moby Dick/).first()).toBeVisible();
-    await shoot(page, "06-discover");
-  }
+  await page.getByRole("button", { name: /Browse the library/i }).click();
+  await expect(page.getByRole("heading", { name: "The library" })).toBeVisible();
+  // The curated doorways are the navigation (no filter pills).
+  await expect(page.getByText("Short classics")).toBeVisible();
+  await expect(page.getByText("Familiar names")).toBeVisible();
+  await expect(page.getByText("Finish in a weekend")).toBeVisible();
+  // A curated cell carries its authored blurb (one of the two cell types).
+  await expect(page.getByText("A man wakes as an insect, and his family adjusts with alarming speed.")).toBeVisible();
+  await shoot(page, "06-browse-shelves");
+});
+
+test("browse-library-shelves-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_EMPTY__ = true;
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /Browse the library/i }).click();
+  await expect(page.getByText("Short classics")).toBeVisible();
+  await shoot(page, "06b-browse-shelves-dark");
+});
+
+test("browse-library-search", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EMPTY__ = true; });
+  await page.goto("/");
+  await page.getByRole("button", { name: /Browse the library/i }).click();
+  await page.getByLabel(/Search the library by title or author/i).fill("pride");
+  // The search cell shows cover + title + author only — no blurb, honest sort.
+  await expect(page.getByText("Sorted by how often they're read")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Start reading Pride and Prejudice by Jane Austen/i })).toBeVisible();
+  await shoot(page, "06c-browse-search");
 });
 
 test("notes-tab", async ({ page }) => {

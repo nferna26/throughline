@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Throughline · The first journey</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400;1,8..60,500&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --paper:#F4F1EA; --surface:#FBFAF6; --card:#FFFFFF;
+  --primary:#2E4A37; --primary-deep:#243B2C; --accent:#3E7A4E; --accent-soft:rgba(62,122,78,.10);
+  --ink:#1A1A18; --ink-70:rgba(26,26,24,.70); --muted:#6B6B66; --faint:#98937F;
+  --border:#E5E1D8; --border-strong:#D8D3C6; --on-primary:#F4F1EA;
+  --clay:#B4663C; --clay-soft:rgba(180,102,60,.10);
+  --serif:"Source Serif 4",Georgia,serif; --sans:Inter,-apple-system,system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  --shadow-win:0 30px 60px -18px rgba(30,28,18,.28),0 8px 20px -8px rgba(30,28,18,.16),0 0 0 1px rgba(40,36,24,.06);
+  --shadow-sm:0 1px 2px rgba(40,36,24,.05),0 0 0 1px rgba(40,36,24,.05);
+  --shadow-book:0 12px 24px -10px rgba(30,28,18,.32),0 2px 5px rgba(30,28,18,.14);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:#E6E3DB;color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.6;}
+.page{max-width:1240px;margin:0 auto;padding:56px 32px 120px;}
+
+.doc-head{max-width:780px;margin-bottom:8px;}
+.doc-kicker{font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 14px;}
+.doc-head h1{font-family:var(--serif);font-weight:500;font-size:40px;line-height:1.08;letter-spacing:-.02em;margin:0 0 14px;}
+.doc-head p{font-size:15.5px;color:var(--ink-70);margin:0;max-width:70ch;}
+
+/* journey rail */
+.rail{display:flex;align-items:center;gap:0;flex-wrap:wrap;margin:30px 0 0;padding:18px 22px;background:var(--paper);border:1px solid var(--border);border-radius:13px;}
+.railnode{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--ink-70);}
+.railnode .rn{width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-style:italic;font-size:12px;flex:none;}
+.railnode b{font-weight:600;color:var(--ink);}
+.railnode .tagm{color:var(--faint);font-size:11.5px;}
+.railsep{flex:1;min-width:20px;height:1px;background:var(--border-strong);margin:0 12px;position:relative;}
+.railsep::after{content:"";position:absolute;right:-1px;top:-3px;width:7px;height:7px;border-top:1.5px solid var(--border-strong);border-right:1.5px solid var(--border-strong);transform:rotate(45deg);}
+@media(max-width:920px){.railnode .tagm{display:none;}}
+
+.sec{margin-top:62px;}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px;}
+.sec-num{font-family:var(--serif);font-style:italic;font-size:20px;color:var(--accent);}
+.sec-head h2{font-family:var(--serif);font-weight:500;font-size:26px;letter-spacing:-.01em;margin:0;}
+.sec-tag{font-size:11.5px;font-weight:600;color:var(--faint);letter-spacing:.04em;border:1px solid var(--border-strong);border-radius:999px;padding:3px 10px;margin-left:auto;white-space:nowrap;}
+.sec-tag.keep{color:var(--accent);border-color:rgba(62,122,78,.3);}
+.sec-intro{font-size:14.5px;color:var(--muted);max-width:80ch;margin:0 0 24px;}
+.sec-intro b{color:var(--ink);font-weight:600;}
+
+.frame-label{display:flex;align-items:center;gap:10px;font-size:12px;color:#736f64;margin:0 0 12px 4px;}
+.frame-label b{color:#4a463d;font-weight:600;font-size:12.5px;}
+.frame-label .dot{width:5px;height:5px;border-radius:50%;background:#a39d8d;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px;}
+.grid2>*{min-width:0;}
+.grid2 .win{min-width:0;}
+@media(max-width:1040px){.grid2{grid-template-columns:1fr;}}
+
+/* ===== window ===== */
+.win{border-radius:13px;overflow:hidden;box-shadow:var(--shadow-win);background:var(--paper);}
+.win.dark{--paper:#1C1914;--surface:#242018;--card:#2A251D;--ink:#ECE7DC;--ink-70:rgba(236,231,220,.72);
+  --muted:#9C968A;--faint:#7B7567;--border:#383329;--border-strong:#443E31;--primary:#A7C5B1;--primary-deep:#B9D2C1;
+  --accent:#A7C5B1;--accent-soft:rgba(167,197,177,.13);--on-primary:#16140F;--clay:#C99A6A;--clay-soft:rgba(201,154,106,.14);
+  --shadow-book:0 12px 24px -10px rgba(0,0,0,.5),0 2px 5px rgba(0,0,0,.3);--shadow-sm:0 1px 2px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.04);}
+.winbar{height:44px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:13px;padding:0 16px;}
+.tl{display:flex;gap:8px;}
+.tl i{width:12px;height:12px;border-radius:50%;display:block;}
+.tl .r{background:#E06B5C;}.tl .y{background:#E3B24C;}.tl .g{background:#6FA85B;}
+.winbar .bwm{display:inline-flex;align-items:center;gap:8px;margin-left:4px;}
+.winbar .bwm .m{width:21px;height:21px;border-radius:6px;background:var(--primary);display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:600;color:var(--on-primary);font-size:13px;}
+.winbar .bwm .t{font-family:var(--serif);font-size:14.5px;color:var(--ink);}
+.winbar .bwm .t b{font-weight:700;}
+.winbar .bartools{margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--faint);}
+.winbar .bartools button{background:none;border:none;color:var(--faint);cursor:pointer;width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;}
+.winbar .bartools svg{width:17px;height:17px;}
+
+/* ===== cover object (carried through everywhere) ===== */
+.cover{
+  border-radius:2px 5px 5px 2px;position:relative;overflow:hidden;
+  display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;
+  background-color:#2E4A37;
+  background-image:
+    repeating-linear-gradient(90deg,rgba(255,255,255,.022) 0 1px,transparent 1px 3px),
+    repeating-linear-gradient(0deg,rgba(0,0,0,.04) 0 1px,transparent 1px 3px),
+    linear-gradient(108deg,rgba(255,255,255,.07),transparent 40%);
+  box-shadow:inset 10px 0 11px -8px rgba(0,0,0,.55),inset -1px 0 0 rgba(255,255,255,.05),var(--shadow-book);
+}
+.cover::before{content:"";position:absolute;left:7px;top:0;bottom:0;width:1px;background:rgba(255,255,255,.13);}
+.cover::after{content:"";position:absolute;inset:9px 9px 9px 14px;border:1px solid rgba(216,186,128,.34);border-radius:1px;pointer-events:none;}
+.cover .ct{font-family:var(--serif);font-weight:600;line-height:1.16;letter-spacing:.015em;text-shadow:0 1px 0 rgba(0,0,0,.22);padding:0 12px;}
+.cover .ca{font-family:var(--serif);font-style:italic;margin-top:8px;letter-spacing:.02em;opacity:.78;}
+.cover.c1{background-color:#2E4A37;color:#ECE5D2;}
+.cover.c2{background-color:#7A5E3C;color:#F3EAD4;}
+.cover.c3{background-color:#69474C;color:#F1E4E1;}
+.cover.c4{background-color:#3C4A5A;color:#E4EAF1;}
+.cover.c5{background-color:#5B4A6B;color:#ECE4F1;}
+.cover.c6{background-color:#7A4A41;color:#F3E2DC;}
+.win.dark .cover.c1{background-color:#33523E;}.win.dark .cover.c2{background-color:#6E573B;}.win.dark .cover.c3{background-color:#5F454A;}
+.win.dark .cover.c4{background-color:#384655;}.win.dark .cover.c5{background-color:#52455F;}.win.dark .cover.c6{background-color:#6E4640;}
+
+/* ===== FRONT DOOR (reference, compact) ===== */
+.fr{padding:40px 36px 30px;display:flex;flex-direction:column;align-items:center;text-align:center;}
+.fr-eyebrow{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 14px;}
+.fr h1{font-family:var(--serif);font-weight:500;font-size:28px;line-height:1.08;letter-spacing:-.02em;margin:0 0 12px;max-width:15ch;text-wrap:balance;color:var(--ink);}
+.fr .lede{font-size:13.5px;color:var(--ink-70);line-height:1.5;margin:0;max-width:40ch;}
+.fr .shelf{display:flex;justify-content:center;align-items:flex-end;gap:18px;margin:32px 0 6px;}
+.fr .shelf .cover{width:90px;height:132px;}
+.fr .shelf .ct{font-size:12px;}.fr .shelf .ca{font-size:8.5px;margin-top:7px;}
+.fr .shelf .book{cursor:pointer;transition:transform .2s;}
+.fr .shelf .book:hover{transform:translateY(-5px);}
+.fr-actions{display:flex;align-items:center;gap:16px;margin-top:26px;}
+.btn-primary{display:inline-flex;align-items:center;gap:8px;font-family:var(--sans);font-size:13.5px;font-weight:600;background:var(--primary);color:var(--on-primary);border:none;border-radius:10px;padding:11px 20px;cursor:pointer;}
+.btn-primary svg{width:15px;height:15px;}
+.linkact{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:500;color:var(--muted);cursor:pointer;background:none;border:none;}
+.linkact svg{width:14px;height:14px;}
+.fr .trust{font-size:12px;color:var(--faint);margin-top:24px;line-height:1.5;max-width:48ch;}
+.fr .actbar{margin-top:26px;padding-top:24px;border-top:1px solid var(--border);width:100%;max-width:420px;}
+.act-rest{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);background:none;border:none;cursor:pointer;}
+.act-rest u{text-decoration:none;color:var(--primary);font-weight:600;}
+.win.dark .act-rest u{color:var(--accent);}
+.act-rest .k{width:14px;height:14px;color:var(--accent);}
+
+/* ===== BROWSE ===== */
+.br{display:flex;flex-direction:column;height:612px;}
+.br-top{padding:22px 30px 18px;border-bottom:1px solid var(--border);}
+.br-h{display:flex;align-items:baseline;gap:12px;margin-bottom:16px;}
+.br-h h1{font-family:var(--serif);font-weight:500;font-size:23px;letter-spacing:-.01em;margin:0;color:var(--ink);}
+.br-h .back{font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:5px;cursor:pointer;}
+.br-h .back svg{width:14px;height:14px;}
+.br-h .count{margin-left:auto;font-size:11.5px;color:var(--faint);}
+.search{display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--border-strong);border-radius:10px;padding:10px 14px;box-shadow:var(--shadow-sm);}
+.search svg{width:16px;height:16px;color:var(--faint);flex:none;}
+.search .ph{font-size:13.5px;color:var(--faint);}
+.br-scroll{flex:1;overflow:hidden;padding:22px 30px 26px;position:relative;}
+.shelf-row{margin-bottom:30px;}
+.shelf-row .rh{display:flex;align-items:baseline;gap:10px;margin-bottom:2px;}
+.shelf-row .rh h3{font-family:var(--serif);font-weight:600;font-size:15px;color:var(--ink);margin:0;}
+.shelf-row .rh .rd{font-size:11.5px;color:var(--faint);font-style:italic;}
+.shelf-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 22px;margin-top:18px;align-items:start;}
+.bk2{display:flex;flex-direction:column;align-items:center;text-align:center;cursor:pointer;}
+.bk2 .cover{width:98px;height:144px;transition:transform .22s cubic-bezier(.2,.7,.2,1);}
+.bk2:hover .cover{transform:translateY(-6px);}
+.bk2 .cover .ct{font-size:11px;}
+.bk2 .cover .ca{font-size:7.5px;margin-top:6px;}
+.bk2 h4{font-family:var(--serif);font-size:12.5px;font-weight:600;color:var(--ink);margin:14px 0 1px;line-height:1.22;}
+.bk2 .au{font-size:10.5px;color:var(--muted);margin:0;}
+.bk2 .blurb{font-size:10.5px;color:var(--ink-70);line-height:1.46;margin:7px 0 0;max-width:23ch;}
+.br-fade{position:absolute;left:0;right:0;bottom:0;height:40px;background:linear-gradient(transparent,var(--paper));pointer-events:none;}
+/* search results — denser cell, cover + title + author only (the index has no blurbs) */
+.search.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+.search .q{font-size:13.5px;color:var(--ink);}
+.search .caret{display:inline-block;width:1px;height:15px;background:var(--accent);margin-left:1px;vertical-align:-2px;}
+.search .clear{margin-left:auto;color:var(--faint);display:flex;cursor:pointer;}
+.search .clear svg{width:14px;height:14px;}
+.results-meta{font-size:12px;color:var(--muted);margin:0 0 18px;}
+.results-meta b{color:var(--ink);font-weight:600;}
+.results-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:24px 16px;align-items:start;}
+.bk3{display:flex;flex-direction:column;align-items:center;text-align:center;cursor:pointer;}
+.bk3 .cover{width:88px;height:130px;transition:transform .22s cubic-bezier(.2,.7,.2,1);}
+.bk3:hover .cover{transform:translateY(-5px);}
+.bk3 .cover .ct{font-size:10px;}.bk3 .cover .ca{font-size:7px;margin-top:5px;}
+.bk3 h4{font-family:var(--serif);font-size:12px;font-weight:600;color:var(--ink);margin:12px 0 1px;line-height:1.2;}
+.bk3 .au{font-size:10px;color:var(--muted);margin:0;}
+
+/* ===== BOOK CHOSEN (transition) ===== */
+.chosen{padding:40px 40px;display:flex;flex-direction:column;align-items:center;text-align:center;height:520px;justify-content:center;}
+.chosen .cover{width:128px;height:188px;margin-bottom:26px;}
+.chosen .cover .ct{font-size:16px;}.chosen .cover .ca{font-size:10.5px;margin-top:10px;}
+.chosen .ce{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 12px;}
+.chosen h1{font-family:var(--serif);font-weight:500;font-size:26px;line-height:1.12;letter-spacing:-.015em;color:var(--ink);margin:0 0 10px;max-width:20ch;}
+.chosen p{font-size:13.5px;color:var(--ink-70);margin:0;max-width:42ch;line-height:1.55;}
+
+/* ===== PACE STEP ===== */
+.pace{padding:44px 40px;display:flex;flex-direction:column;align-items:center;text-align:center;height:560px;justify-content:center;}
+.pace .pe{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 14px;}
+.pace h1{font-family:var(--serif);font-weight:500;font-size:27px;line-height:1.12;letter-spacing:-.02em;color:var(--ink);margin:0 0 10px;max-width:18ch;}
+.pace .psub{font-size:13.5px;color:var(--ink-70);margin:0 0 32px;max-width:40ch;line-height:1.55;}
+.paceopts{display:flex;gap:14px;}
+.popt{width:142px;background:var(--card);border:1px solid var(--border);border-radius:13px;padding:20px 16px 18px;cursor:pointer;text-align:center;transition:border-color .15s,box-shadow .15s;}
+.popt:hover{border-color:var(--border-strong);}
+.popt.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);}
+.popt .pi{width:30px;height:30px;margin:0 auto 12px;color:var(--accent);display:flex;align-items:center;justify-content:center;}
+.popt .pi svg{width:26px;height:26px;}
+.popt .pn{font-family:var(--serif);font-size:15px;font-weight:600;color:var(--ink);margin-bottom:4px;}
+.popt .pd{font-size:11px;color:var(--muted);line-height:1.4;}
+.popt .check{width:16px;height:16px;margin:10px auto 0;color:var(--accent);opacity:0;}
+.popt.on .check{opacity:1;}
+.pace .pact{margin-top:30px;display:flex;flex-direction:column;align-items:center;gap:14px;}
+.pace .skip{font-size:12px;color:var(--faint);background:none;border:none;cursor:pointer;}
+.pace .skip:hover{color:var(--muted);text-decoration:underline;}
+.pace .pfine{font-size:11.5px;color:var(--faint);margin-top:4px;max-width:40ch;line-height:1.5;}
+
+/* ===== TODAY (reference) ===== */
+.today{padding:40px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;height:520px;}
+.today .greet{font-family:var(--serif);font-style:italic;font-size:14px;color:var(--muted);margin-bottom:18px;}
+.today .te{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:14px;}
+.today .bk{font-family:var(--serif);font-size:32px;font-weight:500;color:var(--ink);letter-spacing:-.015em;line-height:1.1;}
+.today .au{font-size:12.5px;color:var(--muted);margin-top:7px;}
+.today .where{font-family:var(--serif);font-style:italic;font-size:13.5px;color:var(--ink-70);margin-top:18px;max-width:34ch;}
+.today .cont{margin-top:22px;display:inline-flex;align-items:center;gap:8px;background:var(--primary);color:var(--on-primary);font-size:13.5px;font-weight:600;border-radius:9px;padding:11px 22px;}
+.today .cont svg{width:16px;height:16px;}
+
+/* ===== copy + notes ===== */
+.copy{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;}
+.copy-row{display:grid;grid-template-columns:188px 1fr;border-bottom:1px solid var(--border);}
+.copy-row:last-child{border-bottom:none;}
+.copy-k{padding:13px 18px;background:var(--surface);font-size:12px;font-weight:600;color:var(--ink);border-right:1px solid var(--border);}
+.copy-v{padding:13px 18px;font-size:12.5px;color:var(--ink-70);line-height:1.55;}
+.copy-v em{color:var(--muted);font-style:italic;}
+.copy-v .mono{font-family:var(--mono);font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:1px 6px;}
+@media(max-width:720px){.copy-row{grid-template-columns:1fr;}.copy-k{border-right:none;border-bottom:1px solid var(--border);}}
+
+.note{background:var(--accent-soft);border:1px solid rgba(62,122,78,.22);border-radius:13px;padding:18px 20px;margin-top:18px;}
+.note h4{font-size:13px;font-weight:600;margin:0 0 8px;display:flex;align-items:center;gap:8px;}
+.note h4 svg{width:16px;height:16px;color:var(--accent);}
+.note p{font-size:12.5px;color:var(--ink-70);margin:0 0 9px;line-height:1.6;}
+.note p:last-child{margin-bottom:0;}
+.note b{color:var(--ink);font-weight:600;}
+
+.subhead{font-size:12px;font-weight:600;letter-spacing:.04em;color:var(--faint);text-transform:uppercase;margin:0 0 14px;}
+.foot{margin-top:60px;text-align:center;font-size:12px;color:#8a8576;}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="doc-head">
+    <p class="doc-kicker">Throughline · the first journey</p>
+    <h1>From the front door to Today, one calm bookshop</h1>
+    <p>The front door and Today are the anchors and stay as they are. This connects everything between them, browsing the library, choosing a book, and setting a reading pace, so the whole first journey feels like one continuous, well-kept bookshop: covers, type, warmth, and voice unbroken, never a funnel.</p>
+  </div>
+
+  <div class="rail">
+    <div class="railnode"><span class="rn">1</span><b>Front door</b><span class="tagm">anchor</span></div>
+    <div class="railsep"></div>
+    <div class="railnode"><span class="rn">2</span><b>Browse the library</b><span class="tagm">redesigned</span></div>
+    <div class="railsep"></div>
+    <div class="railnode"><span class="rn">3</span><b>Book chosen</b><span class="tagm">transition</span></div>
+    <div class="railsep"></div>
+    <div class="railnode"><span class="rn">4</span><b>Your pace</b><span class="tagm">new</span></div>
+    <div class="railsep"></div>
+    <div class="railnode"><span class="rn">5</span><b>Today</b><span class="tagm">anchor</span></div>
+  </div>
+
+  <!-- ===== 1 FRONT DOOR ===== -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">1</span><h2>Front door</h2><span class="sec-tag keep">anchor · unchanged</span></div>
+    <p class="sec-intro">The established first-run screen. Everything downstream must feel like the same hand made it, the cloth covers, the serif voice, the warm paper, the quiet code whisper.</p>
+    <div class="grid2">
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Front door</b> &middot; light</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span></div>
+          <div class="fr">
+            <p class="fr-eyebrow">A quiet place to read</p>
+            <h1>Begin with a book you mean to finish.</h1>
+            <p class="lede">Read it a few pages a day, with a tutor in the margin for the passages that lose you.</p>
+            <div class="shelf">
+              <div class="book"><div class="cover c1"><div class="ct">Meditations</div><div class="ca">Marcus Aurelius</div></div></div>
+              <div class="book"><div class="cover c2"><div class="ct">Walden</div><div class="ca">Henry D. Thoreau</div></div></div>
+              <div class="book"><div class="cover c3"><div class="ct">Pride &amp; Prejudice</div><div class="ca">Jane Austen</div></div></div>
+            </div>
+            <div class="fr-actions">
+              <button class="btn-primary"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="5.5"/><path d="M13.5 13.5L17 17"/></svg>Browse the library</button>
+              <button class="linkact"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13V4M6.5 7.5L10 4l3.5 3.5"/><path d="M4 16h12"/></svg>Import a .txt or .epub</button>
+            </div>
+            <p class="trust">Thousands of free public-domain books. Everything stays on this Mac, no account, no cloud, nothing tracked.</p>
+            <div class="actbar"><button class="act-rest"><svg class="k" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="10" r="3"/><path d="M10 10h7M14.5 10v3M17 10v2.5"/></svg>Bought Throughline? <u>Enter your code</u></button></div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Front door</b> &middot; dark</p>
+        <div class="win dark">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span></div>
+          <div class="fr">
+            <p class="fr-eyebrow">A quiet place to read</p>
+            <h1>Begin with a book you mean to finish.</h1>
+            <p class="lede">Read it a few pages a day, with a tutor in the margin for the passages that lose you.</p>
+            <div class="shelf">
+              <div class="book"><div class="cover c1"><div class="ct">Meditations</div><div class="ca">Marcus Aurelius</div></div></div>
+              <div class="book"><div class="cover c2"><div class="ct">Walden</div><div class="ca">Henry D. Thoreau</div></div></div>
+              <div class="book"><div class="cover c3"><div class="ct">Pride &amp; Prejudice</div><div class="ca">Jane Austen</div></div></div>
+            </div>
+            <div class="fr-actions">
+              <button class="btn-primary"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="5.5"/><path d="M13.5 13.5L17 17"/></svg>Browse the library</button>
+              <button class="linkact"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13V4M6.5 7.5L10 4l3.5 3.5"/><path d="M4 16h12"/></svg>Import a .txt or .epub</button>
+            </div>
+            <p class="trust">Thousands of free public-domain books. Everything stays on this Mac, no account, no cloud, nothing tracked.</p>
+            <div class="actbar"><button class="act-rest"><svg class="k" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="10" r="3"/><path d="M10 10h7M14.5 10v3M17 10v2.5"/></svg>Bought Throughline? <u>Enter your code</u></button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 2 BROWSE ===== -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">2</span><h2>Browse the library</h2><span class="sec-tag">redesigned</span></div>
+    <p class="sec-intro">The main work, grounded in what the on-device index actually holds: <b>id, title, author, language, popularity</b>, and nothing else. So there are two cell types. The <b>curated shelves</b> are hand-built, a few books each, where the editorial blurb is authored by hand. <b>Search and any all-books view</b> show cover, title, and author only, never a fabricated blurb, because the data has none. Covers work everywhere (they're generated from title and author). The generic filter pills are gone: the calm labeled shelves are the navigation, like the rows in a good bookshop.</p>
+
+    <p class="frame-label"><span class="dot"></span>Curated doorways &middot; the hand-picked shelves are the navigation</p>
+    <div class="grid2">
+      <!-- CURATED LIGHT -->
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>The library</b> &middot; light</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span></div>
+          <div class="br">
+            <div class="br-top">
+              <div class="br-h">
+                <span class="back"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5l-5 5 5 5"/></svg>Back</span>
+                <h1>The library</h1>
+                <span class="count">77,386 free books</span>
+              </div>
+              <div class="search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="5.5"/><path d="M13.5 13.5L17 17"/></svg><span class="ph">Search by title or author</span></div>
+            </div>
+            <div class="br-scroll">
+              <div class="shelf-row">
+                <div class="rh"><h3>Short classics</h3><span class="rd">great first books, none of them long</span></div>
+                <div class="shelf-grid">
+                  <div class="bk2"><div class="cover c1"><div class="ct">The Metamorphosis</div><div class="ca">Kafka</div></div><h4>The Metamorphosis</h4><p class="au">Franz Kafka</p><p class="blurb">A man wakes as an insect, and his family adjusts with alarming speed.</p></div>
+                  <div class="bk2"><div class="cover c5"><div class="ct">Heart of Darkness</div><div class="ca">Conrad</div></div><h4>Heart of Darkness</h4><p class="au">Joseph Conrad</p><p class="blurb">A river journey upstream that keeps darkening, sentence by sentence.</p></div>
+                  <div class="bk2"><div class="cover c6"><div class="ct">Ethan Frome</div><div class="ca">Wharton</div></div><h4>Ethan Frome</h4><p class="au">Edith Wharton</p><p class="blurb">A bleak New England winter, and a love with nowhere to go.</p></div>
+                </div>
+              </div>
+              <div class="shelf-row">
+                <div class="rh"><h3>Familiar names</h3><span class="rd">the ones you've meant to get to</span></div>
+                <div class="shelf-grid">
+                  <div class="bk2"><div class="cover c3"><div class="ct">Pride &amp; Prejudice</div><div class="ca">Austen</div></div><h4>Pride &amp; Prejudice</h4><p class="au">Jane Austen</p><p class="blurb">Wit and pride misread each other across a country drawing room.</p></div>
+                  <div class="bk2"><div class="cover c1"><div class="ct">Frankenstein</div><div class="ca">Shelley</div></div><h4>Frankenstein</h4><p class="au">Mary Shelley</p><p class="blurb">A young scientist makes a living man, then abandons what he made.</p></div>
+                  <div class="bk2"><div class="cover c6"><div class="ct">Dracula</div><div class="ca">Stoker</div></div><h4>Dracula</h4><p class="au">Bram Stoker</p><p class="blurb">Begins as a traveller's diary and tightens, entry by entry, into dread.</p></div>
+                </div>
+              </div>
+              <div class="br-fade"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- CURATED DARK -->
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>The library</b> &middot; dark</p>
+        <div class="win dark">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span></div>
+          <div class="br">
+            <div class="br-top">
+              <div class="br-h">
+                <span class="back"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5l-5 5 5 5"/></svg>Back</span>
+                <h1>The library</h1>
+                <span class="count">77,386 free books</span>
+              </div>
+              <div class="search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="5.5"/><path d="M13.5 13.5L17 17"/></svg><span class="ph">Search by title or author</span></div>
+            </div>
+            <div class="br-scroll">
+              <div class="shelf-row">
+                <div class="rh"><h3>A little philosophy</h3><span class="rd">slow books, worth the patience</span></div>
+                <div class="shelf-grid">
+                  <div class="bk2"><div class="cover c1"><div class="ct">Meditations</div><div class="ca">Aurelius</div></div><h4>Meditations</h4><p class="au">Marcus Aurelius</p><p class="blurb">A Roman emperor's private notes on how to live, written to himself.</p></div>
+                  <div class="bk2"><div class="cover c2"><div class="ct">Walden</div><div class="ca">Thoreau</div></div><h4>Walden</h4><p class="au">Henry D. Thoreau</p><p class="blurb">Two years alone by a pond, and a case for living deliberately.</p></div>
+                  <div class="bk2"><div class="cover c5"><div class="ct">The Trial</div><div class="ca">Kafka</div></div><h4>The Trial</h4><p class="au">Franz Kafka</p><p class="blurb">A man is arrested for a crime no one will name, and the dread builds.</p></div>
+                </div>
+              </div>
+              <div class="shelf-row">
+                <div class="rh"><h3>Finish in a weekend</h3><span class="rd">short enough to start and end</span></div>
+                <div class="shelf-grid">
+                  <div class="bk2"><div class="cover c4"><div class="ct">The Old Man and the Sea</div><div class="ca">Hemingway</div></div><h4>The Old Man and the Sea</h4><p class="au">Ernest Hemingway</p><p class="blurb">One old fisherman, one marlin, and the longest two days of his life.</p></div>
+                  <div class="bk2"><div class="cover c6"><div class="ct">A Christmas Carol</div><div class="ca">Dickens</div></div><h4>A Christmas Carol</h4><p class="au">Charles Dickens</p><p class="blurb">Three ghosts, one cold man, and a single night to change him.</p></div>
+                  <div class="bk2"><div class="cover c3"><div class="ct">The Strange Case</div><div class="ca">Stevenson</div></div><h4>Dr Jekyll and Mr Hyde</h4><p class="au">R. L. Stevenson</p><p class="blurb">A respectable doctor, a darker self, and the door between them.</p></div>
+                </div>
+              </div>
+              <div class="br-fade"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="frame-label" style="margin-top:26px;"><span class="dot"></span>Search &amp; all books &middot; the denser cell, cover + title + author only (no blurb, the data has none)</p>
+    <div class="grid2">
+      <!-- SEARCH LIGHT -->
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Search</b> &middot; light</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span></div>
+          <div class="br">
+            <div class="br-top">
+              <div class="br-h">
+                <span class="back"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5l-5 5 5 5"/></svg>Back</span>
+                <h1>The library</h1>
+                <span class="count">77,386 free books</span>
+              </div>
+              <div class="search on"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="5.5"/><path d="M13.5 13.5L17 17"/></svg><span class="q">war<span class="caret"></span></span><span class="clear"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5l10 10M15 5L5 15"/></svg></span></div>
+            </div>
+            <div class="br-scroll">
+              <p class="results-meta">Sorted by how often they're read</p>
+              <div class="results-grid">
+                <div class="bk3"><div class="cover c1"><div class="ct">War and Peace</div><div class="ca">Tolstoy</div></div><h4>War and Peace</h4><p class="au">Leo Tolstoy</p></div>
+                <div class="bk3"><div class="cover c5"><div class="ct">The War of the Worlds</div><div class="ca">Wells</div></div><h4>The War of the Worlds</h4><p class="au">H. G. Wells</p></div>
+                <div class="bk3"><div class="cover c2"><div class="ct">The Art of War</div><div class="ca">Sun Tzu</div></div><h4>The Art of War</h4><p class="au">Sun Tzu</p></div>
+                <div class="bk3"><div class="cover c6"><div class="ct">The Red Badge of Courage</div><div class="ca">Crane</div></div><h4>The Red Badge of Courage</h4><p class="au">Stephen Crane</p></div>
+                <div class="bk3"><div class="cover c4"><div class="ct">History of the Peloponnesian War</div><div class="ca">Thucydides</div></div><h4>The Peloponnesian War</h4><p class="au">Thucydides</p></div>
+                <div class="bk3"><div class="cover c3"><div class="ct">The Wars of the Jews</div><div class="ca">Josephus</div></div><h4>The Wars of the Jews</h4><p class="au">Flavius Josephus</p></div>
+                <div class="bk3"><div class="cover c5"><div class="ct">The War in the Air</div><div class="ca">Wells</div></div><h4>The War in the Air</h4><p class="au">H. G. Wells</p></div>
+                <div class="bk3"><div class="cover c1"><div class="ct">War and the Future</div><div class="ca">Wells</div></div><h4>War and the Future</h4><p class="au">H. G. Wells</p></div>
+              </div>
+              <div class="br-fade"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- SEARCH DARK -->
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Search</b> &middot; dark</p>
+        <div class="win dark">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span></div>
+          <div class="br">
+            <div class="br-top">
+              <div class="br-h">
+                <span class="back"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5l-5 5 5 5"/></svg>Back</span>
+                <h1>The library</h1>
+                <span class="count">77,386 free books</span>
+              </div>
+              <div class="search on"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="5.5"/><path d="M13.5 13.5L17 17"/></svg><span class="q">war<span class="caret"></span></span><span class="clear"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5l10 10M15 5L5 15"/></svg></span></div>
+            </div>
+            <div class="br-scroll">
+              <p class="results-meta">Sorted by how often they're read</p>
+              <div class="results-grid">
+                <div class="bk3"><div class="cover c1"><div class="ct">War and Peace</div><div class="ca">Tolstoy</div></div><h4>War and Peace</h4><p class="au">Leo Tolstoy</p></div>
+                <div class="bk3"><div class="cover c5"><div class="ct">The War of the Worlds</div><div class="ca">Wells</div></div><h4>The War of the Worlds</h4><p class="au">H. G. Wells</p></div>
+                <div class="bk3"><div class="cover c2"><div class="ct">The Art of War</div><div class="ca">Sun Tzu</div></div><h4>The Art of War</h4><p class="au">Sun Tzu</p></div>
+                <div class="bk3"><div class="cover c6"><div class="ct">The Red Badge of Courage</div><div class="ca">Crane</div></div><h4>The Red Badge of Courage</h4><p class="au">Stephen Crane</p></div>
+                <div class="bk3"><div class="cover c4"><div class="ct">History of the Peloponnesian War</div><div class="ca">Thucydides</div></div><h4>The Peloponnesian War</h4><p class="au">Thucydides</p></div>
+                <div class="bk3"><div class="cover c3"><div class="ct">The Wars of the Jews</div><div class="ca">Josephus</div></div><h4>The Wars of the Jews</h4><p class="au">Flavius Josephus</p></div>
+                <div class="bk3"><div class="cover c5"><div class="ct">The War in the Air</div><div class="ca">Wells</div></div><h4>The War in the Air</h4><p class="au">H. G. Wells</p></div>
+                <div class="bk3"><div class="cover c1"><div class="ct">War and the Future</div><div class="ca">Wells</div></div><h4>War and the Future</h4><p class="au">H. G. Wells</p></div>
+              </div>
+              <div class="br-fade"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="sec-intro" style="margin-top:20px;">Two cell types, honestly sourced. The <b>curated cell</b> (cover, title, author, hand-written blurb) appears only on the doorway shelves, here <b>Short classics</b>, <b>Familiar names</b>, <b>A little philosophy</b>, and <b>Finish in a weekend</b>, each with its own distinct titles. The <b>search cell</b> (cover, title, author) carries the full ~77k index with no invented copy. Covers are generated for every book, so the shelf feeling holds all the way down. Choosing a book is <b>Start reading</b>, never "Get."</p>
+  </div>
+
+  <!-- ===== 3 CHOSEN ===== -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">3</span><h2>The book you chose</h2><span class="sec-tag">transition</span></div>
+    <p class="sec-intro">Choosing a book shouldn't feel like a download confirmation. The cover you picked rises to the center and becomes the thing that will be waiting on Today, the same object, carried forward, so the handoff is continuous.</p>
+    <div class="grid2">
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Book chosen</b> &middot; light</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span></div>
+          <div class="chosen">
+            <div class="cover c4"><div class="ct">The Old Man and the Sea</div><div class="ca">Ernest Hemingway</div></div>
+            <p class="ce">Added to Today</p>
+            <h1>The Old Man and the Sea is yours to begin.</h1>
+            <p>It's waiting on Today now. One last thing before you start: how do you like to read?</p>
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Book chosen</b> &middot; dark</p>
+        <div class="win dark">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span></div>
+          <div class="chosen">
+            <div class="cover c4"><div class="ct">The Old Man and the Sea</div><div class="ca">Ernest Hemingway</div></div>
+            <p class="ce">Added to Today</p>
+            <h1>The Old Man and the Sea is yours to begin.</h1>
+            <p>It's waiting on Today now. One last thing before you start: how do you like to read?</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 4 PACE ===== -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">4</span><h2>Your reading pace</h2><span class="sec-tag">new · the only added question</span></div>
+    <p class="sec-intro">The one calm choice, asked once as you start your first book. Framed in <b>reading terms, not minutes</b>, a few pages, a chapter, or a long sitting, so it never becomes a timer and never contradicts Today's promise of "no clock but your own." It quietly sizes the daily portion, has a sensible default (a chapter), can be skipped, and lives in Settings afterward. No goal, no streak, no target.</p>
+    <div class="grid2">
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Your pace</b> &middot; light</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span></div>
+          <div class="pace">
+            <p class="pe">How you like to read</p>
+            <h1>What feels like a good sitting?</h1>
+            <p class="psub">This just sizes each day's reading. There's no timer, and you can change it anytime.</p>
+            <div class="paceopts">
+              <div class="popt"><div class="pi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h9l3 3v13H6z"/><path d="M9 9h6M9 12h6M9 15h4"/></svg></div><div class="pn">A few pages</div><div class="pd">a small, easy daily portion</div><svg class="check" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></div>
+              <div class="popt on"><div class="pi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M19 18v3H6.5A2.5 2.5 0 0 1 4 18.5"/></svg></div><div class="pn">A chapter</div><div class="pd">a satisfying single sitting</div><svg class="check" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></div>
+              <div class="popt"><div class="pi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h7v15H3zM14 5h7v15h-7z"/></svg></div><div class="pn">A long read</div><div class="pd">settle in for a good while</div><svg class="check" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></div>
+            </div>
+            <div class="pact">
+              <button class="btn-primary">Start reading</button>
+              <button class="skip">I'll decide as I go</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Your pace</b> &middot; dark</p>
+        <div class="win dark">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span></div>
+          <div class="pace">
+            <p class="pe">How you like to read</p>
+            <h1>What feels like a good sitting?</h1>
+            <p class="psub">This just sizes each day's reading. There's no timer, and you can change it anytime.</p>
+            <div class="paceopts">
+              <div class="popt"><div class="pi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h9l3 3v13H6z"/><path d="M9 9h6M9 12h6M9 15h4"/></svg></div><div class="pn">A few pages</div><div class="pd">a small, easy daily portion</div><svg class="check" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></div>
+              <div class="popt on"><div class="pi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M19 18v3H6.5A2.5 2.5 0 0 1 4 18.5"/></svg></div><div class="pn">A chapter</div><div class="pd">a satisfying single sitting</div><svg class="check" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></div>
+              <div class="popt"><div class="pi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h7v15H3zM14 5h7v15h-7z"/></svg></div><div class="pn">A long read</div><div class="pd">settle in for a good while</div><svg class="check" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></div>
+            </div>
+            <div class="pact">
+              <button class="btn-primary">Start reading</button>
+              <button class="skip">I'll decide as I go</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 5 TODAY ===== -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">5</span><h2>Today</h2><span class="sec-tag keep">anchor · unchanged</span></div>
+    <p class="sec-intro">The journey lands here, the book you chose, waiting, sized to the pace you picked, with the same warmth it began with. The portion is quiet ("the first chapter"), never a count or a clock.</p>
+    <div class="grid2">
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Today</b> &middot; light</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span></div>
+          <div class="today">
+            <p class="te">Beginning today</p>
+            <div class="bk">The Old Man and the Sea</div>
+            <div class="au">Ernest Hemingway</div>
+            <div class="where">The first chapter, at the pace you set. No clock but your own.</div>
+            <span class="cont"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h12M11 5l5 5-5 5"/></svg>Begin reading</span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Today</b> &middot; dark</p>
+        <div class="win dark">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span></div>
+          <div class="today">
+            <p class="te">Beginning today</p>
+            <div class="bk">The Old Man and the Sea</div>
+            <div class="au">Ernest Hemingway</div>
+            <div class="where">The first chapter, at the pace you set. No clock but your own.</div>
+            <span class="cont"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h12M11 5l5 5-5 5"/></svg>Begin reading</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== COPY ===== -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">6</span><h2>Copy &amp; connective tissue</h2><span class="sec-tag">final words</span></div>
+
+    <p class="subhead">Browse the library</p>
+    <div class="copy">
+      <div class="copy-row"><div class="copy-k">Title / count</div><div class="copy-v">The library &middot; <em>77,386 free books</em></div></div>
+      <div class="copy-row"><div class="copy-k">Search</div><div class="copy-v">Search by title or author <em>(reaches the full index; results show cover, title, author only, no blurb)</em></div></div>
+      <div class="copy-row"><div class="copy-k">Results meta</div><div class="copy-v">Sorted by how often they're read <em>(uses the index's popularity field; no fabricated counts)</em></div></div>
+      <div class="copy-row"><div class="copy-k">Doorways</div><div class="copy-v">Short classics &middot; Familiar names &middot; A little philosophy &middot; Finish in a weekend <em>(labeled shelves are the navigation; no filter pills)</em></div></div>
+      <div class="copy-row"><div class="copy-k">Shelf subhead</div><div class="copy-v"><em>e.g.</em> Short classics — <em>great first books, none of them long</em></div></div>
+      <div class="copy-row"><div class="copy-k">Blurbs (curated only)</div><div class="copy-v">One authored line, on doorway shelves only: <em>"A river journey upstream that keeps darkening, sentence by sentence."</em> Never in search or all-books views, the index has no descriptions.</div></div>
+      <div class="copy-row"><div class="copy-k">Choose action</div><div class="copy-v">Start reading <em>(never "Get" or a download glyph)</em></div></div>
+    </div>
+
+    <p class="subhead" style="margin-top:26px;">Book chosen → pace → Today</p>
+    <div class="copy">
+      <div class="copy-row"><div class="copy-k">Chosen eyebrow</div><div class="copy-v">Added to Today</div></div>
+      <div class="copy-row"><div class="copy-k">Chosen headline</div><div class="copy-v">{Title} is yours to begin.</div></div>
+      <div class="copy-row"><div class="copy-k">Chosen line</div><div class="copy-v">It's waiting on Today now. One last thing before you start: how do you like to read?</div></div>
+      <div class="copy-row"><div class="copy-k">Pace eyebrow</div><div class="copy-v">How you like to read</div></div>
+      <div class="copy-row"><div class="copy-k">Pace question</div><div class="copy-v">What feels like a good sitting?</div></div>
+      <div class="copy-row"><div class="copy-k">Pace sub</div><div class="copy-v">This just sizes each day's reading. There's no timer, and you can change it anytime.</div></div>
+      <div class="copy-row"><div class="copy-k">Pace options</div><div class="copy-v">A few pages <em>(a small, easy daily portion)</em> &middot; A chapter <em>(a satisfying single sitting — default)</em> &middot; A long read <em>(settle in for a good while)</em></div></div>
+      <div class="copy-row"><div class="copy-k">Pace actions</div><div class="copy-v">Start reading &middot; <em>I'll decide as I go</em> (skip)</div></div>
+      <div class="copy-row"><div class="copy-k">Today portion</div><div class="copy-v">The first chapter, at the pace you set. No clock but your own.</div></div>
+    </div>
+
+    <div class="note">
+      <h4><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg>Connective tissue &amp; the no-clock reconciliation</h4>
+      <p><b>The cover is the thread.</b> The same cloth object appears on the front door, as a small spine on the browse shelves, full-size on the chosen screen, and as the title on Today. The reader's eye follows one book the whole way.</p>
+      <p><b>Pace is in reading terms, never minutes.</b> "A few pages / a chapter / a long read" sizes the daily portion behind the scenes; the reader never sees a countdown, and Today still says "no clock but your own." The pace described in the brief as 10 / 25 / 60 minutes maps to these three, but is never shown as time.</p>
+      <p><b>It's one question, never a funnel.</b> Asked once, at the moment it's useful (starting the first book), with a sensible default (a chapter) and a skip ("I'll decide as I go"). <b>Pace also lives in Settings</b> and can be changed anytime; a returning reader who already set it skips this step entirely and lands straight on Today.</p>
+      <p><b>Clear of the Matter anti-patterns:</b> no streak, goal, percentage, or quiz; no account or paywall anywhere in the path; reading is always free, and the covers do the inviting.</p>
+    </div>
+  </div>
+
+  <p class="foot">Throughline · the first journey · front door → browse → chosen → pace → Today · light and dark</p>
+
+</div>
+</body>
+</html>

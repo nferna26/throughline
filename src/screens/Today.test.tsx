@@ -43,7 +43,6 @@ function renderToday(today: TodayCard | null, over: Partial<Parameters<typeof To
     <Today
       today={today}
       onDiscover={noop}
-      onImport={noop}
       onStart={noop}
       onNewPlan={noop}
       onReviewNotes={noop}
@@ -57,35 +56,17 @@ beforeEach(() => {
   vi.mocked(invoke).mockResolvedValue([]);
 });
 
-describe("Today — welcome (no book yet)", () => {
-  it("renders the welcome card with find + import actions when there is no book", () => {
-    renderToday(null);
-    expect(screen.getByText("Welcome to Throughline")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Find a book to read/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Import a file instead/i })).toBeInTheDocument();
-  });
-
-  it("welcome promise is truthful about the tutor: the selection is sent, never the book", () => {
-    renderToday(null);
-    expect(screen.getByText(/only the passage you select is sent, never the book/i)).toBeInTheDocument();
-    expect(screen.getByText(/No account, no cloud, no tracking/i)).toBeInTheDocument();
-    // The old absolute claim is gone — asking the tutor does leave the Mac.
-    expect(screen.queryByText(/never leaves? this Mac/i)).toBeNull();
-  });
-
-  it("welcome primary opens Discover, secondary opens the file picker", () => {
-    const onDiscover = vi.fn();
-    const onImport = vi.fn();
-    renderToday(null, { onDiscover, onImport });
-    fireEvent.click(screen.getByRole("button", { name: /Find a book to read/i }));
-    expect(onDiscover).toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: /Import a file instead/i }));
-    expect(onImport).toHaveBeenCalled();
+describe("Today — no book yet", () => {
+  it("renders nothing for the empty state — the front door owns first-run now", () => {
+    const { container } = renderToday(null);
+    // App routes today === null → FrontDoor, so Today must not paint its own
+    // (now-removed) welcome card.
+    expect(container).toBeEmptyDOMElement();
   });
 });
 
 describe("Today — the book on the desk (five states)", () => {
-  it("day_one: 'Beginning today', two calm lines, a bare hairline, Begin reading", () => {
+  it("day_one: 'Beginning today', the calm where-line, a bare hairline, Begin reading", () => {
     const onStart = vi.fn();
     const c = card("day_one");
     const { container } = renderToday(c, { onStart });
@@ -93,8 +74,10 @@ describe("Today — the book on the desk (five states)", () => {
     expect(screen.getByText("Beginning today")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "The Confessions" })).toBeInTheDocument();
     expect(screen.getByText("Augustine")).toBeInTheDocument();
-    expect(screen.getByText("We've set an unhurried pace.")).toBeInTheDocument();
-    expect(screen.getByText("There's no clock but your own.")).toBeInTheDocument();
+    // First journey: the portion reads qualitatively, at the pace you set, no clock.
+    expect(
+      screen.getByText("The first chapter, at the pace you set. No clock but your own."),
+    ).toBeInTheDocument();
     // Day one's hairline is bare: no fill yet, whatever fraction_complete says.
     const fill = container.querySelector(".tl-hairline .fill") as HTMLElement;
     expect(fill.style.width).toBe("0px");

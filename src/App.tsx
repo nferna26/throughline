@@ -8,6 +8,7 @@ import BookSwitcher from "./screens/BookSwitcher";
 import NotesBrowser from "./screens/NotesBrowser";
 import BookSetupSheet from "./screens/BookSetupSheet";
 import Discover from "./screens/Discover";
+import FrontDoor from "./screens/FrontDoor";
 import PlansView from "./components/PlansView";
 import RePlanDialog from "./components/RePlanDialog";
 import TLIcon from "./components/TLIcon";
@@ -427,8 +428,11 @@ export default function App() {
       <main id="main-content">
         {view.kind === "today" && (
           today === null ? (
-            // No books yet — the welcome card owns book acquisition; no book chrome.
-            <Today today={null} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} />
+            // No books yet — the front door owns book acquisition; no book chrome.
+            // It begins the cover-thread (the three starter covers) and carries
+            // the quiet activation whisper. Browse + Import + a starter pick all
+            // route through the same flows the rest of the app uses.
+            <FrontDoor onDiscover={openDiscover} onImport={importBook} onPicked={onDiscoverPick} />
           ) : (
             <>
               <div className="tl-bookhead">
@@ -459,7 +463,7 @@ export default function App() {
                 aria-labelledby={tab === "today" ? "tab-today" : "tab-notes"}
               >
                 {tab === "today" ? (
-                  <Today today={today} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} onPlans={() => setView({ kind: "plans" })} />
+                  <Today today={today} onDiscover={openDiscover} onStart={startReading} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} onPlans={() => setView({ kind: "plans" })} />
                 ) : (
                   <NotesBrowser book={today.book} />
                 )}

@@ -1,111 +1,131 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { Book, BookSection } from "../types";
+import Cover from "../components/Cover";
+import type { Book } from "../types";
 import { errorMessage } from "../types";
+import "./BookSetupSheet.css";
 
 interface Props {
   book: Book;
-  /** Proceed once the plan is configured. `begin` = go straight into the first
-   *  sitting ("Begin reading"); false = land on Today ("I'll decide as I go"). */
+  /** Proceed once the pace is set. `begin` = go straight into the first sitting
+   *  ("Start reading"); false = land on Today ("I'll decide as I go", or a
+   *  returning reader who already set a pace and skips this step). */
   onDone: (begin: boolean) => void;
 }
 
-// Reading-speed midpoint for the length line and the horizon sentence. The
-// numbers stay backstage: everything the reader sees is plain words.
-const WPM_MID = 200;
-const CHARS_PER_WORD = 5;
-
-// The one question's three answers. Names are reused VERBATIM in the horizon
-// sentence, so they must read naturally after "At …".
-const SITTINGS = [
-  { minutes: 10, name: "A few pages", sub: "about ten minutes" },
-  { minutes: 25, name: "A steady sitting", sub: "about twenty-five" },
-  { minutes: 60, name: "A long read", sub: "about an hour" },
+/** The one added question, in reading terms — NEVER minutes. The three map
+ *  internally to the brief's 10 / 25 / 60-minute pacing, but that mapping is the
+ *  backstage `minutes` value here and is never shown to the reader. */
+const PACES = [
+  { minutes: 10, name: "A few pages", desc: "a small, easy daily portion" },
+  { minutes: 25, name: "A chapter", desc: "a satisfying single sitting" },
+  { minutes: 60, name: "A long read", desc: "settle in for a good while" },
 ] as const;
-const DEFAULT_SITTING = 25;
+/** "A chapter" is the sensible default — pre-selected, and the value the skip
+ *  link commits. */
+const DEFAULT_PACE = 25;
 
-const SMALL = [
-  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-  "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
-  "nineteen", "twenty",
-];
-const TENS = ["", "ten", "twenty", "thirty", "forty", "fifty"];
-
-/** Whole-book length in plain words ("about two hours of reading") — never
- *  decimals, never numerals-as-data. Exported for tests. */
-export function lengthPhrase(totalMinutes: number): string {
-  if (totalMinutes < 8) return "a few minutes of reading";
-  if (totalMinutes < 55) {
-    const tens = Math.min(5, Math.max(1, Math.round(totalMinutes / 10)));
-    return `about ${TENS[tens]} minutes of reading`;
+/** The reading-pace option glyphs (a page, an open book, two volumes) + the
+ *  selection check. Authored inline so the screen carries the handoff's exact
+ *  icons without a new dependency. */
+function PaceIcon({ minutes }: { minutes: number }) {
+  const common = {
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.5,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+  };
+  if (minutes <= 10) {
+    return (
+      <svg {...common}>
+        <path d="M6 4h9l3 3v13H6z" />
+        <path d="M9 9h6M9 12h6M9 15h4" />
+      </svg>
+    );
   }
-  if (totalMinutes < 90) return "about an hour of reading";
-  const h = Math.round(totalMinutes / 60);
-  const word = h <= 20 ? SMALL[h] : String(h);
-  return `about ${word} hours of reading`;
-}
-
-/** The horizon sentence: the chosen card's name verbatim, qualitative cadence,
- *  always "around early/mid/late {month}", conditional mood. Null when the
- *  book's length is unknown — better silent than invented. Exported for tests. */
-export function horizonSentence(name: string, totalMinutes: number | null, sittingMinutes: number): string | null {
-  if (!totalMinutes || totalMinutes <= 0 || sittingMinutes <= 0) return null;
-  const days = Math.max(1, Math.ceil(totalMinutes / sittingMinutes));
-  const finish = new Date();
-  finish.setHours(0, 0, 0, 0);
-  finish.setDate(finish.getDate() + days);
-  const d = finish.getDate();
-  const bucket = d <= 10 ? "early" : d <= 20 ? "mid" : "late";
-  const month = finish.toLocaleString("en-US", { month: "long" });
-  const nextYear = finish.getFullYear() > new Date().getFullYear();
-  const when = nextYear ? `${bucket} ${month} next year` : `${bucket} ${month}`;
-  const cardName = name.charAt(0).toLowerCase() + name.slice(1);
-  return `At ${cardName} most evenings, you'd finish around ${when}.`;
+  if (minutes >= 60) {
+    return (
+      <svg {...common}>
+        <path d="M3 5h7v15H3zM14 5h7v15h-7z" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common}>
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5z" />
+      <path d="M19 18v3H6.5A2.5 2.5 0 0 1 4 18.5" />
+    </svg>
+  );
 }
 
 /**
- * The plan screen, shown once right after a book arrives: one question (how
- * much feels right at a sitting?), three quiet cards, one primary action.
- * No finish date, no days-a-week, no margin help (that lives in Settings),
- * no plan name — the plan paces and silently re-paces itself forever after.
+ * The book you chose → your reading pace, as one continuous beat. The cover you
+ * picked rises to centre and becomes the thing waiting on Today (the same cloth
+ * object, carried forward); then the one calm question sizes each day's reading,
+ * in reading terms, never a timer.
+ *
+ * A returning reader who already set a pace skips the question entirely: this
+ * book's plan is configured with the saved pace and they land straight on Today.
+ * Pace persists globally (Settings owns the change-it-anytime control) AND on the
+ * book's plan (cmd_configure_plan) — the existing per-book pacing the engine reads.
  */
 export default function BookSetupSheet({ book, onDone }: Props) {
-  const [sections, setSections] = useState<BookSection[]>([]);
-  const [sitting, setSitting] = useState<number>(DEFAULT_SITTING);
+  // false until we know whether to show the pace step — avoids a flash of the
+  // question for a returning reader who skips it.
+  const [ready, setReady] = useState(false);
+  const [pace, setPace] = useState<number>(DEFAULT_PACE);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cardRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
     let cancelled = false;
-    invoke<BookSection[]>("cmd_assignable_sections", { bookId: book.id })
-      .then((list) => { if (!cancelled) setSections(Array.isArray(list) ? list : []); })
-      .catch(() => { if (!cancelled) setSections([]); });
-    return () => { cancelled = true; };
+    invoke<{ minutes: number; chosen: boolean }>("cmd_get_reading_pace")
+      .then(async (p) => {
+        if (cancelled) return;
+        if (p.chosen) {
+          // Returning reader: configure this book with the saved pace and go
+          // straight to Today, skipping the question entirely.
+          try {
+            await invoke("cmd_configure_plan", {
+              bookId: book.id,
+              sittingLengthMinutes: p.minutes,
+              name: null,
+            });
+          } catch {
+            /* a configure failure still lands on Today; the plan falls back to
+               the default sitting. Better calm than stranded. */
+          }
+          onDone(false);
+          return;
+        }
+        // First time: ask. Default to "A chapter".
+        setPace(DEFAULT_PACE);
+        setReady(true);
+      })
+      .catch(() => {
+        // Couldn't read the pace — ask rather than silently skip.
+        if (!cancelled) setReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // book.id is stable for this sheet's lifetime; onDone is a stable callback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id]);
 
-  // Whole-book minutes from captured per-section lengths (estimated_units is
-  // the same char unit for txt and epub). Unknown → the length line and the
-  // horizon simply stay silent.
-  const totalMinutes = useMemo(() => {
-    const chars = sections.reduce((sum, s) => sum + (s.estimated_units ?? 0), 0);
-    if (chars <= 0) return null;
-    return chars / CHARS_PER_WORD / WPM_MID;
-  }, [sections]);
-
-  const selected = SITTINGS.find((s) => s.minutes === sitting) ?? SITTINGS[1];
-  const horizon = horizonSentence(selected.name, totalMinutes, sitting);
-  const metaParts = [
-    book.author,
-    totalMinutes != null ? lengthPhrase(totalMinutes) : null,
-  ].filter(Boolean);
-
-  // Configure the book's current plan and proceed. The question never blocks:
-  // the quiet link confirms with the default sitting and moves on.
-  async function confirm(begin: boolean, minutes: number) {
+  // Commit the pace and proceed. `persist` writes the GLOBAL preference (so future
+  // books default to it and the step is skipped next time) AND marks it chosen;
+  // the skip link does NOT persist (the reader hasn't settled on a pace). Either
+  // path configures THIS book's plan so Today is sized.
+  async function commit(begin: boolean, minutes: number, persist: boolean) {
     setSubmitting(true);
     setError(null);
     try {
+      if (persist) await invoke("cmd_set_reading_pace", { minutes });
       await invoke("cmd_configure_plan", {
         bookId: book.id,
         sittingLengthMinutes: minutes,
@@ -121,66 +141,103 @@ export default function BookSetupSheet({ book, onDone }: Props) {
   // Roving radio focus: arrows move the selection (WAI-ARIA radio pattern).
   function onCardKey(e: React.KeyboardEvent, idx: number) {
     let next: number | null = null;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (idx + 1) % SITTINGS.length;
-    if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (idx + SITTINGS.length - 1) % SITTINGS.length;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (idx + 1) % PACES.length;
+    if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (idx + PACES.length - 1) % PACES.length;
     if (next == null) return;
     e.preventDefault();
-    setSitting(SITTINGS[next].minutes);
+    setPace(PACES[next].minutes);
     cardRefs.current[next]?.focus();
   }
 
+  if (!ready) {
+    // Brief, contentless — the pace check is a fast local read.
+    return <div className="tl-journey-screen" aria-busy="true" />;
+  }
+
   return (
-    <div className="tl-plan-screen">
-      <div className="tl-plan-scroll">
-        <div className="tl-plan-col">
-          <div className="tl-kicker"><span className="dot" />New on your desk</div>
-          <h1 className="tl-plan-title">{book.title}</h1>
-          {metaParts.length > 0 && <p className="tl-plan-meta">{metaParts.join(" · ")}</p>}
+    <div className="tl-journey-screen">
+      <div className="tl-journey-scroll">
+        {/* ── The book you chose (the cover rises to centre) ── */}
+        <div className="tl-chosen">
+          <Cover title={book.title} author={book.author} size="full" />
+          <p className="tl-chosen-eyebrow">Added to Today</p>
+          <h1 className="tl-chosen-h">{book.title} is yours to begin.</h1>
+          <p className="tl-chosen-line">
+            It's waiting on Today now. One last thing before you start: how do you like to read?
+          </p>
+        </div>
 
-          <p className="tl-q-prompt">How much feels right at a sitting?</p>
+        {/* ── Your reading pace ── */}
+        <div className="tl-pace">
+          <p className="tl-pace-eyebrow">How you like to read</p>
+          <h2 className="tl-pace-q">What feels like a good sitting?</h2>
+          <p className="tl-pace-sub">
+            This just sizes each day's reading. There's no timer, and you can change it anytime.
+          </p>
 
-          <div className="tl-q-cards" role="radiogroup" aria-label="How much feels right at a sitting?">
-            {SITTINGS.map((s, i) => {
-              const on = s.minutes === sitting;
+          <div className="tl-pace-opts" role="radiogroup" aria-label="What feels like a good sitting?">
+            {PACES.map((p, i) => {
+              const on = p.minutes === pace;
               return (
                 <button
                   type="button"
-                  key={s.minutes}
-                  ref={(el) => { cardRefs.current[i] = el; }}
-                  className={on ? "tl-q-card on" : "tl-q-card"}
+                  key={p.minutes}
+                  ref={(el) => {
+                    cardRefs.current[i] = el;
+                  }}
+                  className={on ? "tl-pace-opt on" : "tl-pace-opt"}
                   role="radio"
                   aria-checked={on}
                   tabIndex={on ? 0 : -1}
-                  onClick={() => setSitting(s.minutes)}
+                  onClick={() => setPace(p.minutes)}
                   onKeyDown={(e) => onCardKey(e, i)}
                 >
-                  <span className="tl-qc-name">{s.name}</span>
-                  <span className="tl-qc-sub">{s.sub}</span>
-                  <span className="tl-qc-dot" aria-hidden="true" />
+                  <span className="tl-pace-ico">
+                    <PaceIcon minutes={p.minutes} />
+                  </span>
+                  <span className="tl-pace-name">{p.name}</span>
+                  <span className="tl-pace-desc">{p.desc}</span>
+                  <svg
+                    className="tl-pace-check"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M16.5 6.5L8.5 14.5 4 10" />
+                  </svg>
                 </button>
               );
             })}
           </div>
 
-          {/* Updates with the selection; describes, never commits. */}
-          <p className="tl-plan-horizon" aria-live="polite">{horizon}</p>
+          {error && (
+            <p className="tl-warn-text" role="alert" style={{ marginTop: "var(--tl-3)" }}>
+              Couldn't save your pace: {error}
+            </p>
+          )}
 
-          {error && <p className="tl-warn-text" role="alert">Couldn't save the plan: {error}</p>}
-
-          <div className="tl-plan-actions">
-            <button className="tl-btn tl-btn-primary" disabled={submitting} onClick={() => confirm(true, sitting)}>
-              Begin reading
+          <div className="tl-pace-actions">
+            <button
+              type="button"
+              className="tl-btn tl-btn-primary"
+              disabled={submitting}
+              onClick={() => commit(true, pace, true)}
+            >
+              Start reading
             </button>
-            <button className="tl-link-quiet" disabled={submitting} onClick={() => confirm(false, DEFAULT_SITTING)}>
+            <button
+              type="button"
+              className="tl-pace-skip"
+              disabled={submitting}
+              onClick={() => commit(false, DEFAULT_PACE, false)}
+            >
               I'll decide as I go
             </button>
           </div>
-
-          {/* The phrases disclosure (Stage 3) — exact operator copy. Settings
-              owns the on/off toggle. */}
-          <p className="tl-plan-privacy">
-            To name your sessions, Throughline sends each chapter's opening lines — never the full text.
-          </p>
         </div>
       </div>
     </div>

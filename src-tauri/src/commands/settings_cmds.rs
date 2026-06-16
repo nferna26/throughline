@@ -311,6 +311,49 @@ pub fn cmd_clear_ai_key(
     settings::build_dto(&conn).map_err(AppError::from)
 }
 
+/// The global reading pace (sitting size). The reader only ever sees the
+/// reading-term label (a few pages / a chapter / a long read); the minutes are
+/// the internal mapping the pace step + the Settings pace control read and write,
+/// never shown on screen and never a timer.
+#[derive(serde::Serialize)]
+pub struct ReadingPaceDto {
+    /// 10 | 25 | 60 in practice, clamped to the humane 5..=120 band; 25
+    /// ("a chapter") when the reader has not chosen a pace yet.
+    pub minutes: i64,
+    /// True once the reader has explicitly chosen a pace — drives "a returning
+    /// reader who already set it skips the pace step and lands straight on Today".
+    pub chosen: bool,
+}
+
+/// Read the global reading pace. On a fresh install `chosen` is false (the pace
+/// step should ask) while `minutes` is still a sensible default (a chapter).
+#[tauri::command]
+pub fn cmd_get_reading_pace(state: State<DbState>) -> Result<ReadingPaceDto, AppError> {
+    let conn = state.0.lock()?;
+    Ok(ReadingPaceDto {
+        minutes: settings::get_reading_rhythm_minutes(&conn),
+        chosen: settings::reading_rhythm_chosen(&conn),
+    })
+}
+
+/// Set the global reading pace (the first-journey pace step and the Settings
+/// pace control both call this). Persisted as the existing `reading_rhythm_minutes`
+/// setting — a key/value row, NO schema change. Marks the pace chosen, so future
+/// new books default to it and the pace step is skipped. The chosen minutes never
+/// surface to the reader.
+#[tauri::command]
+pub fn cmd_set_reading_pace(
+    minutes: i64,
+    state: State<DbState>,
+) -> Result<ReadingPaceDto, AppError> {
+    let conn = state.0.lock()?;
+    let stored = settings::set_reading_rhythm_minutes(&conn, minutes).map_err(AppError::from)?;
+    Ok(ReadingPaceDto {
+        minutes: stored,
+        chosen: true,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

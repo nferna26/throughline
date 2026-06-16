@@ -20,6 +20,10 @@
   --tl-warn:       #a04a00;
   --tl-alert:      #8a1d1d;
   --tl-ok:         #2f4e3a;
+  /* Warm clay — the calm "that didn't work" tone for activation errors. NOT red
+     (--tl-alert): a buyer who mistyped a code is never alarmed (first-journey
+     design). Matches the handoff token table (clay #B4663C light / #C99A6A dark). */
+  --tl-clay:       #b4663c;
 
   /* ── Derived via color-mix ── */
   --tl-accent-soft: color-mix(in oklab, var(--tl-accent) 12%, transparent);
@@ -29,6 +33,7 @@
   --tl-ink-10:      color-mix(in oklab, var(--tl-ink) 10%, transparent);
   --tl-warn-soft:   color-mix(in oklab, var(--tl-warn) 13%, transparent);
   --tl-alert-soft:  color-mix(in oklab, var(--tl-alert) 13%, transparent);
+  --tl-clay-soft:   color-mix(in oklab, var(--tl-clay) 13%, transparent);
   --tl-paper:       color-mix(in oklab, var(--tl-panel) 60%, var(--tl-bg));
 
   /* ── Reading page — "the centered spread" (LIGHT, from the reader handoff) ──
@@ -84,6 +89,7 @@
   --tl-warn:       #d99a55;
   --tl-alert:      #d97a7a;
   --tl-ok:         #a7c5b1;
+  --tl-clay:       #c99a6a;
 
   --tl-accent-soft: color-mix(in oklab, var(--tl-accent) 16%, transparent);
   --tl-accent-line: color-mix(in oklab, var(--tl-accent) 34%, transparent);
@@ -92,6 +98,7 @@
   --tl-ink-10:      color-mix(in oklab, var(--tl-ink) 14%, transparent);
   --tl-warn-soft:   color-mix(in oklab, var(--tl-warn) 18%, transparent);
   --tl-alert-soft:  color-mix(in oklab, var(--tl-alert) 18%, transparent);
+  --tl-clay-soft:   color-mix(in oklab, var(--tl-clay) 18%, transparent);
   --tl-paper:       color-mix(in oklab, var(--tl-panel) 70%, var(--tl-bg));
 
   /* Dark "centered spread" (from the reader handoff). The desk is DEEPER than the
@@ -280,6 +287,11 @@
   min-height: calc(2 * 1.55em);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
+}
+/* The day-one "where" line (first journey): serif-italic, the same calm voice as
+   the chosen → Today handoff. No clock, no count. */
+.tl-desk-orient .line.where {
+  font-family: var(--tl-serif); font-style: italic; color: var(--tl-ink-soft);
 }
 
 /* Finished: an outline check ring (never a filled badge), then quiet actions. */

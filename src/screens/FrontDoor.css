@@ -1,0 +1,296 @@
+/* ════════════════════════════════════════════════════════════════════
+   Front door — the first-run screen (replaces the old welcome empty state).
+   Serif hero, the three cloth covers as the primary invitation, Browse +
+   Import, one quiet trust line, and the activation whisper with its full
+   resting → entering → success → error states. Pulls colours/type from the
+   app's existing --tl-* tokens; warm clay (--tl-clay) carries activation errors.
+   ──────────────────────────────────────────────────────────────────── */
+
+.tl-fd-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: var(--tl-7) var(--tl-7) var(--tl-9);
+}
+.tl-fd {
+  width: 100%;
+  max-width: 540px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.tl-fd-eyebrow {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tl-accent);
+  margin: 0 0 16px;
+}
+.tl-fd-hero {
+  font-family: var(--tl-serif);
+  font-weight: 500;
+  font-size: clamp(28px, 4.4vw, 35px);
+  line-height: 1.07;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+  /* The dark headline takes the ink token explicitly, never an inherited colour
+     (a real contrast bug the handoff flagged). */
+  color: var(--tl-ink);
+  margin: 0 0 15px;
+  max-width: 15ch;
+}
+.tl-fd-lede {
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--tl-ink-soft);
+  margin: 0;
+  max-width: 42ch;
+}
+
+/* the three cloth covers — the primary invitation */
+.tl-fd-shelf {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin: 46px 0 6px;
+}
+.tl-fd-book {
+  position: relative;
+}
+.tl-fd-book:disabled {
+  cursor: default;
+}
+.tl-fd-book.is-loading .tl-cover {
+  opacity: 0.62;
+}
+.tl-fd-book-loading {
+  margin-top: 10px;
+  font-family: var(--tl-sans);
+  font-size: 11.5px;
+  color: var(--tl-muted);
+}
+.tl-fd-starterror {
+  margin: 16px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--tl-clay);
+  max-width: 46ch;
+}
+
+.tl-fd-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 36px;
+}
+.tl-fd-actions .tl-btn-primary {
+  font-size: 14px;
+  padding: 12px 22px;
+}
+.tl-fd-import {
+  color: var(--tl-muted);
+  font-size: 13.5px;
+}
+
+.tl-fd-trust {
+  font-size: 12.5px;
+  line-height: 1.55;
+  /* muted, not faint: 12.5px body text needs AA contrast (axe-gated). */
+  color: var(--tl-muted);
+  margin: 30px 0 0;
+  max-width: 50ch;
+}
+
+/* ── activation whisper ── */
+.tl-fd-actbar {
+  margin-top: 36px;
+  padding-top: 30px;
+  border-top: 1px solid var(--tl-line);
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.tl-fd-actrest {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--tl-sans);
+  font-size: 13px;
+  color: var(--tl-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px 4px;
+  border-radius: var(--tl-r-sm);
+}
+.tl-fd-actrest:hover {
+  color: var(--tl-ink);
+}
+.tl-fd-actrest svg {
+  color: var(--tl-accent);
+}
+.tl-fd-actrest u {
+  text-decoration: none;
+  color: var(--tl-accent);
+  font-weight: 600;
+}
+
+.tl-fd-actexpand {
+  width: 100%;
+  max-width: 380px;
+  text-align: center;
+}
+.tl-fd-acth {
+  font-size: 13px;
+  color: var(--tl-ink);
+  font-weight: 500;
+  margin: 0 0 4px;
+}
+.tl-fd-actsub {
+  font-size: 12px;
+  color: var(--tl-muted);
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+.tl-fd-codefield {
+  display: flex;
+  gap: 8px;
+}
+.tl-fd-code {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  color: var(--tl-ink);
+  background: var(--tl-panel);
+  border: 1px solid var(--tl-line-strong);
+  border-radius: var(--tl-r-sm);
+  padding: 11px 13px;
+  text-align: center;
+  text-transform: uppercase;
+}
+.tl-fd-code::placeholder {
+  color: var(--tl-muted);
+  font-weight: 500;
+}
+.tl-fd-code:focus {
+  outline: none;
+  border-color: var(--tl-accent);
+  box-shadow: 0 0 0 3px var(--tl-accent-soft);
+}
+.tl-fd-code.err {
+  border-color: var(--tl-clay);
+  box-shadow: 0 0 0 3px var(--tl-clay-soft);
+}
+.tl-fd-go {
+  flex: none;
+  font-family: var(--tl-sans);
+  font-size: 13.5px;
+  font-weight: 600;
+  background: var(--tl-accent);
+  color: var(--tl-accent-ink);
+  border: none;
+  border-radius: var(--tl-r-sm);
+  padding: 0 18px;
+  cursor: pointer;
+}
+.tl-fd-go:hover {
+  background: color-mix(in oklab, var(--tl-accent) 88%, black);
+}
+[data-theme="dark"] .tl-fd-go:hover {
+  background: color-mix(in oklab, var(--tl-accent) 88%, white);
+}
+.tl-fd-go:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* honest, warm — clay, never red */
+.tl-fd-actmsg {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 12px auto 0;
+  text-align: left;
+  max-width: 40ch;
+  color: var(--tl-clay);
+}
+.tl-fd-actmsg svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--tl-clay);
+}
+.tl-fd-actmsg a {
+  color: var(--tl-clay);
+  font-weight: 600;
+}
+.tl-fd-actcancel {
+  font-size: 12px;
+  color: var(--tl-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  margin-top: 12px;
+  padding: 4px 6px;
+}
+.tl-fd-actcancel:hover {
+  color: var(--tl-ink);
+  text-decoration: underline;
+}
+
+/* success banner — the same shape the deep link shows, so manual + deep-link
+   buyers land on an identical confirmation */
+.tl-fd-actbanner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  text-align: left;
+  width: 100%;
+  max-width: 420px;
+  background: var(--tl-panel);
+  border: 1px solid var(--tl-line);
+  border-left: 3px solid var(--tl-accent);
+  border-radius: var(--tl-r-md);
+  box-shadow: var(--tl-shadow-sm);
+  padding: 15px 16px;
+}
+.tl-fd-actbanner .bi {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: var(--tl-r-sm);
+  background: var(--tl-accent-soft);
+  color: var(--tl-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tl-fd-actbanner h4 {
+  font-size: 13.5px;
+  font-weight: 600;
+  margin: 0 0 3px;
+  color: var(--tl-ink);
+}
+.tl-fd-actbanner p {
+  font-size: 12.5px;
+  color: var(--tl-muted);
+  margin: 0;
+  line-height: 1.5;
+}
