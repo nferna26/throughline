@@ -49,7 +49,7 @@ describe("BookSetupSheet — book chosen → reading pace", () => {
   });
 
   it("shows the book-chosen screen first, then the pace question on a separate screen", async () => {
-    render(<BookSetupSheet book={book} onDone={() => {}} />);
+    render(<BookSetupSheet book={book} onBack={() => {}} onDone={() => {}} />);
 
     // Screen A — the chosen hero, verbatim. The pace question is NOT here yet.
     expect(await screen.findByText("Added to Today")).toBeInTheDocument();
@@ -68,7 +68,7 @@ describe("BookSetupSheet — book chosen → reading pace", () => {
   });
 
   it("never shows a minute count, a finish date, or a book length — pace is reading terms only", async () => {
-    const { container } = render(<BookSetupSheet book={book} onDone={() => {}} />);
+    const { container } = render(<BookSetupSheet book={book} onBack={() => {}} onDone={() => {}} />);
     await advanceToPace();
     const t = container.textContent ?? "";
     // No number at all on the pace screen → no minute count, no finish date.
@@ -84,7 +84,7 @@ describe("BookSetupSheet — book chosen → reading pace", () => {
 
   it("Start reading persists the pace globally AND on the book's plan, then begins", async () => {
     const onDone = vi.fn();
-    render(<BookSetupSheet book={book} onDone={onDone} />);
+    render(<BookSetupSheet book={book} onBack={() => {}} onDone={onDone} />);
     await advanceToPace();
 
     fireEvent.click(screen.getByRole("radio", { name: /A long read/ }));
@@ -100,7 +100,7 @@ describe("BookSetupSheet — book chosen → reading pace", () => {
 
   it("'I'll decide as I go' never blocks: default sitting, and it does NOT lock in a pace", async () => {
     const onDone = vi.fn();
-    render(<BookSetupSheet book={book} onDone={onDone} />);
+    render(<BookSetupSheet book={book} onBack={() => {}} onDone={onDone} />);
     await advanceToPace();
 
     fireEvent.click(screen.getByRole("button", { name: /I'll decide as I go/ }));
@@ -113,7 +113,7 @@ describe("BookSetupSheet — book chosen → reading pace", () => {
   });
 
   it("arrow keys move the radio selection (WAI-ARIA radio pattern)", async () => {
-    render(<BookSetupSheet book={book} onDone={() => {}} />);
+    render(<BookSetupSheet book={book} onBack={() => {}} onDone={() => {}} />);
     await advanceToPace();
     const chapter = screen.getByRole("radio", { name: /A chapter/ });
     fireEvent.keyDown(chapter, { key: "ArrowRight" });
@@ -125,7 +125,7 @@ describe("BookSetupSheet — book chosen → reading pace", () => {
   it("says what happened when saving fails, and stays open to retry", async () => {
     wire({ configureRejects: { kind: "Db", message: "The library is busy right now." } });
     const onDone = vi.fn();
-    render(<BookSetupSheet book={book} onDone={onDone} />);
+    render(<BookSetupSheet book={book} onBack={() => {}} onDone={onDone} />);
     await advanceToPace();
 
     fireEvent.click(screen.getByRole("button", { name: "Start reading" }));
@@ -133,6 +133,56 @@ describe("BookSetupSheet — book chosen → reading pace", () => {
     expect(alert.textContent).toContain("The library is busy right now.");
     expect(onDone).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Start reading" })).toBeEnabled();
+  });
+});
+
+// Back-nav undo (CORE-1142): a labelled, keyboard-reachable Back affordance. On
+// the pace screen it returns to the chosen screen (no undo); on the chosen
+// screen it hands off to onBack so the caller can undo the pick.
+describe("BookSetupSheet — Back affordance (first-run undo)", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    wire();
+  });
+
+  it("Back on the chosen screen hands off to onBack (the undo), not onDone", async () => {
+    const onBack = vi.fn();
+    const onDone = vi.fn();
+    render(<BookSetupSheet book={book} onBack={onBack} onDone={onDone} />);
+    // It's labelled and reachable as a button on the first screen.
+    const back = await screen.findByRole("button", { name: /^Back/ });
+    fireEvent.click(back);
+    expect(onBack).toHaveBeenCalledTimes(1);
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("Back on the pace screen returns to chosen (no undo, no onBack)", async () => {
+    const onBack = vi.fn();
+    render(<BookSetupSheet book={book} onBack={onBack} onDone={() => {}} />);
+    await advanceToPace();
+    // On the pace screen now; Back steps back to the chosen hero…
+    fireEvent.click(screen.getByRole("button", { name: /^Back/ }));
+    expect(await screen.findByText("Added to Today")).toBeInTheDocument();
+    expect(screen.queryByText("What feels like a good sitting?")).toBeNull();
+    // …and never undoes the pick (that's only the chosen-screen Back).
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it("chosen ↔ pace transitions both directions without leaving the sheet", async () => {
+    const onBack = vi.fn();
+    const onDone = vi.fn();
+    render(<BookSetupSheet book={book} onBack={onBack} onDone={onDone} />);
+    // chosen → pace
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    await screen.findByText("What feels like a good sitting?");
+    // pace → chosen
+    fireEvent.click(screen.getByRole("button", { name: /^Back/ }));
+    await screen.findByText("Added to Today");
+    // chosen → pace again (the step state is clean, radios re-render)
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByText("What feels like a good sitting?")).toBeInTheDocument();
+    expect(onBack).not.toHaveBeenCalled();
+    expect(onDone).not.toHaveBeenCalled();
   });
 });
 
@@ -145,7 +195,7 @@ describe("BookSetupSheet — returning reader (pace already chosen)", () => {
 
   it("configures this book with the saved pace and never asks again", async () => {
     const onDone = vi.fn();
-    render(<BookSetupSheet book={book} onDone={onDone} />);
+    render(<BookSetupSheet book={book} onBack={() => {}} onDone={onDone} />);
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(false));
     expect(screen.queryByText("What feels like a good sitting?")).toBeNull();
     const cfg = vi.mocked(invoke).mock.calls.find((c) => c[0] === "cmd_configure_plan");

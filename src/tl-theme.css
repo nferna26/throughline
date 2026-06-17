@@ -424,6 +424,17 @@
 .tl-menu-item .bk-a { font-size: 12px; color: var(--tl-muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl-menu-item .bk-p { margin-left: auto; font-size: 11.5px; color: var(--tl-muted); flex-shrink: 0; }
 .tl-menu-item .check { color: var(--tl-accent); margin-left: auto; flex-shrink: 0; }
+/* A book row: the switch control fills the row; a quiet trailing remove sits
+   beside it (siblings, so neither nests an interactive control in the other). */
+.tl-menu-row { display: flex; align-items: stretch; gap: 2px; }
+.tl-menu-row .tl-menu-item { flex: 1; min-width: 0; }
+.tl-menu-remove {
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 34px; border-radius: var(--tl-r-sm);
+  background: transparent; border: none; cursor: pointer; color: var(--tl-muted);
+  transition: background 120ms ease, color 120ms ease;
+}
+.tl-menu-remove:hover { color: var(--tl-alert); background: var(--tl-alert-soft); }
 .tl-menu-sep { height: 1px; background: var(--tl-line); margin: var(--tl-2) 0; }
 .tl-menu-add { color: var(--tl-muted); font-weight: 550; font-size: 13px; }
 .tl-menu-add:hover { color: var(--tl-ink); }
@@ -573,6 +584,18 @@
 .tl-replan-foot { display: flex; align-items: center; gap: var(--tl-3); margin-top: var(--tl-5); }
 .tl-replan-foot .keep { font-size: 12.5px; color: var(--tl-muted); }
 .tl-replan-foot .right { margin-left: auto; display: flex; gap: var(--tl-2); }
+
+/* ── Remove-from-library confirm (CORE-1093) ──────────────────────────────
+   Shares the scrim + sheet chrome with RePlanDialog; a tighter foot (just the
+   two actions, Cancel then a danger Remove). */
+.tl-confirm-sheet { width: 100%; max-width: 420px; background: var(--tl-surface); border: 1px solid var(--tl-line); border-radius: var(--tl-r-lg); box-shadow: var(--tl-shadow-pop); padding: var(--tl-7) var(--tl-7) var(--tl-5); }
+.tl-confirm-sheet h3 { font-family: var(--tl-serif); font-weight: 500; font-size: 21px; line-height: 1.25; color: var(--tl-ink); margin: 0; letter-spacing: -0.008em; }
+.tl-confirm-sheet .ctx { margin: var(--tl-3) 0 var(--tl-5); font-size: 14px; line-height: 1.55; color: var(--tl-muted); }
+.tl-confirm-foot { display: flex; align-items: center; justify-content: flex-end; gap: var(--tl-2); margin-top: var(--tl-5); }
+.tl-btn-danger { background: var(--tl-alert); color: #fff; border-color: transparent; padding: 13px 22px; }
+.tl-btn-danger:hover { background: color-mix(in oklab, var(--tl-alert) 88%, black); }
+[data-theme="dark"] .tl-btn-danger { color: var(--tl-ink); }
+[data-theme="dark"] .tl-btn-danger:hover { background: color-mix(in oklab, var(--tl-alert) 88%, white); }
 
 /* Finished-book moment (Epic E1) — a calm completion card, not confetti. */
 .tl-finished-card {

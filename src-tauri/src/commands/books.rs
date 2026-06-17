@@ -1060,6 +1060,104 @@ pub fn cmd_set_active_book(book_id: String, state: State<DbState>) -> Result<(),
     activate_book(&conn, &book_id)
 }
 
+/// Hard-remove a book and everything scoped to it: the `books` row, ALL of its
+/// plans (active and soft-deleted alike — this is a real removal, not the
+/// "let go" soft-delete on `reading_plans.deleted_at`), its sections, sessions,
+/// notes, AI audit history (`ai_requests` + the `ai_request_usage` children),
+/// position/sittings caches, the per-book classifier-version setting, and the
+/// on-disk book directory (the immutable source copy + derived text). The
+/// global, content-addressed `phrases` cache is NOT book-scoped and is left
+/// intact by design (the same opening slice yields the same phrase for everyone).
+///
+/// This is the SHARED backing for both the first-run "undo my pick" back-nav
+/// (no confirmation — the caller guards on created-by-this-pick) and the
+/// user-facing "Remove from library" (the caller confirms first). The command
+/// itself never confirms and never guards: it removes whatever id it's handed.
+///
+/// Transactional and idempotent: the row deletes run in one transaction (so a
+/// failure leaves the library untouched), and removing an id that is already
+/// gone is a clean no-op (every DELETE matches zero rows; the directory simply
+/// isn't there). The DB commit happens BEFORE the filesystem removal so a
+/// transient FS error can never strand orphaned rows pointing at deleted files;
+/// a leftover directory after a committed delete is harmless and a re-delete
+/// sweeps it.
+#[tauri::command]
+pub fn cmd_delete_book(book_id: String, state: State<DbState>) -> Result<(), AppError> {
+    {
+        let conn = state.0.lock()?;
+        delete_book_cascade(&conn, &book_id)?;
+    }
+    // Best-effort: the rows are already gone, so a failure here only leaves an
+    // inert directory behind (a no-op re-delete clears it). `book_dir` rejects
+    // empty/traversal ids — for those there is nothing on disk to remove.
+    if let Ok(dir) = paths::book_dir(&book_id) {
+        if dir.exists() {
+            if let Err(e) = fs::remove_dir_all(&dir) {
+                // Never log the path (content-adjacent metadata — invariant 1).
+                tracing::warn!(category = "delete", "book dir removal skipped: {e}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The row-level cascade for [`cmd_delete_book`], extracted so it is testable
+/// against an in-memory DB. Deletes every book-scoped row in FK-safe order
+/// (children before parents — `foreign_keys = ON` in production, so a parent
+/// delete ahead of its children would abort the whole transaction), inside one
+/// transaction. Returns the number of `books` rows removed (0 when the id was
+/// already gone), so callers/tests can tell a real removal from a no-op.
+pub(crate) fn delete_book_cascade(conn: &Connection, book_id: &str) -> rusqlite::Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    // AI audit history: the usage children reference ai_requests with no cascade,
+    // so they go before their parent rows.
+    tx.execute(
+        "DELETE FROM ai_request_usage
+         WHERE request_id IN (SELECT id FROM ai_requests WHERE book_id = ?1)",
+        params![book_id],
+    )?;
+    tx.execute(
+        "DELETE FROM ai_requests WHERE book_id = ?1",
+        params![book_id],
+    )?;
+    tx.execute("DELETE FROM notes WHERE book_id = ?1", params![book_id])?;
+    tx.execute(
+        "DELETE FROM reading_sessions WHERE book_id = ?1",
+        params![book_id],
+    )?;
+    // ALL plans, not just soft-deleted ones — a real removal takes the whole
+    // reading history of the book with it.
+    tx.execute(
+        "DELETE FROM reading_plans WHERE book_id = ?1",
+        params![book_id],
+    )?;
+    tx.execute(
+        "DELETE FROM section_progress WHERE book_id = ?1",
+        params![book_id],
+    )?;
+    tx.execute("DELETE FROM sittings WHERE book_id = ?1", params![book_id])?;
+    tx.execute(
+        "DELETE FROM sittings_meta WHERE book_id = ?1",
+        params![book_id],
+    )?;
+    tx.execute(
+        "DELETE FROM reading_position WHERE book_id = ?1",
+        params![book_id],
+    )?;
+    tx.execute(
+        "DELETE FROM book_sections WHERE book_id = ?1",
+        params![book_id],
+    )?;
+    // Per-book KV setting (the classifier-version self-heal marker).
+    tx.execute(
+        "DELETE FROM settings WHERE key = ?1",
+        params![classify_version_key(book_id)],
+    )?;
+    let removed = tx.execute("DELETE FROM books WHERE id = ?1", params![book_id])?;
+    tx.commit()?;
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1434,5 +1532,186 @@ mod tests {
                 "reading prompt presumes nonfiction: {p:?}"
             );
         }
+    }
+
+    // ── cmd_delete_book / delete_book_cascade ──────────────────────────────
+    //
+    // The real schema with FK enforcement, exactly as production opens the DB —
+    // so an FK-order regression (a parent delete ahead of its children) aborts
+    // the transaction here instead of going unnoticed (cf. ai_retention's note).
+    fn delete_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn
+    }
+
+    /// Seed a book with a row in every book-scoped table so a single
+    /// `delete_book_cascade` can prove it reaches all of them.
+    fn seed_full_book(conn: &Connection, book_id: &str) {
+        conn.execute(
+            "INSERT INTO books (id, title, author, source_type, source_path, source_sha256, created_at)
+             VALUES (?1, 'T', 'A', 'txt', '/p', ?1, '2026-01-01T00:00:00Z')",
+            params![book_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO book_sections (id, book_id, label, sort_order, assignable)
+             VALUES (?1, ?2, 'Sec', 0, 1)",
+            params![format!("{book_id}_sec"), book_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO reading_plans (id, book_id, start_date, status, lifecycle)
+             VALUES (?1, ?2, '2026-01-01', 'active', 'active')",
+            params![format!("{book_id}_plan"), book_id],
+        )
+        .unwrap();
+        // A second, soft-deleted ("let go") plan — the real removal must take it
+        // too, not just the live one.
+        conn.execute(
+            "INSERT INTO reading_plans (id, book_id, start_date, status, lifecycle, deleted_at)
+             VALUES (?1, ?2, '2026-01-01', 'active', 'active', datetime('now'))",
+            params![format!("{book_id}_plan_gone"), book_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO reading_sessions (id, book_id, started_at) VALUES (?1, ?2, '2026-01-02T00:00:00Z')",
+            params![format!("{book_id}_sess"), book_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO notes (id, book_id, note_type, locator, body, created_at, updated_at)
+             VALUES (?1, ?2, 'Takeaway', 'char:0', 'a thought', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z')",
+            params![format!("{book_id}_note"), book_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ai_requests (id, book_id, mode, created_at) VALUES (?1, ?2, 'explain', '2026-01-02T00:00:00Z')",
+            params![format!("{book_id}_air"), book_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ai_request_usage (request_id, created_at) VALUES (?1, '2026-01-02T00:00:00Z')",
+            params![format!("{book_id}_air")],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO section_progress (book_id, section_id, last_locator) VALUES (?1, ?2, 'char:0')",
+            params![book_id, format!("{book_id}_sec")],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sittings (id, book_id, sort_order, start_section_id, start_offset, char_count, chapter_label)
+             VALUES (?1, ?2, 0, ?3, 0, 100, 'Sec')",
+            params![format!("{book_id}_sit"), book_id, format!("{book_id}_sec")],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sittings_meta (book_id, content_fingerprint, sitting_length_minutes, chunker_version, built_at)
+             VALUES (?1, 'fp', 25, 1, '2026-01-01T00:00:00Z')",
+            params![book_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO reading_position (book_id, furthest_section_id, furthest_offset, updated_at)
+             VALUES (?1, ?2, 50, '2026-01-02T00:00:00Z')",
+            params![book_id, format!("{book_id}_sec")],
+        )
+        .unwrap();
+        crate::settings::set_string(conn, &classify_version_key(book_id), "2").unwrap();
+    }
+
+    fn count_where(conn: &Connection, table: &str, col: &str, val: &str) -> i64 {
+        conn.query_row(
+            &format!("SELECT COUNT(*) FROM {table} WHERE {col} = ?1"),
+            params![val],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// Deleting a book removes its row and EVERY book-scoped child — plan
+    /// (including the soft-deleted one), notes, sessions, sections, AI history
+    /// (request + usage child), position/sittings caches, and the per-book
+    /// classifier setting — in one transaction.
+    #[test]
+    fn delete_book_removes_book_plan_notes_and_all_scoped_rows() {
+        let conn = delete_conn();
+        seed_full_book(&conn, "b");
+
+        let removed = delete_book_cascade(&conn, "b").expect("cascade");
+        assert_eq!(removed, 1, "exactly one book row removed");
+
+        assert_eq!(count_where(&conn, "books", "id", "b"), 0);
+        assert_eq!(count_where(&conn, "book_sections", "book_id", "b"), 0);
+        assert_eq!(
+            count_where(&conn, "reading_plans", "book_id", "b"),
+            0,
+            "all plans gone, soft-deleted included"
+        );
+        assert_eq!(count_where(&conn, "reading_sessions", "book_id", "b"), 0);
+        assert_eq!(count_where(&conn, "notes", "book_id", "b"), 0);
+        assert_eq!(count_where(&conn, "ai_requests", "book_id", "b"), 0);
+        assert_eq!(
+            count_where(&conn, "ai_request_usage", "request_id", "b_air"),
+            0,
+            "the AI usage child goes with its request"
+        );
+        assert_eq!(count_where(&conn, "section_progress", "book_id", "b"), 0);
+        assert_eq!(count_where(&conn, "sittings", "book_id", "b"), 0);
+        assert_eq!(count_where(&conn, "sittings_meta", "book_id", "b"), 0);
+        assert_eq!(count_where(&conn, "reading_position", "book_id", "b"), 0);
+        assert!(
+            settings::get_string(&conn, &classify_version_key("b")).is_none(),
+            "per-book classifier setting removed"
+        );
+    }
+
+    /// Idempotent: removing an id that isn't there deletes nothing and is a clean
+    /// no-op (0 book rows removed, no error).
+    #[test]
+    fn delete_book_missing_id_is_a_no_op() {
+        let conn = delete_conn();
+        seed_full_book(&conn, "real");
+
+        let removed = delete_book_cascade(&conn, "ghost").expect("no-op must not error");
+        assert_eq!(removed, 0, "no book row matched");
+        // The unrelated book is fully intact.
+        assert_eq!(count_where(&conn, "books", "id", "real"), 1);
+        assert_eq!(count_where(&conn, "notes", "book_id", "real"), 1);
+
+        // And it stays a no-op on a second call (truly idempotent).
+        assert_eq!(delete_book_cascade(&conn, "ghost").unwrap(), 0);
+    }
+
+    /// Deleting one book leaves every other book — and all of ITS rows —
+    /// untouched.
+    #[test]
+    fn delete_book_leaves_other_books_intact() {
+        let conn = delete_conn();
+        seed_full_book(&conn, "keep");
+        seed_full_book(&conn, "drop");
+
+        delete_book_cascade(&conn, "drop").expect("cascade");
+
+        assert_eq!(count_where(&conn, "books", "id", "drop"), 0);
+        // "keep" and its children all survive.
+        assert_eq!(count_where(&conn, "books", "id", "keep"), 1);
+        assert_eq!(count_where(&conn, "book_sections", "book_id", "keep"), 1);
+        assert_eq!(
+            count_where(&conn, "reading_plans", "book_id", "keep"),
+            2,
+            "both of keep's plans survive"
+        );
+        assert_eq!(count_where(&conn, "reading_sessions", "book_id", "keep"), 1);
+        assert_eq!(count_where(&conn, "notes", "book_id", "keep"), 1);
+        assert_eq!(count_where(&conn, "ai_requests", "book_id", "keep"), 1);
+        assert_eq!(
+            count_where(&conn, "ai_request_usage", "request_id", "keep_air"),
+            1
+        );
+        assert_eq!(count_where(&conn, "reading_position", "book_id", "keep"), 1);
+        assert!(settings::get_string(&conn, &classify_version_key("keep")).is_some());
     }
 }

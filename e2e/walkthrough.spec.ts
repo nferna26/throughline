@@ -232,6 +232,46 @@ test("book-chosen-then-reading-pace-dark", async ({ page }) => {
   await shoot(page, "25d-reading-pace-dark");
 });
 
+test("remove-from-library-affordance-and-confirm", async ({ page }) => {
+  // CORE-1093: the deliberate "Remove from library" affordance (PlansView) and
+  // the calm confirmation dialog (focus on Cancel, in-voice copy). Light theme.
+  await page.goto("/");
+  await page.getByRole("button", { name: /earlier attempt/i }).click();
+  const remove = page.getByRole("button", { name: /Remove from library/i });
+  await expect(remove).toBeVisible();
+  await shoot(page, "26-remove-from-library");
+
+  await remove.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: /Remove .*Meditations.* from your library\?/ })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await shoot(page, "27-remove-confirm");
+});
+
+test("remove-from-library-affordance-and-confirm-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /earlier attempt/i }).click();
+  const remove = page.getByRole("button", { name: /Remove from library/i });
+  await expect(remove).toBeVisible();
+  await shoot(page, "26b-remove-from-library-dark");
+
+  await remove.click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await shoot(page, "27b-remove-confirm-dark");
+});
+
+test("book-switcher-per-book-remove", async ({ page }) => {
+  // The same removal reachable from the book-switcher menu (a per-book control).
+  await page.goto("/");
+  await page.getByRole("button", { name: /Meditations/ }).first().click();
+  await expect(page.getByRole("menuitem", { name: /Remove Meditations from library/i })).toBeVisible();
+  await shoot(page, "28-switcher-remove");
+});
+
 test("returning-reader-skips-the-pace-step", async ({ page }) => {
   // A reader who already set a pace lands straight on Today — the question is
   // never re-asked. Start a plan goes through configure → Today, no pace UI.

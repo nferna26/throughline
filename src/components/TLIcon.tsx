@@ -42,6 +42,8 @@ const PATHS: Record<string, string> = {
   archive: "M3.8 4.5h12.4v3.2H3.8zM5 7.7v7.8h10V7.7M8 11h4",
   swap: "M5 7.5h10l-3-3M15 12.5H5l3 3",
   undo: "M7.5 8.5H13a3.5 3.5 0 0 1 0 7H8.5M7.5 8.5l3-3M7.5 8.5l3 3",
+  // Remove-from-library (CORE-1093) — a calm trash glyph in the same 20-grid.
+  trash: "M4.5 6h11M8 6V4.5h4V6M6 6v9.5A1 1 0 0 0 7 16.5h6a1 1 0 0 0 1-1V6M8.5 9v4.5M11.5 9v4.5",
 };
 
 import type { CSSProperties } from "react";

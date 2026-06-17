@@ -263,6 +263,7 @@ pub fn run() {
             commands::books::cmd_assignable_sections,
             commands::books::cmd_list_books,
             commands::books::cmd_set_active_book,
+            commands::books::cmd_delete_book,
             commands::books::cmd_configure_plan,
             // ── discover (public-domain catalogue; reader-initiated egress) ──
             commands::discover::cmd_discover_search,

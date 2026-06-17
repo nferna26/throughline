@@ -10,6 +10,9 @@ interface Props {
   onDiscover: () => void;
   /** Import a local .txt/.epub via the file picker (the secondary path). */
   onImport: () => void;
+  /** Remove a book from the library (CORE-1093). The parent confirms and
+   *  reconciles the active book; the switcher just asks for it. */
+  onRemoveBook: (book: Book) => void;
 }
 
 /**
@@ -20,7 +23,7 @@ interface Props {
  * `cmd_set_active_book` (in the parent). Stays a single calm control so the app
  * never becomes library-first (a hard non-goal).
  */
-export default function BookSwitcher({ activeBook, onSwitch, onDiscover, onImport }: Props) {
+export default function BookSwitcher({ activeBook, onSwitch, onDiscover, onImport, onRemoveBook }: Props) {
   const [open, setOpen] = useState(false);
   const [books, setBooks] = useState<Book[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -82,19 +85,29 @@ export default function BookSwitcher({ activeBook, onSwitch, onDiscover, onImpor
           {books?.map((b) => {
             const active = b.id === activeBook.id;
             return (
-              <button
-                key={b.id}
-                role="menuitemradio"
-                aria-checked={active}
-                className="tl-menu-item"
-                onClick={() => pick(b.id)}
-              >
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <span className="bk-t">{b.title}</span>
-                  {b.author && <span className="bk-a">{b.author}</span>}
-                </span>
-                {active && <span className="check"><TLIcon name="check" size={16} /></span>}
-              </button>
+              <div className="tl-menu-row" role="none" key={b.id}>
+                <button
+                  role="menuitemradio"
+                  aria-checked={active}
+                  className="tl-menu-item"
+                  onClick={() => pick(b.id)}
+                >
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span className="bk-t">{b.title}</span>
+                    {b.author && <span className="bk-a">{b.author}</span>}
+                  </span>
+                  {active && <span className="check"><TLIcon name="check" size={16} /></span>}
+                </button>
+                <button
+                  role="menuitem"
+                  className="tl-menu-remove"
+                  aria-label={`Remove ${b.title} from library`}
+                  title="Remove from library"
+                  onClick={() => { close(false); onRemoveBook(b); }}
+                >
+                  <TLIcon name="trash" size={15} />
+                </button>
+              </div>
             );
           })}
           <div className="tl-menu-sep" />

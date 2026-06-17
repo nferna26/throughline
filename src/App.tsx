@@ -11,6 +11,7 @@ import Discover from "./screens/Discover";
 import FrontDoor from "./screens/FrontDoor";
 import PlansView from "./components/PlansView";
 import RePlanDialog from "./components/RePlanDialog";
+import RemoveBookDialog from "./components/RemoveBookDialog";
 import TLIcon from "./components/TLIcon";
 import ThroughlineMark from "./components/ThroughlineMark";
 import UpdateChecker from "./components/UpdateChecker";
@@ -58,7 +59,11 @@ export async function handleDroppedPaths(paths: string[]): Promise<DropResult> {
 type View =
   | { kind: "today" }
   | { kind: "reader"; today: TodayCard }
-  | { kind: "setup"; book: Book }
+  // `createdByThisPick` is the back-nav undo guard (CORE-1142): true only when
+  // THIS pick imported the book (file/drag/discover into a brand-new book), so
+  // Back on the first setup screen may remove it. A new plan for an existing
+  // book sets it false — Back then just returns, never deletes the book.
+  | { kind: "setup"; book: Book; createdByThisPick: boolean }
   | { kind: "plans" }
   | { kind: "discover" }
   | { kind: "settings" };
@@ -198,7 +203,7 @@ export default function App() {
             await refreshToday();
             // Same routing as importBook: genuinely new → Book Setup Sheet;
             // a dedup just lands on Today as the active book.
-            setView(result.outcome.created ? { kind: "setup", book: result.outcome.book } : { kind: "today" });
+            setView(result.outcome.created ? { kind: "setup", book: result.outcome.book, createdByThisPick: true } : { kind: "today" });
           } else if (result.kind === "unsupported" || result.kind === "error") {
             setNotice(result.message);
           }
@@ -245,7 +250,7 @@ export default function App() {
     // rhythm before the first session. A dedup (switch to existing) just lands
     // on Today.
     if (outcome.created) {
-      setView({ kind: "setup", book: outcome.book });
+      setView({ kind: "setup", book: outcome.book, createdByThisPick: true });
     }
   }
 
@@ -260,7 +265,7 @@ export default function App() {
   // active book — mirrors the file-picker import outcome exactly.
   async function onDiscoverPick(outcome: ImportOutcome) {
     await refreshToday();
-    setView(outcome.created ? { kind: "setup", book: outcome.book } : { kind: "today" });
+    setView(outcome.created ? { kind: "setup", book: outcome.book, createdByThisPick: true } : { kind: "today" });
   }
 
   // Leaving the setup sheet: "Begin reading" goes straight into the first
@@ -282,6 +287,50 @@ export default function App() {
     } else {
       setView({ kind: "today" });
     }
+  }
+
+  // Back out of the first setup screen (CORE-1142). This is an UNDO of the pick,
+  // never a confirmed delete: when this pick is what imported the book, remove it
+  // and recompute Today (an empty library recomputes to null → the front door);
+  // otherwise (a new plan for a book already on the shelf) just return to Today,
+  // leaving the book untouched. The created-by-this-pick guard lives HERE, at the
+  // call site — cmd_delete_book itself never guards.
+  async function exitSetup(book: Book, createdByThisPick: boolean) {
+    if (createdByThisPick) {
+      try {
+        await invoke("cmd_delete_book", { bookId: book.id });
+      } catch (e) {
+        // A failed undo must not strand the reader on setup; surface it calmly
+        // and still return to Today, where the book remains until they retry.
+        setNotice(`Couldn't undo that: ${errorMessage(e)}`);
+      }
+      await refreshToday();
+    }
+    setView({ kind: "today" });
+  }
+
+  // "Remove from library" (CORE-1093): a deliberate, CONFIRMED removal (unlike
+  // the first-run back-nav undo). `removeTarget` holds the book whose confirm
+  // dialog is open; null = no dialog.
+  const [removeTarget, setRemoveTarget] = useState<Book | null>(null);
+
+  // Confirmed: hard-remove the book, then recompute. cmd_today reads the
+  // most-recently-opened remaining book, so deleting the ACTIVE book transparently
+  // falls through to the next book — or to null (the front door) when the library
+  // is now empty. Either way we leave the plans/reader/today surface (which may be
+  // bound to the just-deleted book) and land on the recomputed Today, so nothing
+  // ever points at a removed book.
+  async function confirmRemoveBook(book: Book) {
+    setRemoveTarget(null);
+    try {
+      await invoke("cmd_delete_book", { bookId: book.id });
+    } catch (e) {
+      setNotice(`Couldn't remove “${book.title}”: ${errorMessage(e)}`);
+      return;
+    }
+    setView({ kind: "today" });
+    setTab("today");
+    await refreshToday();
   }
 
   async function switchBook(bookId: string) {
@@ -310,7 +359,8 @@ export default function App() {
       setNotice(`Could not start a new plan: ${errorMessage(e)}`);
       return;
     }
-    setView({ kind: "setup", book });
+    // A new plan for a book already in the library — Back must NOT delete it.
+    setView({ kind: "setup", book, createdByThisPick: false });
   }
 
   function exitReader() {
@@ -437,7 +487,7 @@ export default function App() {
             <>
               <div className="tl-bookhead">
                 <div className="tl-bookhead-inner">
-                  <BookSwitcher activeBook={today.book} onSwitch={switchBook} onDiscover={openDiscover} onImport={importBook} />
+                  <BookSwitcher activeBook={today.book} onSwitch={switchBook} onDiscover={openDiscover} onImport={importBook} onRemoveBook={setRemoveTarget} />
                   <div className="tl-seg" role="tablist" aria-label="View">
                     <button
                       role="tab" id="tab-today"
@@ -475,7 +525,11 @@ export default function App() {
           <Reader today={view.today} onExit={exitReader} />
         )}
         {view.kind === "setup" && (
-          <BookSetupSheet book={view.book} onDone={finishSetup} />
+          <BookSetupSheet
+            book={view.book}
+            onDone={finishSetup}
+            onBack={() => { void exitSetup(view.book, view.createdByThisPick); }}
+          />
         )}
         {view.kind === "plans" && today && (
           <PlansView
@@ -487,6 +541,14 @@ export default function App() {
             onContinueReading={() => startReading(today)}
             onStartNewPlan={() => { void startNewPlanFlow(today.book); }}
             onChanged={refreshToday}
+            onRemoveBook={() => setRemoveTarget(today.book)}
+          />
+        )}
+        {removeTarget && (
+          <RemoveBookDialog
+            bookTitle={removeTarget.title}
+            onCancel={() => setRemoveTarget(null)}
+            onConfirm={() => { void confirmRemoveBook(removeTarget); }}
           />
         )}
         {replanActive && today && (

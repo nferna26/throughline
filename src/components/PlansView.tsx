@@ -47,6 +47,7 @@ export default function PlansView({
   onContinueReading,
   onStartNewPlan,
   onChanged,
+  onRemoveBook,
 }: {
   bookId: string;
   bookTitle: string;
@@ -56,6 +57,9 @@ export default function PlansView({
   onContinueReading: () => void;
   onStartNewPlan: () => void;
   onChanged?: () => void;
+  /** Remove the whole book from the library (CORE-1093). The parent confirms
+   *  and reconciles the active book; this view just asks for it. */
+  onRemoveBook: () => void;
 }) {
   const [plans, setPlans] = useState<PlanSummary[] | null>(null);
   const [undoId, setUndoId] = useState<string | null>(null);
@@ -207,7 +211,9 @@ export default function PlansView({
 
       <div className="tl-plans-actionbar">
         <div className="tl-plans-actionbar-inner">
-          <span className="note">Pausing and restarting are part of reading a hard book.</span>
+          <button className="tl-act danger" onClick={onRemoveBook}>
+            <TLIcon name="trash" size={14} /> Remove from library
+          </button>
           <span className="right">
             <button className="tl-btn tl-btn-ghost" onClick={onStartNewPlan}>
               <TLIcon name="flag" size={15} /> Start a new plan

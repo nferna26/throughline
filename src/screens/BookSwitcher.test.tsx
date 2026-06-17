@@ -28,14 +28,14 @@ beforeEach(() => mockInvoke.mockReset());
 
 describe("BookSwitcher", () => {
   it("shows the active book's title on the collapsed chip", () => {
-    render(<BookSwitcher activeBook={active} onSwitch={() => {}} onDiscover={() => {}} onImport={() => {}} />);
+    render(<BookSwitcher activeBook={active} onSwitch={() => {}} onDiscover={() => {}} onImport={() => {}} onRemoveBook={() => {}} />);
     expect(screen.getByRole("button", { name: /Active Book/ })).toBeInTheDocument();
   });
 
   it("lists every imported book when opened", async () => {
     mockInvoke.mockResolvedValueOnce(allBooks);
     const user = userEvent.setup();
-    render(<BookSwitcher activeBook={active} onSwitch={() => {}} onDiscover={() => {}} onImport={() => {}} />);
+    render(<BookSwitcher activeBook={active} onSwitch={() => {}} onDiscover={() => {}} onImport={() => {}} onRemoveBook={() => {}} />);
     await user.click(screen.getByRole("button", { name: /Active Book/ }));
     expect(await screen.findByText("Second Book")).toBeInTheDocument();
     expect(screen.getByText("Third Book")).toBeInTheDocument();
@@ -46,9 +46,23 @@ describe("BookSwitcher", () => {
     mockInvoke.mockResolvedValueOnce(allBooks);
     const onSwitch = vi.fn();
     const user = userEvent.setup();
-    render(<BookSwitcher activeBook={active} onSwitch={onSwitch} onDiscover={() => {}} onImport={() => {}} />);
+    render(<BookSwitcher activeBook={active} onSwitch={onSwitch} onDiscover={() => {}} onImport={() => {}} onRemoveBook={() => {}} />);
     await user.click(screen.getByRole("button", { name: /Active Book/ }));
     await user.click(await screen.findByText("Second Book"));
     expect(onSwitch).toHaveBeenCalledWith("b2");
+  });
+
+  it("offers a per-book Remove affordance that asks the parent (never deletes inline)", async () => {
+    mockInvoke.mockResolvedValueOnce(allBooks);
+    const onRemoveBook = vi.fn();
+    const user = userEvent.setup();
+    render(<BookSwitcher activeBook={active} onSwitch={() => {}} onDiscover={() => {}} onImport={() => {}} onRemoveBook={onRemoveBook} />);
+    await user.click(screen.getByRole("button", { name: /Active Book/ }));
+    // Each listed book gets its own labelled remove control.
+    const remove = await screen.findByRole("menuitem", { name: "Remove Second Book from library" });
+    await user.click(remove);
+    expect(onRemoveBook).toHaveBeenCalledWith(allBooks[1]);
+    // The switcher only requests removal — it must not delete on its own.
+    expect(mockInvoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
   });
 });

@@ -11,6 +11,11 @@ interface Props {
    *  ("Start reading"); false = land on Today ("I'll decide as I go", or a
    *  returning reader who already set a pace and skips this step). */
   onDone: (begin: boolean) => void;
+  /** Back out of the FIRST setup screen ("chosen") — an undo of the pick, not a
+   *  confirmed delete (CORE-1142). The caller decides whether that removes the
+   *  freshly imported book. Back on the second screen ("pace") is handled inside
+   *  this component as a return to "chosen" and never calls this. */
+  onBack: () => void;
 }
 
 /** The one added question, in reading terms — NEVER minutes. The three map
@@ -72,7 +77,7 @@ function PaceIcon({ minutes }: { minutes: number }) {
  * Pace persists globally (Settings owns the change-it-anytime control) AND on the
  * book's plan (cmd_configure_plan) — the existing per-book pacing the engine reads.
  */
-export default function BookSetupSheet({ book, onDone }: Props) {
+export default function BookSetupSheet({ book, onDone, onBack }: Props) {
   // false until we know whether to show the pace step — avoids a flash of the
   // question for a returning reader who skips it.
   const [ready, setReady] = useState(false);
@@ -147,6 +152,17 @@ export default function BookSetupSheet({ book, onDone }: Props) {
     }
   }
 
+  // Back affordance. On the pace step it's a return to the chosen screen (no
+  // delete); on the chosen screen it's the undo handoff (`onBack`) — the caller
+  // removes the book only when this pick created it.
+  function goBack() {
+    if (step === "pace") {
+      setStep("chosen");
+    } else {
+      onBack();
+    }
+  }
+
   // Roving radio focus: arrows move the selection (WAI-ARIA radio pattern).
   function onCardKey(e: React.KeyboardEvent, idx: number) {
     let next: number | null = null;
@@ -166,6 +182,20 @@ export default function BookSetupSheet({ book, onDone }: Props) {
   return (
     <div className="tl-journey-screen">
       <div className="tl-journey-scroll">
+        <div className="tl-journey-top">
+          <button
+            type="button"
+            className="tl-journey-back"
+            onClick={goBack}
+            disabled={submitting}
+            aria-label={step === "pace" ? "Back to the book you chose" : "Back, and remove this book"}
+          >
+            <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5l-5 5 5 5" />
+            </svg>
+            Back
+          </button>
+        </div>
         <div className="tl-journey-step">
           {step === "chosen" ? (
             // Screen A: the book you chose — the cover rises to centre.

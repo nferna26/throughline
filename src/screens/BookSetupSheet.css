@@ -18,6 +18,36 @@
   display: flex;
   flex-direction: column;
 }
+/* The Back affordance sits in its own bar at the top of the scroll so the step
+   below still centres in the remaining space (the step's margin:auto is intact).
+   `flex: 0 0 auto` keeps the bar from being stretched by the centred step. */
+.tl-journey-top {
+  flex: 0 0 auto;
+  padding: var(--tl-5) var(--tl-6) 0;
+}
+/* Mirrors Discover's .tl-lib-back (same quiet, keyboard-reachable back control). */
+.tl-journey-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--tl-sans);
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--tl-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px 4px 2px;
+  border-radius: var(--tl-r-sm);
+}
+.tl-journey-back:hover {
+  color: var(--tl-ink);
+}
+.tl-journey-back:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Each step is its own screen now (book chosen, then reading pace). margin:auto
    centres the single screen on both axes and still scrolls to the top if it ever
    exceeds the viewport (no flex top-clip). */

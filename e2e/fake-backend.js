@@ -168,6 +168,11 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_read_section_structure": return [];
       case "cmd_quote_warns": return false;
       case "cmd_set_active_book": return null;
+      case "cmd_delete_book":
+        // Removed → the library is now empty (single seeded book), so the next
+        // cmd_today returns the front door. Mirrors the real reconciliation.
+        window.__TL_FAKE_EMPTY__ = true;
+        return null;
       case "cmd_configure_plan":
         // Configuring the plan resolves the plan-less state — the next
         // cmd_today serves the reading card, so Begin reading opens the reader.

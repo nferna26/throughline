@@ -198,6 +198,127 @@ describe("App drag-and-drop import", () => {
   });
 });
 
+// ── First-run back-nav UNDO (CORE-1142) — the created-by-this-pick guard ─────
+// Back on the chosen screen is an undo, not a confirmed delete: it removes the
+// book ONLY when this pick is what created it. The guard lives at App's call
+// site (exitSetup), never in cmd_delete_book.
+describe("App first-run back-nav undo", () => {
+  const NO_PLAN_FOR = (book: typeof BOOK): TodayCard => ({
+    book,
+    plan: { id: "p", book_id: book.id, start_date: "2026-06-01", status: "no_plan", activated_at: null, sitting_length_minutes: null },
+    state: "no_plan", chapter_label: "Reading", phrase: null, estimated_minutes: 0,
+    fraction_complete: 0, next_label: null, section: null, sitting_start_locator: null,
+    sitting_end_locator: null, resume_locator: null, resume_percent: null,
+    memory: { last_capture: null, highlight_count: 0, note_count: 0 }, teaser: null,
+  });
+
+  it("Back on a freshly-picked book deletes it (undo) and returns to the front door", async () => {
+    setAppImpl({
+      cmd_import_book: { book: BOOK, created: true },
+      cmd_today: () => Promise.resolve(null), // empty library before and after the undo
+      cmd_delete_book: () => Promise.resolve(null),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText(/Begin with a book you mean to finish/i);
+    await waitFor(() => expect(mocks.dragHandlers.length).toBeGreaterThan(0));
+    await act(async () => {
+      await mocks.dragHandlers[0]({ payload: { type: "drop", paths: ["/tmp/confessions.epub"] } });
+    });
+    // On the chosen screen now; Back is the undo.
+    await screen.findByText("Added to Today");
+    await user.click(screen.getByRole("button", { name: /^Back/ }));
+
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_delete_book", { bookId: "b1" }));
+    expect(await screen.findByText(/Begin with a book you mean to finish/i)).toBeInTheDocument();
+  });
+
+  it("Back out of a NEW plan for an existing book never deletes it", async () => {
+    setAppImpl({
+      cmd_today: NO_PLAN_FOR(BOOK),
+      cmd_start_new_plan: () => Promise.resolve(null),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    // The plan-less book offers "Start a plan" → a setup with createdByThisPick=false.
+    await user.click(await screen.findByRole("button", { name: "Start a plan" }));
+    await screen.findByText("Added to Today");
+    await user.click(screen.getByRole("button", { name: /^Back/ }));
+
+    // Returned to Today, and the pre-existing book was NOT removed.
+    expect(await screen.findByRole("button", { name: "Start a plan" })).toBeInTheDocument();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
+  });
+});
+
+// ── Remove from library, with confirmation (CORE-1093) ───────────────────────
+describe("App remove-from-library", () => {
+  const NO_PLAN_FOR = (book: typeof BOOK): TodayCard => ({
+    book,
+    plan: { id: "p", book_id: book.id, start_date: "2026-06-01", status: "no_plan", activated_at: null, sitting_length_minutes: null },
+    state: "no_plan", chapter_label: "Reading", phrase: null, estimated_minutes: 0,
+    fraction_complete: 0, next_label: null, section: null, sitting_start_locator: null,
+    sitting_end_locator: null, resume_locator: null, resume_percent: null,
+    memory: { last_capture: null, highlight_count: 0, note_count: 0 }, teaser: null,
+  });
+
+  it("confirms, deletes the active book, and lands on the front door when the library is now empty", async () => {
+    let deleted = false;
+    setAppImpl({
+      cmd_today: () => Promise.resolve(deleted ? null : NO_PLAN_FOR(BOOK)),
+      cmd_list_books: () => Promise.resolve(deleted ? [] : [BOOK]),
+      cmd_delete_book: () => { deleted = true; return Promise.resolve(null); },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    const chip = await screen.findByRole("button", { name: /Confessions/, expanded: false });
+    await user.click(chip);
+    await user.click(await screen.findByRole("menuitem", { name: "Remove Confessions from library" }));
+    // A confirmation is required — nothing is deleted until the reader confirms.
+    const dialog = await screen.findByRole("dialog");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
+    await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_delete_book", { bookId: "b1" }));
+    expect(await screen.findByText(/Begin with a book you mean to finish/i)).toBeInTheDocument();
+  });
+
+  it("removing the active book switches Today to the most-recent remaining book (never stranded)", async () => {
+    let deleted = false;
+    setAppImpl({
+      cmd_today: () => Promise.resolve(deleted ? NO_PLAN_FOR(BOOK2) : NO_PLAN_FOR(BOOK)),
+      cmd_list_books: () => Promise.resolve(deleted ? [BOOK2] : [BOOK, BOOK2]),
+      cmd_delete_book: () => { deleted = true; return Promise.resolve(null); },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    const chip = await screen.findByRole("button", { name: /Confessions/, expanded: false });
+    await user.click(chip);
+    await user.click(await screen.findByRole("menuitem", { name: "Remove Confessions from library" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
+
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_delete_book", { bookId: "b1" }));
+    // Today now points at the remaining book, not the deleted one.
+    expect(await screen.findByRole("button", { name: /Middlemarch/, expanded: false })).toBeInTheDocument();
+  });
+
+  it("Cancel dismisses the confirm without deleting", async () => {
+    setAppImpl({
+      cmd_today: () => Promise.resolve(NO_PLAN_FOR(BOOK)),
+      cmd_list_books: () => Promise.resolve([BOOK]),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    const chip = await screen.findByRole("button", { name: /Confessions/, expanded: false });
+    await user.click(chip);
+    await user.click(await screen.findByRole("menuitem", { name: "Remove Confessions from library" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
+  });
+});
+
 describe("App update-relaunch focus handoff", () => {
   it("does not focus the window on a normal cold launch", async () => {
     setAppImpl();
