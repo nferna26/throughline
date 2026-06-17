@@ -25,7 +25,11 @@ pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<ImportOutc
     // Never log the source path: stderr/app.log are diagnostic surfaces and the
     // file name is content-adjacent metadata (CORE-1017 — usage, never content).
     tracing::debug!(category = "import", "cmd_import_book invoked");
-    import_or_dedup(&PathBuf::from(&path), state.inner())
+    // The file picker / drag-drop path: provenance is "imported", and the
+    // reader's original path is recorded so the moved-file "Locate the file"
+    // offer has an anchor. Throughline still keeps its own immutable copy.
+    let origin = crate::book_origin::BookOrigin::imported(Some(path.clone()));
+    import_or_dedup(&PathBuf::from(&path), origin, state.inner())
 }
 
 /// The single owned import path. Hashes the source for dedup, and on a fresh
@@ -36,7 +40,11 @@ pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<ImportOutc
 /// place. The DB lock is deliberately NOT held across `import::import_any`
 /// (which copies + sectionizes the whole file): we lock only for the dedup
 /// probe and again for the inserts.
-pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, AppError> {
+pub fn import_or_dedup(
+    src: &Path,
+    origin: crate::book_origin::BookOrigin,
+    state: &DbState,
+) -> Result<ImportOutcome, AppError> {
     // Dedup (skip & switch): if a book with this file's SHA-256 is already
     // imported, make it the active book and return it instead of creating a
     // duplicate. Hashing the source directly matches the stored hash because
@@ -82,6 +90,13 @@ pub fn import_or_dedup(src: &Path, state: &DbState) -> Result<ImportOutcome, App
     insert_book(&conn, &result.book)?;
     for s in &result.sections {
         insert_section(&conn, s)?;
+    }
+    // Record provenance + (for imports) the reader's original path beside the
+    // book's own copy. Best-effort: a sidecar failure degrades to the
+    // conservative "imported" default at read time, never failing the import.
+    // Never log `origin` — original_path is content-adjacent (invariant 1).
+    if let Err(_e) = crate::book_origin::write(&result.book.id, &origin) {
+        tracing::warn!(category = "import", book_id = %result.book.id, "origin sidecar write failed");
     }
     let p = plan::build_default_plan(&result.book.id);
     insert_plan(&conn, &p)?;
@@ -1029,15 +1044,137 @@ fn walk_toc_for_labels(nav: &[epub::doc::NavPoint], out: &mut Vec<(String, Strin
 #[tauri::command]
 pub fn cmd_list_books(state: State<DbState>) -> Result<Vec<Book>, AppError> {
     let conn = state.0.lock()?;
-    let mut stmt = conn.prepare(
-        "SELECT id, title, author, source_type, source_path, source_sha256, created_at, last_opened_at FROM books ORDER BY created_at ASC",
-    )?;
-    let rows = stmt.query_map([], book_from_row)?;
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r?);
+    Ok(list_all_books(&conn)?)
+}
+
+/// The enriched library shelf: every started book with its qualitative progress
+/// (`fraction`, hairline-only), reading-vs-finished split, current location
+/// label, provenance, and whether a real embedded cover exists. Read-only —
+/// rendering the library NEVER bumps `last_opened_at`, so merely opening the
+/// Library tab must not change which book is "active".
+#[tauri::command]
+pub fn cmd_library(state: State<DbState>) -> Result<Vec<models::LibraryEntry>, AppError> {
+    let conn = state.0.lock()?;
+    library_entries(&conn)
+}
+
+/// Compose one `LibraryEntry` per book. Progress + finished are derived from
+/// `reading_position` against the section spans — deliberately WITHOUT rebuilding
+/// the per-book sittings cache (which reads the whole body from disk), so the
+/// shelf stays cheap to render across a large library. The single active book's
+/// precise phrase still comes from `cmd_today` on the frontend.
+pub(crate) fn library_entries(conn: &Connection) -> Result<Vec<models::LibraryEntry>, AppError> {
+    let books = list_all_books(conn)?;
+    let active_id = fetch_active_book(conn)?.map(|b| b.id);
+    let mut out = Vec::with_capacity(books.len());
+    for book in books {
+        let sections = list_sections(conn, &book.id)?;
+        let furthest = sittings::furthest_global(conn, &book.id, &sections)?;
+        // Content end = the furthest end-locator among assignable sections (real
+        // content, not front/back matter). A book whose body couldn't be read
+        // has no spans → 0 → fraction 0, never spuriously "finished".
+        let content_end = sections
+            .iter()
+            .filter(|s| s.assignable)
+            .filter_map(|s| s.end_locator.as_deref().and_then(|x| x.parse::<i64>().ok()))
+            .max()
+            .unwrap_or(0);
+        let fraction = if content_end > 0 {
+            (furthest.unwrap_or(0) as f64 / content_end as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        // "Finished" is honored from EITHER an explicit completed plan (the
+        // persisted, section-based signal) OR the reader's furthest position
+        // reaching content end (the same notion Today shows). Conservative: a
+        // book that can't prove completion stays on the Reading shelf.
+        let plan_completed =
+            fetch_plan_for_book(conn, &book.id)?.is_some_and(|p| p.status == "completed");
+        let finished =
+            plan_completed || (content_end > 0 && furthest.is_some_and(|f| f >= content_end));
+        let location = location_label(&sections, furthest);
+        let origin = crate::book_origin::read(&book.id);
+        // The real cover shows only for an IMPORTED book that actually has one;
+        // catalogue books always wear cloth (design §4).
+        let has_cover = origin.is_imported() && crate::book_origin::has_cover(&book.id);
+        out.push(models::LibraryEntry {
+            is_active: active_id.as_deref() == Some(book.id.as_str()),
+            id: book.id,
+            title: book.title,
+            author: book.author,
+            provenance: origin.provenance,
+            has_cover,
+            finished,
+            fraction,
+            location,
+            last_opened_at: book.last_opened_at,
+        });
     }
     Ok(out)
+}
+
+/// The label of the section the reader's furthest position sits in (the
+/// switcher's "Chapter 2" line). Falls back to the last section at/below the
+/// position, then None for a never-opened book.
+fn location_label(sections: &[BookSection], furthest: Option<i64>) -> Option<String> {
+    let f = furthest?;
+    let mut best: Option<&BookSection> = None;
+    for s in sections.iter().filter(|s| s.assignable) {
+        let start = s
+            .start_locator
+            .as_deref()
+            .and_then(|x| x.parse::<i64>().ok());
+        let end = s.end_locator.as_deref().and_then(|x| x.parse::<i64>().ok());
+        if let (Some(st), Some(en)) = (start, end) {
+            if f >= st && f < en {
+                return Some(s.label.clone());
+            }
+            if f >= st {
+                best = Some(s);
+            }
+        }
+    }
+    best.map(|s| s.label.clone())
+}
+
+/// The book's embedded cover as a `data:` URI, or None → the UI draws cloth.
+/// Catalogue books ALWAYS return None (they wear cloth by design, even when the
+/// downloaded EPUB carried a cover). Path-traversal guarded inside `book_dir`.
+#[tauri::command]
+pub fn cmd_read_book_cover(book_id: String) -> Result<Option<String>, AppError> {
+    if !crate::book_origin::read(&book_id).is_imported() {
+        return Ok(None);
+    }
+    Ok(crate::book_origin::cover_data_uri(&book_id))
+}
+
+/// Provenance + moved-file status for the book detail view: the words ("Imported
+/// · your file" / "From the catalogue") and whether the calm "Still here, still
+/// readable" note should offer (an imported book whose recorded original moved).
+#[tauri::command]
+pub fn cmd_book_origin(book_id: String) -> Result<models::BookOriginInfo, AppError> {
+    // Reject traversal ids the same way every per-book command does.
+    paths::book_dir(&book_id).map_err(|e| AppError::validation(e.to_string()))?;
+    let o = crate::book_origin::read(&book_id);
+    let original_missing = crate::book_origin::original_missing(&o);
+    Ok(models::BookOriginInfo {
+        provenance: o.provenance,
+        original_path: o.original_path,
+        original_missing,
+    })
+}
+
+/// Re-associate an imported book's original file (the moved-file "Locate the
+/// file" action). Updates only the recorded path — Throughline already holds its
+/// own copy, so reading never depended on it; re-link is a future-re-export
+/// convenience. Never reads or touches the file's contents.
+#[tauri::command]
+pub fn cmd_relink_book(book_id: String, path: String) -> Result<(), AppError> {
+    paths::book_dir(&book_id).map_err(|e| AppError::validation(e.to_string()))?;
+    crate::book_origin::set_original_path(&book_id, &path)
+        // Never surface `path` in the error (content-adjacent, invariant 1).
+        .map_err(|_| AppError::io("could not save the file location".to_string()))?;
+    Ok(())
 }
 
 /// Make `book_id` the active book — the one `cmd_today` composes its card from.
@@ -1191,6 +1328,58 @@ mod tests {
         );
         assert!(card.section.is_none(), "no section without a plan");
         assert_eq!(card.fraction_complete, 0.0);
+    }
+
+    /// The library shelf's per-book enrichment: an in-progress book reports a
+    /// fractional position + its current chapter and stays off the Finished
+    /// shelf; a book read to content-end reports finished; the most-recently
+    /// opened book is flagged active (featured). Progress is a fraction for the
+    /// hairline — never surfaced as a number — and is derived from
+    /// reading_position WITHOUT rebuilding the sittings cache.
+    #[test]
+    fn library_entries_split_reading_finished_and_active() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO books (id,title,author,source_type,source_path,source_sha256,created_at,last_opened_at)
+               VALUES ('r','Reading Book','A. Author','txt','/p','h1','2026-01-01','2026-06-02T00:00:00Z'),
+                      ('d','Done Book',NULL,'txt','/p','h2','2026-01-01','2026-06-01T00:00:00Z');
+             -- Reading book: two assignable chapters, furthest at the start of ch.2.
+             INSERT INTO book_sections (id,book_id,label,start_locator,end_locator,sort_order,assignable)
+               VALUES ('r1','r','Chapter 1','0','100',0,1),
+                      ('r2','r','Chapter 2','100','200',1,1);
+             INSERT INTO reading_position (book_id,furthest_section_id,furthest_offset,updated_at)
+               VALUES ('r','r2',0,'2026-06-02T00:00:00Z');
+             -- Done book: one chapter, furthest at content end → finished by position.
+             INSERT INTO book_sections (id,book_id,label,start_locator,end_locator,sort_order,assignable)
+               VALUES ('d1','d','Only Chapter','0','100',0,1);
+             INSERT INTO reading_position (book_id,furthest_section_id,furthest_offset,updated_at)
+               VALUES ('d','d1',100,'2026-06-01T00:00:00Z');",
+        )
+        .unwrap();
+
+        let entries = library_entries(&conn).unwrap();
+        let r = entries.iter().find(|e| e.id == "r").unwrap();
+        let d = entries.iter().find(|e| e.id == "d").unwrap();
+
+        // Reading book: half-way (100/200), not finished, located in Chapter 2,
+        // and active (newest last_opened_at) so it is the featured book.
+        assert!(
+            (r.fraction - 0.5).abs() < 1e-9,
+            "fraction {} != 0.5",
+            r.fraction
+        );
+        assert!(!r.finished);
+        assert_eq!(r.location.as_deref(), Some("Chapter 2"));
+        assert!(r.is_active);
+        // Conservative default provenance for a book with no sidecar.
+        assert_eq!(r.provenance, crate::book_origin::IMPORTED);
+        assert!(!r.has_cover, "no extracted cover → cloth");
+
+        // Done book: position reached content end → finished, not active.
+        assert!(d.finished);
+        assert!((d.fraction - 1.0).abs() < 1e-9);
+        assert!(!d.is_active);
     }
 
     /// The book switcher's contract: activating a book makes it the active book

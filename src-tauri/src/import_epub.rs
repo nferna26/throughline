@@ -110,6 +110,13 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
         let _ = fs::set_permissions(&dest, perms);
     }
 
+    // Capture the book's OWN embedded cover (EPUB3 cover-image property / EPUB2
+    // `<meta name="cover">` guide) beside the immutable source, so the library
+    // shelf can show it AS-IS for imported books — a real cover is the
+    // provenance signal, never overwritten by the cloth treatment. Best-effort:
+    // a missing / oversized / unknown-format cover simply falls back to cloth.
+    write_embedded_cover(&mut doc, &book_dir);
+
     let sha = hash_file(&dest)?;
     let now = Utc::now().to_rfc3339();
 
@@ -184,6 +191,30 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
         last_opened_at: None,
     };
     Ok(ImportResult { book, sections })
+}
+
+/// Pull the EPUB's embedded cover (if any) and write it into the book dir as
+/// `cover.{ext}`. The `epub` crate's `get_cover` already resolves both the
+/// EPUB3 `properties="cover-image"` manifest item and the EPUB2 `<meta
+/// name="cover">` guide reference, and returns None when neither resolves.
+///
+/// Never errors and never logs the cover bytes or its internal EPUB path (both
+/// content-adjacent, CLAUDE.md invariant 1). An absent / empty / oversized /
+/// unknown-format cover leaves no file, so the UI falls back to cloth.
+fn write_embedded_cover<R: std::io::Read + std::io::Seek>(
+    doc: &mut epub::doc::EpubDoc<R>,
+    book_dir: &Path,
+) {
+    let Some((bytes, mime)) = doc.get_cover() else {
+        return;
+    };
+    if bytes.is_empty() || bytes.len() > crate::book_origin::MAX_COVER_BYTES {
+        return;
+    }
+    let Some(ext) = crate::book_origin::ext_for_mime(&mime) else {
+        return;
+    };
+    let _ = fs::write(book_dir.join(format!("cover.{ext}")), &bytes);
 }
 
 /// A spine item resolved to a reading section: its resource id, display label

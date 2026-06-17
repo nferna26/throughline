@@ -32,6 +32,25 @@ pub fn cmd_paths_info(state: State<DbState>) -> Result<serde_json::Value, AppErr
     }))
 }
 
+/// Reveal Throughline's single data folder in Finder — the "Show in Finder"
+/// action of the one-time data-folder moment. Opens ONLY the app's own
+/// app-support directory (never an arbitrary caller path), so there is no
+/// path-injection surface and no general "open anything" capability. Uses
+/// macOS `open` directly because tauri-plugin-shell/opener are deliberately not
+/// a dependency (Cargo.toml).
+#[tauri::command]
+pub fn cmd_reveal_data_folder() -> Result<(), AppError> {
+    let dir = paths::app_support_dir().map_err(|e| AppError::io(e.to_string()))?;
+    // Make sure the folder exists before revealing it (a brand-new install may
+    // not have created it yet).
+    let _ = paths::ensure_dirs();
+    std::process::Command::new("open")
+        .arg(&dir)
+        .spawn()
+        .map_err(|_| AppError::io("Could not open the data folder.".to_string()))?;
+    Ok(())
+}
+
 /// Mark that the next process startup is the completion of a reader-approved
 /// update relaunch and should bring Throughline back to the foreground.
 #[tauri::command]

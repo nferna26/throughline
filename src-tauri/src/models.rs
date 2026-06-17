@@ -135,6 +135,44 @@ pub struct ImportOutcome {
     pub created: bool,
 }
 
+/// One book on the library shelf — the bare `Book` row enriched with the
+/// qualitative progress and provenance the surface renders. Computed read-only:
+/// listing the library NEVER mutates state (no `last_opened_at` bump), so simply
+/// opening the Library tab can't change which book is active.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LibraryEntry {
+    pub id: String,
+    pub title: String,
+    pub author: Option<String>,
+    /// "imported" (the reader's own file) | "catalogue" (public-domain).
+    pub provenance: String,
+    /// A real embedded cover exists AND this is an imported book — the only case
+    /// the shelf shows a real cover (catalogue books always wear cloth).
+    pub has_cover: bool,
+    pub finished: bool,
+    /// Qualitative position 0.0..=1.0 for the hairline — rendered as a LENGTH,
+    /// never a number (mirrors `TodayCard.fraction_complete`).
+    pub fraction: f64,
+    /// Current location label ("Chapter II") for the switcher's recents line.
+    pub location: Option<String>,
+    pub last_opened_at: Option<String>,
+    /// True for the single active / "Reading now" book (featured, not on a shelf).
+    pub is_active: bool,
+}
+
+/// Provenance + moved-file status for the book detail view.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BookOriginInfo {
+    /// "imported" | "catalogue" — drives the detail-view provenance words.
+    pub provenance: String,
+    /// The reader's recorded original path (imported books only); never read for
+    /// reading, only to offer the moved-file re-link.
+    pub original_path: Option<String>,
+    /// An imported book whose recorded original file is no longer at its path —
+    /// the calm "Still here, still readable" note shows only when true.
+    pub original_missing: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TodayCard {
     pub book: Book,

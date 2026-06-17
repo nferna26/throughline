@@ -181,6 +181,21 @@ pub fn fetch_active_book(conn: &Connection) -> rusqlite::Result<Option<Book>> {
     }
 }
 
+/// Every book, oldest-first (`created_at ASC`) — the canonical library order.
+/// Backs both `cmd_list_books` and the enriched `cmd_library` shelf.
+pub fn list_all_books(conn: &Connection) -> rusqlite::Result<Vec<Book>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, author, source_type, source_path, source_sha256, created_at, last_opened_at
+         FROM books ORDER BY created_at ASC",
+    )?;
+    let rows = stmt.query_map([], book_from_row)?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
 pub fn bump_last_opened_at(conn: &Connection, book_id: &str) -> rusqlite::Result<()> {
     let now = Utc::now().to_rfc3339();
     conn.execute(

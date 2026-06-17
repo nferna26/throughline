@@ -29,6 +29,7 @@ pub mod ai_retention;
 pub mod ai_stub;
 pub mod backup;
 pub mod bin_guardrail;
+pub mod book_origin;
 pub mod book_structure;
 pub mod chunker;
 pub mod circuit_breaker;
@@ -262,6 +263,10 @@ pub fn run() {
             commands::books::cmd_list_sections,
             commands::books::cmd_assignable_sections,
             commands::books::cmd_list_books,
+            commands::books::cmd_library,
+            commands::books::cmd_read_book_cover,
+            commands::books::cmd_book_origin,
+            commands::books::cmd_relink_book,
             commands::books::cmd_set_active_book,
             commands::books::cmd_delete_book,
             commands::books::cmd_configure_plan,
@@ -308,6 +313,7 @@ pub fn run() {
             // ── settings + system info ──
             commands::settings_cmds::cmd_api_version,
             commands::settings_cmds::cmd_paths_info,
+            commands::settings_cmds::cmd_reveal_data_folder,
             commands::settings_cmds::cmd_prepare_update_relaunch_focus,
             commands::settings_cmds::cmd_consume_update_relaunch_focus,
             commands::settings_cmds::cmd_focus_main_window_after_update_relaunch,

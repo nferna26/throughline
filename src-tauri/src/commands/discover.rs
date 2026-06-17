@@ -586,8 +586,10 @@ async fn download_and_import(
 
     // No `await` between locking and unlocking the DB happens inside
     // import_or_dedup (it is fully synchronous), so this never holds the std
-    // Mutex across an await point.
-    let result = import_or_dedup(&tmp, state);
+    // Mutex across an await point. Provenance is "catalogue": this book is
+    // public-domain and re-downloadable, so there is no reader original file to
+    // anchor (the moved-file offer never applies) and the cloth cover is used.
+    let result = import_or_dedup(&tmp, crate::book_origin::BookOrigin::catalogue(), state);
     let _ = std::fs::remove_file(&tmp); // best-effort; the owned copy already exists
     result
 }
