@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import TLIcon, { type IconName } from "./TLIcon";
-import type { PlanSummary, TodayCard } from "../types";
+import type { BookOriginInfo, PlanSummary, Provenance, TodayCard } from "../types";
 
 /**
  * Plans for a book — the "frontispiece + back-matter" view (design handoff).
@@ -47,6 +48,7 @@ export default function PlansView({
   onContinueReading,
   onStartNewPlan,
   onChanged,
+  onRelinked,
   onRemoveBook,
 }: {
   bookId: string;
@@ -57,13 +59,47 @@ export default function PlansView({
   onContinueReading: () => void;
   onStartNewPlan: () => void;
   onChanged?: () => void;
-  /** Remove the whole book from the library (CORE-1093). The parent confirms
-   *  and reconciles the active book; this view just asks for it. */
-  onRemoveBook: () => void;
+  /** The reader re-associated the original file (moved-file re-link). */
+  onRelinked?: () => void;
+  /** Remove the whole book from the library (CORE-1093 / handoff §3). The parent
+   *  confirms (with the right source-specific copy) and reconciles the active
+   *  book; this view just asks for it, passing the book's provenance. */
+  onRemoveBook: (provenance: Provenance) => void;
 }) {
   const [plans, setPlans] = useState<PlanSummary[] | null>(null);
   const [undoId, setUndoId] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
+  // Provenance + moved-file status: the detail view is where provenance is
+  // spoken in WORDS and where the calm moved-file offer lives (handoff §4).
+  const [origin, setOrigin] = useState<BookOriginInfo | null>(null);
+  const [movedDismissed, setMovedDismissed] = useState(false);
+
+  const loadOrigin = useCallback(() => {
+    invoke<BookOriginInfo>("cmd_book_origin", { bookId })
+      .then(setOrigin)
+      .catch(() => setOrigin(null));
+  }, [bookId]);
+  useEffect(() => {
+    loadOrigin();
+  }, [loadOrigin]);
+
+  const relinkFile = async () => {
+    try {
+      const file = await openDialog({
+        multiple: false,
+        filters: [{ name: "Books", extensions: ["txt", "epub"] }],
+      });
+      if (!file) return;
+      const path = typeof file === "string" ? file : (file as any).path;
+      await invoke("cmd_relink_book", { bookId, path });
+      setMovedDismissed(true);
+      loadOrigin();
+      onRelinked?.();
+    } catch {
+      // A failed re-link is harmless — reading never depended on the original;
+      // leave the note so the reader can try again.
+    }
+  };
 
   const load = useCallback(
     () => invoke<PlanSummary[]>("cmd_list_plans_for_book", { bookId }).then(setPlans).catch(() => setPlans([])),
@@ -123,7 +159,36 @@ export default function PlansView({
             <div className="tl-eyebrow"><span className="dot" /> Plans for this book</div>
             <h1 className="tl-plans-book">{bookTitle}</h1>
             {bookAuthor && <div className="tl-plans-byline">{bookAuthor}</div>}
+            {origin && (
+              // Provenance, in words — available when you look for it, invisible
+              // when you don't (handoff §4). The only provenance words anywhere;
+              // the shelf carries it by cover reality alone.
+              <div className="tl-plans-prov">
+                {origin.provenance === "imported" ? "Imported · your file" : "From the catalogue"}
+              </div>
+            )}
           </div>
+
+          {origin?.original_missing && !movedDismissed && (
+            // The moved-file edge: because Throughline holds its own copy, a
+            // moved/deleted original NEVER breaks reading — so this is a calm,
+            // dismissible offer, never an error or a shelf-wide alarm.
+            <div className="tl-moved" role="note" aria-label="The original file moved">
+              <h3 className="tl-moved-title">Still here, still readable</h3>
+              <p className="tl-moved-body">
+                Looks like the original file for this book moved. Throughline keeps its own copy, so
+                your reading isn’t affected. You can point it at the file again if you’d like.
+              </p>
+              <div className="tl-moved-act">
+                <button className="tl-btn tl-btn-primary" onClick={() => void relinkFile()}>
+                  Locate the file
+                </button>
+                <button className="tl-btn tl-btn-ghost" onClick={() => setMovedDismissed(true)}>
+                  Leave it
+                </button>
+              </div>
+            </div>
+          )}
 
           {live ? (
             <div className="fp-live">
@@ -211,7 +276,7 @@ export default function PlansView({
 
       <div className="tl-plans-actionbar">
         <div className="tl-plans-actionbar-inner">
-          <button className="tl-act danger" onClick={onRemoveBook}>
+          <button className="tl-act danger" onClick={() => onRemoveBook(origin?.provenance ?? "imported")}>
             <TLIcon name="trash" size={14} /> Remove from library
           </button>
           <span className="right">

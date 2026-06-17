@@ -54,6 +54,40 @@ export interface ImportOutcome {
   created: boolean;
 }
 
+/** Where a book came from. "imported" = the reader's own file (may have a real
+ *  embedded cover; its original may move); "catalogue" = public-domain,
+ *  re-downloadable, always cloth. Mirrors the Rust `book_origin` sidecar. */
+export type Provenance = "imported" | "catalogue";
+
+/** One book on the library shelf — the bare Book row enriched (cmd_library) with
+ *  qualitative progress and provenance. Progress is a fraction for the hairline
+ *  only, never shown as a number; `finished` splits the Reading/Finished shelves;
+ *  `is_active` marks the single featured "Reading now" book. */
+export interface LibraryEntry {
+  id: string;
+  title: string;
+  author: string | null;
+  provenance: Provenance;
+  /** A real embedded cover exists AND this is an imported book (catalogue → cloth). */
+  has_cover: boolean;
+  finished: boolean;
+  /** 0..1 qualitative position, rendered as a hairline length — never a number. */
+  fraction: number;
+  /** Current location label ("Chapter II") for the switcher's recents line. */
+  location: string | null;
+  last_opened_at: string | null;
+  /** The single active/featured book (not repeated on a shelf). */
+  is_active: boolean;
+}
+
+/** Provenance + moved-file status for the book detail view (cmd_book_origin). */
+export interface BookOriginInfo {
+  provenance: Provenance;
+  original_path: string | null;
+  /** An imported book whose recorded original moved → the calm moved-file note. */
+  original_missing: boolean;
+}
+
 /** A row in the public-domain catalogue (Discover). `txt_url`/`epub_url` are
  *  opaque download URLs echoed straight back to `cmd_import_from_gutendex`; the
  *  UI never needs to understand them. The catalogue source brand name stays out

@@ -47,6 +47,12 @@
      --tl-sheet-shadow : near-flat — a 1px whisper + a hairline ring (NOT elevation). */
   --tl-desk:        #eceae2;
   --tl-sheet:       #fbfaf6;
+  /* Alias for the elevated dialog/sheet surface. Several long-standing rules
+     (.tl-confirm-sheet, .tl-replan-sheet, …) referenced an undefined
+     --tl-surface and so fell back to transparent — text then showed through the
+     scrim, failing AA. Aliasing it to --tl-sheet (resolved per active theme via
+     the var indirection) gives every dialog an opaque, AA surface in one place. */
+  --tl-surface:     var(--tl-sheet);
   --tl-sheet-edge:  var(--tl-line);
   --tl-ink-soft:    #3a382f;
   --tl-faint:       #908b82;
@@ -1269,3 +1275,455 @@
 @media (max-width: 560px) {
   .tl-update-pill { left: 14px; bottom: 14px; max-width: calc(100vw - 28px); }
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   The library surface (Library.tsx) — one calm shelf of started books.
+   Header + count, the active book featured ("Reading now"), a Reading shelf,
+   then a quiet Finished shelf on the same wall. Provenance is carried only by
+   cover reality (no badges). Progress is a hairline LENGTH + a human phrase,
+   never a number. All colours are --tl-* tokens, so warm dark is automatic.
+   ──────────────────────────────────────────────────────────────────── */
+.tl-library { display: block; }
+.tl-library-status,
+.tl-library-nomatch {
+  padding: 40px 28px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--tl-muted);
+  font-style: italic;
+}
+
+/* pinned header: title + quiet count, and (only past a large library) search */
+.tl-library-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--tl-bg);
+  padding: 20px 28px 12px;
+}
+.tl-library-head { display: flex; align-items: baseline; gap: 12px; }
+.tl-library-title {
+  font-family: var(--tl-serif);
+  font-weight: 500;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  color: var(--tl-ink);
+  margin: 0;
+}
+.tl-library-count { margin-left: auto; font-size: 11.5px; color: var(--tl-muted); }
+.tl-library-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--tl-panel);
+  border: 1px solid var(--tl-line-strong);
+  border-radius: var(--tl-r-sm);
+  padding: 8px 13px;
+  box-shadow: var(--tl-shadow-sm);
+  margin-top: 14px;
+}
+.tl-library-search svg { color: var(--tl-faint); flex: none; }
+.tl-library-search-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: var(--tl-sans);
+  font-size: 13px;
+  color: var(--tl-ink);
+}
+.tl-library-search-input::placeholder { color: var(--tl-muted); }
+
+.tl-library-scroll { padding: 18px 28px 36px; }
+
+/* the featured (active/Today) book */
+.tl-feature {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  padding: 18px;
+  background: var(--tl-sheet);
+  border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-lg);
+  margin-bottom: 26px;
+}
+.tl-feature .tl-cover.tl-feature-cover { width: 78px; height: 115px; }
+.tl-feature .tl-feature-cover .tl-cover-ct { font-size: 10px; }
+.tl-feature .tl-feature-cover .tl-cover-ca { font-size: 6.5px; margin-top: 5px; }
+.tl-feature-meta { min-width: 0; flex: 1; }
+.tl-feature-eyebrow {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--tl-accent);
+  margin: 0 0 6px;
+}
+.tl-feature-title {
+  font-family: var(--tl-serif);
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--tl-ink);
+  margin: 0 0 2px;
+  line-height: 1.15;
+}
+.tl-feature-author { font-size: 12px; color: var(--tl-muted); margin: 0 0 10px; }
+.tl-feature-progress {
+  font-family: var(--tl-serif);
+  font-style: italic;
+  font-size: 12.5px;
+  color: var(--tl-ink-soft);
+  margin: 0 0 13px;
+}
+.tl-btn.tl-feature-continue { gap: 7px; }
+
+/* section labels (Reading, then Finished, on the same wall) */
+.tl-shelf-label { display: flex; align-items: baseline; gap: 9px; margin: 0 0 14px; }
+.tl-shelf-label.second { margin-top: 26px; }
+.tl-shelf-name {
+  font-family: var(--tl-serif);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--tl-ink);
+  margin: 0;
+}
+.tl-shelf-count { font-size: 11px; color: var(--tl-muted); }
+
+/* the cover grid: 4-up full, then a denser 6-up wall once it outgrows a screen */
+.tl-shelf-grid { display: grid; align-items: start; }
+.tl-shelf-grid.few { grid-template-columns: repeat(4, 1fr); gap: 8px 18px; }
+.tl-shelf-grid.many { grid-template-columns: repeat(6, 1fr); gap: 6px 13px; }
+
+/* 4-up: full identity — cover, title, author, a thin progress hairline */
+.tl-shelf-grid.few .tl-book .tl-cover { width: 92px; height: 135px; }
+.tl-shelf-grid.few .tl-book .tl-cover-ct { font-size: 10.5px; }
+.tl-shelf-grid.few .tl-book .tl-cover-ca { font-size: 7px; margin-top: 5px; }
+/* 6-up: the cover carries identity — title/author drop away, checks stay */
+.tl-shelf-grid.many .tl-book .tl-cover { width: 66px; height: 97px; }
+.tl-shelf-grid.many .tl-book .tl-cover-ct { font-size: 7.5px; }
+.tl-shelf-grid.many .tl-book .tl-cover-ca { font-size: 5.5px; margin-top: 3px; }
+
+.tl-book-title {
+  font-family: var(--tl-serif);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tl-ink);
+  margin: 11px 0 1px;
+  line-height: 1.2;
+}
+.tl-book.fin .tl-book-title { color: var(--tl-ink-soft); }
+.tl-book-author { font-size: 10px; color: var(--tl-muted); margin: 0; line-height: 1.3; }
+.tl-book-prog {
+  margin-top: 9px;
+  width: 54px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--tl-line-strong);
+  overflow: hidden;
+}
+.tl-book-prog i { display: block; height: 100%; background: var(--tl-accent); }
+
+/* empty / return state */
+.tl-library-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 64px 40px;
+  min-height: 60vh;
+}
+.tl-library-empty-stack { display: flex; margin-bottom: 26px; }
+.tl-library-empty-stack .tl-cover { width: 70px; height: 103px; margin: 0 -8px; opacity: 0.5; }
+.tl-library-empty-stack .tl-cover:nth-child(2) { opacity: 0.85; transform: translateY(-6px); z-index: 1; }
+.tl-library-empty-title {
+  font-family: var(--tl-serif);
+  font-weight: 500;
+  font-size: 21px;
+  color: var(--tl-ink);
+  margin: 0 0 8px;
+}
+.tl-library-empty-sub {
+  font-size: 13px;
+  color: var(--tl-muted);
+  margin: 0 0 20px;
+  max-width: 38ch;
+  line-height: 1.55;
+}
+
+/* ── per-book context menu (shelf + switcher right-click) ── */
+.tl-ctx {
+  position: fixed;
+  z-index: 80;
+  min-width: 184px;
+  background: var(--tl-panel);
+  border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-md);
+  box-shadow: var(--tl-shadow-pop);
+  padding: 5px;
+}
+.tl-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  font-family: var(--tl-sans);
+  font-size: 12.5px;
+  color: var(--tl-ink);
+  background: none;
+  border: none;
+  padding: 8px 10px;
+  border-radius: var(--tl-r-sm);
+  cursor: pointer;
+}
+.tl-ctx-item:hover { background: var(--tl-sheet); }
+.tl-ctx-item:focus-visible { outline: none; background: var(--tl-accent-soft); }
+.tl-ctx-item.danger { color: var(--tl-clay); }
+.tl-ctx-item svg { flex: none; }
+.tl-ctx-sep { height: 1px; background: var(--tl-line); margin: 4px 6px; }
+
+/* ── Remove confirmation: clay "Remove", the two source-specific bodies ── */
+/* A deeper clay than the edge token so white text clears AA (the bright clay
+   #b4663c gives only 4.28:1 on white); dark mode keeps the bright clay with dark
+   text, which already clears it. */
+.tl-btn-clay { background: color-mix(in srgb, var(--tl-clay) 80%, black); color: #fff; border-color: transparent; padding: 13px 22px; }
+.tl-btn-clay:hover { background: color-mix(in srgb, var(--tl-clay) 68%, black); }
+[data-theme="dark"] .tl-btn-clay { background: var(--tl-clay); color: var(--tl-bg); }
+[data-theme="dark"] .tl-btn-clay:hover { background: color-mix(in srgb, var(--tl-clay) 88%, white); }
+.tl-confirm-sheet .tl-dlg-body {
+  margin: var(--tl-3) 0 8px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--tl-ink-soft);
+}
+.tl-confirm-sheet .tl-dlg-fine {
+  margin: 0 0 var(--tl-2);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--tl-muted);
+}
+
+/* ── the brief undo toast ("{Title} removed from your library. · Undo") ── */
+.tl-undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--tl-ink);
+  color: var(--tl-bg);
+  border-radius: var(--tl-r-md);
+  box-shadow: var(--tl-shadow-pop);
+  padding: 11px 16px;
+  font-size: 12.5px;
+  z-index: 85;
+  animation: tl-undo-rise 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.tl-undo-btn {
+  font-family: var(--tl-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--tl-accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--tl-r-sm);
+}
+.tl-undo-btn:focus-visible { outline: 2px solid var(--tl-focus); outline-offset: 2px; }
+@keyframes tl-undo-rise {
+  from { transform: translate(-50%, 8px); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tl-undo-toast { animation: none; }
+}
+
+/* ── the one-time data-folder moment ── */
+.tl-datafolder {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  background: var(--tl-surface);
+  border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-lg);
+  box-shadow: var(--tl-shadow-pop);
+  padding: var(--tl-7);
+}
+.tl-datafolder-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--tl-r-sm);
+  background: var(--tl-accent-soft);
+  color: var(--tl-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+.tl-datafolder-title {
+  font-family: var(--tl-serif);
+  font-weight: 500;
+  font-size: 18px;
+  color: var(--tl-ink);
+  margin: 0 0 8px;
+}
+.tl-datafolder-body {
+  font-size: 13px;
+  color: var(--tl-ink-soft);
+  margin: 0 0 14px;
+  line-height: 1.55;
+}
+.tl-datafolder-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  font-family: var(--tl-mono, ui-monospace, Menlo, monospace);
+  font-size: 11px;
+  color: var(--tl-muted);
+  background: var(--tl-sheet);
+  border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-sm);
+  padding: 7px 11px;
+  margin-bottom: 18px;
+}
+.tl-datafolder-path svg { color: var(--tl-faint); flex: none; }
+.tl-datafolder-pathtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-datafolder-act { display: flex; gap: 10px; }
+
+/* ── the book switcher popover (handoff §2) ── */
+.tl-switcher {
+  position: absolute;
+  top: 40px;
+  left: 0;
+  width: 300px;
+  background: var(--tl-panel);
+  border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-win);
+  box-shadow: var(--tl-shadow-pop);
+  overflow: hidden;
+  z-index: 60;
+}
+.tl-switcher-section { padding: 11px 14px 9px; }
+.tl-switcher-head {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--tl-muted);
+  margin: 0 0 8px;
+  padding: 0 2px;
+}
+.tl-switcher-jump {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--tl-sheet);
+  border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-sm);
+  padding: 6px 10px;
+  margin: 0 0 8px;
+}
+.tl-switcher-jump svg { color: var(--tl-faint); flex: none; }
+.tl-switcher-jump-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: var(--tl-sans);
+  font-size: 12px;
+  color: var(--tl-ink);
+}
+.tl-switcher-jump-input::placeholder { color: var(--tl-muted); }
+.tl-switcher-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 8px;
+  border-radius: var(--tl-r-sm);
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+.tl-switcher-row:hover { background: var(--tl-sheet); }
+.tl-switcher-row.active { background: var(--tl-accent-soft); }
+.tl-switcher-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--tl-focus); }
+.tl-switcher-cover.tl-cover { width: 30px; height: 44px; }
+.tl-switcher-cover .tl-cover-ct { font-size: 5px; }
+.tl-switcher-cover .tl-cover-ca { display: none; }
+.tl-switcher-cover .tl-cover-frame { inset: 4px 4px 4px 6px; }
+.tl-switcher-meta { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.tl-switcher-title {
+  font-family: var(--tl-serif);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tl-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-switcher-loc { font-size: 10.5px; color: var(--tl-muted); margin-top: 1px; }
+.tl-switcher-now {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tl-accent);
+  flex: none;
+}
+.tl-switcher-all {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 14px;
+  font-family: var(--tl-sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--tl-accent);
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--tl-line);
+}
+.tl-switcher-all:hover { background: var(--tl-sheet); }
+.tl-switcher-all:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--tl-focus); }
+.tl-switcher-all svg { flex: none; }
+
+/* ── book detail: provenance words + the calm moved-file note (handoff §4) ── */
+.tl-plans-prov {
+  font-family: var(--tl-serif);
+  font-style: italic;
+  font-size: 11.5px;
+  color: var(--tl-muted);
+  margin-top: 6px;
+}
+.tl-moved {
+  background: var(--tl-sheet);
+  border: 1px solid var(--tl-line);
+  border-radius: var(--tl-r-lg);
+  padding: 18px 20px;
+  margin: 20px 0 4px;
+}
+.tl-moved-title {
+  font-family: var(--tl-serif);
+  font-weight: 500;
+  font-size: 16px;
+  color: var(--tl-ink);
+  margin: 0 0 6px;
+}
+.tl-moved-body {
+  font-size: 12.5px;
+  color: var(--tl-muted);
+  margin: 0 0 14px;
+  line-height: 1.55;
+  max-width: 52ch;
+}
+.tl-moved-act { display: flex; gap: 10px; }

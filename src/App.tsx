@@ -9,21 +9,29 @@ import NotesBrowser from "./screens/NotesBrowser";
 import BookSetupSheet from "./screens/BookSetupSheet";
 import Discover from "./screens/Discover";
 import FrontDoor from "./screens/FrontDoor";
+import Library from "./screens/Library";
 import PlansView from "./components/PlansView";
 import RePlanDialog from "./components/RePlanDialog";
 import RemoveBookDialog from "./components/RemoveBookDialog";
+import DataFolderMoment from "./components/DataFolderMoment";
 import TLIcon from "./components/TLIcon";
 import ThroughlineMark from "./components/ThroughlineMark";
 import UpdateChecker from "./components/UpdateChecker";
 import "./App.css";
 import "./tl-theme.css";
-import type { TodayCard, Book, ImportOutcome, ExportPathStatus, PlanSummary } from "./types";
+import type { TodayCard, Book, ImportOutcome, ExportPathStatus, PlanSummary, Provenance } from "./types";
 import { errorMessage } from "./types";
 import { purgeLegacyBriefings } from "./sectionBriefing";
 import { migrateLegacyLocalStorageKeys } from "./legacyStorage";
 import { focusAfterUpdateRelaunchIfNeeded } from "./updateRelaunchFocus";
 
-type BookTab = "today" | "notes";
+type BookTab = "today" | "library" | "notes";
+
+/** How long the "{Title} removed · Undo" toast lingers before the removal is
+ *  actually committed. During this window NOTHING is deleted — the book is only
+ *  hidden — so undo is instant and the reading state (and a catalogue book's
+ *  downloaded text) is always intact (handoff §3). */
+const REMOVE_UNDO_MS = 8000;
 
 /** One human line for a failed import — routed through errorMessage so a raw
  *  AppError ({kind:…}) never reaches the reader as JSON. Exported for tests. */
@@ -72,6 +80,11 @@ export default function App() {
   const [today, setToday] = useState<TodayCard | null | undefined>(undefined);
   const [view, setView] = useState<View>({ kind: "today" });
   const [tab, setTab] = useState<BookTab>("today");
+  // Bumped whenever the set of books / their progress changes, so the Library
+  // tab re-fetches cmd_library. (Listing the library never mutates state, so a
+  // re-fetch is cheap and never changes which book is active.)
+  const [libraryKey, setLibraryKey] = useState(0);
+  const bumpLibrary = () => setLibraryKey((k) => k + 1);
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (localStorage.getItem("tl.theme") as "light" | "dark") || "light"
   );
@@ -99,14 +112,23 @@ export default function App() {
   // would otherwise strand the app on "Loading…" forever with no way out.
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // While the active book is mid-undo-window AND it was the last book (nothing to
+  // fall through to), cmd_today still returns it — so we hide that one book id
+  // here, showing the front door instead, until the window resolves. For every
+  // other removal we switch the active book away first, so this stays null.
+  const suppressBookIdRef = useRef<string | null>(null);
+
   async function refreshToday() {
     try {
       const t = await invoke<TodayCard | null>("cmd_today");
-      setToday(t ?? null);
+      const hidden = suppressBookIdRef.current;
+      setToday(t && hidden && t.book.id === hidden ? null : (t ?? null));
       setLoadError(null);
     } catch (e) {
       setLoadError(errorMessage(e));
     }
+    // Keep the Library shelf in step with any book/plan/progress change.
+    bumpLibrary();
   }
 
   useEffect(() => {
@@ -204,6 +226,8 @@ export default function App() {
             // Same routing as importBook: genuinely new → Book Setup Sheet;
             // a dedup just lands on Today as the active book.
             setView(result.outcome.created ? { kind: "setup", book: result.outcome.book, createdByThisPick: true } : { kind: "today" });
+            // A dragged-in own file is the same "first import" trigger.
+            if (result.outcome.created) void maybeShowDataFolderMoment();
           } else if (result.kind === "unsupported" || result.kind === "error") {
             setNotice(result.message);
           }
@@ -251,6 +275,9 @@ export default function App() {
     // on Today.
     if (outcome.created) {
       setView({ kind: "setup", book: outcome.book, createdByThisPick: true });
+      // First own-file import → the one-time data-folder moment (never for the
+      // catalogue path).
+      void maybeShowDataFolderMoment();
     }
   }
 
@@ -309,28 +336,190 @@ export default function App() {
     setView({ kind: "today" });
   }
 
-  // "Remove from library" (CORE-1093): a deliberate, CONFIRMED removal (unlike
-  // the first-run back-nav undo). `removeTarget` holds the book whose confirm
-  // dialog is open; null = no dialog.
-  const [removeTarget, setRemoveTarget] = useState<Book | null>(null);
+  // "Remove from library" (CORE-1093 / handoff §3): a deliberate, CONFIRMED
+  // removal with a brief undo window. `removeTarget` drives the source-specific
+  // confirmation dialog; `pendingRemoval` is the book hidden during its undo
+  // window. The real `cmd_delete_book` (a hard cascade) fires ONLY when the
+  // window elapses — so during the window nothing is deleted, undo is instant
+  // (it just cancels the timer), and a catalogue book's downloaded text is kept
+  // exactly as the design requires.
+  const [removeTarget, setRemoveTarget] = useState<{
+    id: string;
+    title: string;
+    provenance: Provenance;
+  } | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<{ id: string; title: string } | null>(null);
+  const removalTimer = useRef<number | null>(null);
+  const removalWasActiveRef = useRef(false);
 
-  // Confirmed: hard-remove the book, then recompute. cmd_today reads the
-  // most-recently-opened remaining book, so deleting the ACTIVE book transparently
-  // falls through to the next book — or to null (the front door) when the library
-  // is now empty. Either way we leave the plans/reader/today surface (which may be
-  // bound to the just-deleted book) and land on the recomputed Today, so nothing
-  // ever points at a removed book.
-  async function confirmRemoveBook(book: Book) {
-    setRemoveTarget(null);
+  // The one-time data-folder moment (handoff §6): non-null path = the calm card
+  // is open. Shown ONCE, the first time a reader imports their OWN file
+  // (catalogue-only readers never see it). The "already shown" flag lives in
+  // localStorage and is written only when the card is actually shown, so a
+  // default read can never re-trigger it; it never recurs and never nags.
+  const [dataFolder, setDataFolder] = useState<string | null>(null);
+  async function maybeShowDataFolderMoment() {
+    if (localStorage.getItem("tl.dataFolderSeen")) return;
     try {
-      await invoke("cmd_delete_book", { bookId: book.id });
+      const info = await invoke<{ app_support: string }>("cmd_paths_info");
+      localStorage.setItem("tl.dataFolderSeen", "1");
+      setDataFolder(info.app_support);
+    } catch {
+      // Can't resolve the path → don't show a broken card and don't burn the
+      // one-time flag; the next own-file import tries again.
+    }
+  }
+
+  // Open the confirmation for a book, with the provenance the caller already
+  // knows (the shelf, switcher, and detail view all carry it) so the dialog
+  // shows the right loss.
+  function requestRemove(id: string, title: string, provenance: Provenance) {
+    setRemoveTarget({ id, title, provenance });
+  }
+
+  // The most-recently-opened OTHER book — where Today falls through to when the
+  // book being removed is the active one (mirrors the backend's active selector).
+  async function mostRecentOtherBook(excludeId: string): Promise<string | null> {
+    try {
+      const books = await invoke<Book[]>("cmd_list_books");
+      const others = books.filter((b) => b.id !== excludeId);
+      if (others.length === 0) return null;
+      others.sort((a, b) => {
+        const ax = a.last_opened_at ?? a.created_at;
+        const bx = b.last_opened_at ?? b.created_at;
+        return ax < bx ? 1 : ax > bx ? -1 : 0;
+      });
+      return others[0].id;
+    } catch {
+      return null;
+    }
+  }
+
+  // Commit any in-flight removal to a real delete immediately — used before
+  // starting a new one (one undo window at a time) and on unmount, so a hidden
+  // book never lingers undeleted.
+  async function flushPendingRemoval() {
+    if (removalTimer.current) {
+      clearTimeout(removalTimer.current);
+      removalTimer.current = null;
+    }
+    const p = pendingRemoval;
+    if (!p) return;
+    setPendingRemoval(null);
+    suppressBookIdRef.current = null;
+    removalWasActiveRef.current = false;
+    try {
+      await invoke("cmd_delete_book", { bookId: p.id });
+    } catch {
+      /* best-effort; a failed delete just leaves the book in place */
+    }
+  }
+
+  // Confirmed Remove: hide the book and start the undo window. Removing the
+  // book on Today moves "active" to the next book first (or, if it was the last
+  // book, suppresses it so Today shows the front door) — so the shelf, switcher,
+  // and Today never point at a book that's mid-removal.
+  async function confirmRemoveBook() {
+    const target = removeTarget;
+    if (!target) return;
+    setRemoveTarget(null);
+    await flushPendingRemoval();
+
+    const isActive = today != null && today.book.id === target.id;
+    removalWasActiveRef.current = isActive;
+    setView({ kind: "today" });
+
+    if (isActive) {
+      const fallback = await mostRecentOtherBook(target.id);
+      if (fallback) {
+        try {
+          await invoke("cmd_set_active_book", { bookId: fallback });
+        } catch {
+          /* keep going; refreshToday still reflects the best available book */
+        }
+        suppressBookIdRef.current = null;
+      } else {
+        suppressBookIdRef.current = target.id;
+      }
+    }
+
+    setPendingRemoval({ id: target.id, title: target.title });
+    await refreshToday();
+
+    if (removalTimer.current) clearTimeout(removalTimer.current);
+    removalTimer.current = window.setTimeout(() => {
+      void commitRemoval(target.id);
+    }, REMOVE_UNDO_MS);
+  }
+
+  // The window elapsed: actually delete (the hard cascade), then recompute.
+  async function commitRemoval(id: string) {
+    removalTimer.current = null;
+    setPendingRemoval(null);
+    suppressBookIdRef.current = null;
+    removalWasActiveRef.current = false;
+    try {
+      await invoke("cmd_delete_book", { bookId: id });
     } catch (e) {
-      setNotice(`Couldn't remove “${book.title}”: ${errorMessage(e)}`);
+      setNotice(`Couldn't remove that book: ${errorMessage(e)}`);
+    }
+    await refreshToday();
+  }
+
+  // Undo within the window: nothing was deleted, so restoring is just un-hiding
+  // the book — and re-activating it if it was the book on Today, dropping the
+  // reader back exactly where they were.
+  async function undoRemoval() {
+    if (removalTimer.current) {
+      clearTimeout(removalTimer.current);
+      removalTimer.current = null;
+    }
+    const p = pendingRemoval;
+    if (!p) return;
+    setPendingRemoval(null);
+    suppressBookIdRef.current = null;
+    const wasActive = removalWasActiveRef.current;
+    removalWasActiveRef.current = false;
+    if (wasActive) {
+      try {
+        await invoke("cmd_set_active_book", { bookId: p.id });
+      } catch {
+        /* still un-hidden even if re-activation fails */
+      }
+    }
+    await refreshToday();
+  }
+
+  // Clear a live undo timer on unmount (it would otherwise fire after teardown).
+  useEffect(() => () => {
+    if (removalTimer.current) clearTimeout(removalTimer.current);
+  }, []);
+
+  // Switch to a library book and continue reading it (the shelf tap and the
+  // switcher's "Continue reading"). Drops into the reader when there's a place
+  // to resume, else lands on Today.
+  async function openLibraryBook(bookId: string) {
+    try {
+      await invoke("cmd_set_active_book", { bookId });
+    } catch (e) {
+      setNotice(`Could not open that book: ${errorMessage(e)}`);
       return;
     }
-    setView({ kind: "today" });
-    setTab("today");
-    await refreshToday();
+    let t: TodayCard | null = null;
+    try {
+      t = (await invoke<TodayCard | null>("cmd_today")) ?? null;
+      setToday(t);
+      bumpLibrary();
+    } catch (e) {
+      setNotice(`Could not open that book: ${errorMessage(e)}`);
+      return;
+    }
+    if (t && t.section) {
+      setView({ kind: "reader", today: t });
+    } else {
+      setView({ kind: "today" });
+      setTab("today");
+    }
   }
 
   async function switchBook(bookId: string) {
@@ -487,7 +676,16 @@ export default function App() {
             <>
               <div className="tl-bookhead">
                 <div className="tl-bookhead-inner">
-                  <BookSwitcher activeBook={today.book} onSwitch={switchBook} onDiscover={openDiscover} onImport={importBook} onRemoveBook={setRemoveTarget} />
+                  <BookSwitcher
+                    activeBook={today.book}
+                    refreshKey={libraryKey}
+                    pendingRemovalId={pendingRemoval?.id ?? null}
+                    onSwitch={switchBook}
+                    onOpenLibrary={() => setTab("library")}
+                    onShowInLibrary={() => setTab("library")}
+                    onContinueReading={openLibraryBook}
+                    onRemoveBook={(e) => requestRemove(e.id, e.title, e.provenance)}
+                  />
                   <div className="tl-seg" role="tablist" aria-label="View">
                     <button
                       role="tab" id="tab-today"
@@ -495,6 +693,13 @@ export default function App() {
                       onClick={() => setTab("today")}
                     >
                       Today
+                    </button>
+                    <button
+                      role="tab" id="tab-library"
+                      aria-selected={tab === "library"} aria-controls="book-panel"
+                      onClick={() => setTab("library")}
+                    >
+                      Library
                     </button>
                     <button
                       role="tab" id="tab-notes"
@@ -510,10 +715,20 @@ export default function App() {
                 className="tl-body"
                 id="book-panel"
                 role="tabpanel"
-                aria-labelledby={tab === "today" ? "tab-today" : "tab-notes"}
+                aria-labelledby={tab === "today" ? "tab-today" : tab === "library" ? "tab-library" : "tab-notes"}
               >
                 {tab === "today" ? (
                   <Today today={today} onDiscover={openDiscover} onStart={startReading} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} onPlans={() => setView({ kind: "plans" })} />
+                ) : tab === "library" ? (
+                  <Library
+                    today={today}
+                    refreshKey={libraryKey}
+                    pendingRemovalId={pendingRemoval?.id ?? null}
+                    onContinueReading={() => startReading(today)}
+                    onOpenBook={openLibraryBook}
+                    onRequestRemove={(entry) => requestRemove(entry.id, entry.title, entry.provenance)}
+                    onBrowse={openDiscover}
+                  />
                 ) : (
                   <NotesBrowser book={today.book} />
                 )}
@@ -541,15 +756,31 @@ export default function App() {
             onContinueReading={() => startReading(today)}
             onStartNewPlan={() => { void startNewPlanFlow(today.book); }}
             onChanged={refreshToday}
-            onRemoveBook={() => setRemoveTarget(today.book)}
+            onRelinked={refreshToday}
+            onRemoveBook={(provenance) => requestRemove(today.book.id, today.book.title, provenance)}
           />
         )}
         {removeTarget && (
           <RemoveBookDialog
-            bookTitle={removeTarget.title}
-            onCancel={() => setRemoveTarget(null)}
-            onConfirm={() => { void confirmRemoveBook(removeTarget); }}
+            title={removeTarget.title}
+            provenance={removeTarget.provenance}
+            onKeep={() => setRemoveTarget(null)}
+            onRemove={() => { void confirmRemoveBook(); }}
           />
+        )}
+        {pendingRemoval && (
+          // The brief, quiet undo. Announced politely; its action is keyboard-
+          // reachable for the whole window. Nothing has actually been deleted
+          // yet — Undo simply cancels the pending commit.
+          <div className="tl-undo-toast" role="status" aria-live="polite">
+            <span className="tl-undo-msg">{pendingRemoval.title} removed from your library.</span>
+            <button type="button" className="tl-undo-btn" onClick={() => { void undoRemoval(); }}>
+              Undo
+            </button>
+          </div>
+        )}
+        {dataFolder && (
+          <DataFolderMoment path={dataFolder} onClose={() => setDataFolder(null)} />
         )}
         {replanActive && today && (
           <RePlanDialog

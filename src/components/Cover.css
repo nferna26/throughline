@@ -81,6 +81,62 @@
   overflow: hidden;
 }
 
+/* ── the embedded (real) cover: the book's own art, shown as-is ──
+   No cloth weave, no gilt frame, no spine ridge — the photograph is the whole
+   object. A real cover is the provenance signal for an imported book; we never
+   overwrite it for brand consistency. */
+.tl-cover.embed {
+  background-image: none;
+  padding: 0;
+}
+.tl-cover.embed::before {
+  display: none;
+}
+.tl-cover-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* ── the small letterpress completion check (finished books) ──
+   A quiet pressed-in mark in the top-right, never a trophy. Paired with the
+   "Finished" section + the book button's state word, so completion is never
+   carried by colour alone. */
+.tl-cover-done {
+  position: absolute;
+  right: 7px;
+  top: 7px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(20, 18, 12, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(2px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), inset 0 0.5px 0 rgba(255, 255, 255, 0.18);
+}
+.tl-cover-done svg {
+  width: 11px;
+  height: 11px;
+  color: #f4f1ea;
+}
+.tl-cover.sz-search .tl-cover-done {
+  width: 15px;
+  height: 15px;
+  right: 5px;
+  top: 5px;
+}
+.tl-cover.sz-search .tl-cover-done svg {
+  width: 9px;
+  height: 9px;
+}
+
 /* ── the warm cloth palette (light) ── */
 .tl-cover.c1 { background-color: #2e4a37; color: #ece5d2; }
 .tl-cover.c2 { background-color: #7a5e3c; color: #f3ead4; }

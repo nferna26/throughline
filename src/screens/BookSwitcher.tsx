@@ -1,32 +1,57 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import Cover from "../components/Cover";
 import TLIcon from "../components/TLIcon";
-import type { Book } from "../types";
+import BookContextMenu from "../components/BookContextMenu";
+import { bookAriaLabel } from "../libraryProgress";
+import type { Book, LibraryEntry, Provenance } from "../types";
 
 interface Props {
   activeBook: Book;
+  /** Bumped by the parent when books / progress change, to re-fetch on open. */
+  refreshKey: number;
+  /** A book mid-undo-window — hidden from the recents list. */
+  pendingRemovalId: string | null;
   onSwitch: (bookId: string) => void;
-  /** Open the public-domain catalogue (the primary "get a book" path). */
-  onDiscover: () => void;
-  /** Import a local .txt/.epub via the file picker (the secondary path). */
-  onImport: () => void;
-  /** Remove a book from the library (CORE-1093). The parent confirms and
-   *  reconciles the active book; the switcher just asks for it. */
-  onRemoveBook: (book: Book) => void;
+  /** "All books in your library" → the Library surface. */
+  onOpenLibrary: () => void;
+  /** Context menu "Show in library" → the Library surface. */
+  onShowInLibrary: (bookId: string) => void;
+  /** Context menu "Continue reading" → switch + open the reader. */
+  onContinueReading: (bookId: string) => void;
+  /** Context menu "Remove from library" → opens the confirmation in the parent. */
+  onRemoveBook: (entry: { id: string; title: string; provenance: Provenance }) => void;
 }
 
 /**
- * Quiet book-switcher chip for the book-header band. Collapsed it shows only the
- * current book's title; opening it lists every imported book (active one
- * checked) plus two escape hatches — find a new book in the catalogue, or import
- * a local file. Switching bumps the book's `last_opened_at` via
- * `cmd_set_active_book` (in the parent). Stays a single calm control so the app
- * never becomes library-first (a hard non-goal).
+ * The book switcher (handoff §2): the quick jump from the title-bar book button.
+ * Recents first (covers + title + current location, the active one marked
+ * "Now"), a jump field only once there are more than a handful, and a way
+ * through to the full library. Right-click a row for the calm per-book actions
+ * (Continue reading · Show in library · Remove from library). It stays a single
+ * calm control so the app never becomes library-first.
  */
-export default function BookSwitcher({ activeBook, onSwitch, onDiscover, onImport, onRemoveBook }: Props) {
+
+/** A jump/search field joins the switcher only past this many recents; below it
+ *  the short list is enough. */
+const JUMP_THRESHOLD = 8;
+
+export default function BookSwitcher({
+  activeBook,
+  refreshKey,
+  pendingRemovalId,
+  onSwitch,
+  onOpenLibrary,
+  onShowInLibrary,
+  onContinueReading,
+  onRemoveBook,
+}: Props) {
   const [open, setOpen] = useState(false);
-  const [books, setBooks] = useState<Book[] | null>(null);
+  const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
+  const [covers, setCovers] = useState<Record<string, string>>({});
   const [err, setErr] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [menu, setMenu] = useState<{ entry: LibraryEntry; x: number; y: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
 
@@ -34,23 +59,44 @@ export default function BookSwitcher({ activeBook, onSwitch, onDiscover, onImpor
     if (!open) return;
     let cancelled = false;
     setErr(null);
-    invoke<Book[]>("cmd_list_books")
-      .then((list) => { if (!cancelled) setBooks(list); })
-      .catch((e: any) => { if (!cancelled) setErr(String(e?.message ?? e)); });
-    return () => { cancelled = true; };
-  }, [open]);
+    invoke<LibraryEntry[]>("cmd_library")
+      .then((list) => {
+        if (cancelled) return;
+        setEntries(list);
+        // Fetch real covers for imported-with-cover books.
+        for (const e of list.filter((x) => x.has_cover)) {
+          invoke<string | null>("cmd_read_book_cover", { bookId: e.id })
+            .then((uri) => {
+              if (!cancelled && uri) setCovers((prev) => (prev[e.id] ? prev : { ...prev, [e.id]: uri }));
+            })
+            .catch(() => {});
+        }
+      })
+      .catch((e: any) => {
+        if (!cancelled) setErr(String(e?.message ?? e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, refreshKey]);
 
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        // A click outside closes the switcher — unless the context menu (which
+        // renders in a portal-like fixed layer inside the container) is up.
+        if (!menu) setOpen(false);
+      }
     }
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
+  }, [open, menu]);
 
   function close(restoreFocus: boolean) {
     setOpen(false);
+    setMenu(null);
+    setQuery("");
     if (restoreFocus) chipRef.current?.focus();
   }
 
@@ -59,16 +105,41 @@ export default function BookSwitcher({ activeBook, onSwitch, onDiscover, onImpor
     if (bookId !== activeBook.id) onSwitch(bookId);
   }
 
+  // Recents: every started book, most-recently-opened first, minus a book that's
+  // mid-removal. The active one is marked "Now".
+  const recents = (entries ?? [])
+    .filter((e) => e.id !== pendingRemovalId)
+    .slice()
+    .sort((a, b) => {
+      if (a.is_active) return -1;
+      if (b.is_active) return 1;
+      const ax = a.last_opened_at ?? "";
+      const bx = b.last_opened_at ?? "";
+      return ax < bx ? 1 : ax > bx ? -1 : 0;
+    });
+  const showJump = recents.length > JUMP_THRESHOLD;
+  const q = query.trim().toLowerCase();
+  const shown = q
+    ? recents.filter(
+        (e) => e.title.toLowerCase().includes(q) || (e.author ?? "").toLowerCase().includes(q),
+      )
+    : recents;
+
   return (
     <div
       style={{ position: "relative" }}
       ref={containerRef}
-      onKeyDown={(e) => { if (e.key === "Escape" && open) { e.stopPropagation(); close(true); } }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && open && !menu) {
+          e.stopPropagation();
+          close(true);
+        }
+      }}
     >
       <button
         ref={chipRef}
         className="tl-chip"
-        aria-haspopup="menu"
+        aria-haspopup="true"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         title="Switch book"
@@ -79,53 +150,99 @@ export default function BookSwitcher({ activeBook, onSwitch, onDiscover, onImpor
       </button>
 
       {open && (
-        <div className="tl-menu" role="menu" aria-label="Switch book" style={{ top: 40, left: 0 }}>
-          {books === null && !err && <div className="tl-menu-status">Loading…</div>}
-          {err && <div className="tl-menu-status" style={{ color: "var(--tl-alert)" }}>{err}</div>}
-          {books?.map((b) => {
-            const active = b.id === activeBook.id;
-            return (
-              <div className="tl-menu-row" role="none" key={b.id}>
-                <button
-                  role="menuitemradio"
-                  aria-checked={active}
-                  className="tl-menu-item"
-                  onClick={() => pick(b.id)}
-                >
-                  <span style={{ flex: 1, minWidth: 0 }}>
-                    <span className="bk-t">{b.title}</span>
-                    {b.author && <span className="bk-a">{b.author}</span>}
-                  </span>
-                  {active && <span className="check"><TLIcon name="check" size={16} /></span>}
-                </button>
-                <button
-                  role="menuitem"
-                  className="tl-menu-remove"
-                  aria-label={`Remove ${b.title} from library`}
-                  title="Remove from library"
-                  onClick={() => { close(false); onRemoveBook(b); }}
-                >
-                  <TLIcon name="trash" size={15} />
-                </button>
+        <div className="tl-switcher" aria-label="Switch book">
+          <div className="tl-switcher-section">
+            <p className="tl-switcher-head">Recent</p>
+            {entries === null && !err && <div className="tl-menu-status">Loading…</div>}
+            {err && (
+              <div className="tl-menu-status" style={{ color: "var(--tl-alert)" }}>
+                {err}
               </div>
-            );
-          })}
-          <div className="tl-menu-sep" />
-          <button
-            role="menuitem"
-            className="tl-menu-item tl-menu-add"
-            onClick={() => { close(true); onDiscover(); }}
-          >
-            <TLIcon name="search" size={16} /><span>Find another book</span>
-          </button>
-          <button
-            role="menuitem"
-            className="tl-menu-item tl-menu-add"
-            onClick={() => { close(true); onImport(); }}
-          >
-            <TLIcon name="upload" size={16} /><span>Import a file…</span>
+            )}
+            {showJump && (
+              <div className="tl-switcher-jump">
+                <TLIcon name="search" size={14} />
+                <input
+                  type="search"
+                  className="tl-switcher-jump-input"
+                  placeholder="Jump to a book"
+                  aria-label="Jump to a book"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
+            )}
+            {shown.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                className={`tl-switcher-row${b.is_active ? " active" : ""}`}
+                aria-label={bookAriaLabel(b.title, b.author, b.finished)}
+                onClick={() => pick(b.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setMenu({ entry: b, x: e.clientX, y: e.clientY });
+                }}
+              >
+                <Cover
+                  title={b.title}
+                  author={b.author}
+                  size="search"
+                  className="tl-switcher-cover"
+                  coverSrc={b.has_cover ? covers[b.id] : undefined}
+                />
+                <span className="tl-switcher-meta">
+                  <span className="tl-switcher-title">{b.title}</span>
+                  {b.location && <span className="tl-switcher-loc">{b.location}</span>}
+                </span>
+                {b.is_active && <span className="tl-switcher-now">Now</span>}
+              </button>
+            ))}
+            {q && shown.length === 0 && <div className="tl-menu-status">No matches</div>}
+          </div>
+          <button type="button" className="tl-switcher-all" onClick={() => { close(true); onOpenLibrary(); }}>
+            <TLIcon name="columns" size={15} /> All books in your library
           </button>
         </div>
+      )}
+
+      {menu && (
+        <BookContextMenu
+          x={menu.x}
+          y={menu.y}
+          label={`Actions for ${menu.entry.title}`}
+          onClose={() => setMenu(null)}
+          actions={[
+            {
+              key: "continue",
+              label: "Continue reading",
+              icon: "arrowRight",
+              onSelect: () => {
+                close(false);
+                onContinueReading(menu.entry.id);
+              },
+            },
+            {
+              key: "show",
+              label: "Show in library",
+              icon: "columns",
+              onSelect: () => {
+                close(false);
+                onShowInLibrary(menu.entry.id);
+              },
+            },
+            {
+              key: "remove",
+              label: "Remove from library",
+              icon: "trash",
+              danger: true,
+              onSelect: () => {
+                close(false);
+                onRemoveBook({ id: menu.entry.id, title: menu.entry.title, provenance: menu.entry.provenance });
+              },
+            },
+          ]}
+        />
       )}
     </div>
   );
