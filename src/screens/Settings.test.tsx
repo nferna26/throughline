@@ -494,7 +494,7 @@ describe("Settings — 4-section redesign", () => {
     wire({ ai_provider: "company" });
     render(<Settings />);
     await waitFor(() => expect(screen.getByText("Throughline AI is active.")).toBeInTheDocument());
-    expect(screen.getByText("About 220 questions left.")).toBeInTheDocument();
+    expect(await screen.findByText("About 220 questions left.")).toBeInTheDocument();
     // Reader language only: questions, never tokens or dollars.
     expect(screen.queryByText(/token|\$\d/i)).toBeNull();
   });
