@@ -36,6 +36,33 @@ describe("Cover — the generated cloth book", () => {
     expect(container.querySelector(".tl-cover-ca")).toBeNull();
   });
 
+  it("shows a real embedded cover as-is (no cloth, no gilt frame)", () => {
+    const src = "data:image/png;base64,AAAA";
+    const { container } = render(<Cover title="Sapiens" author="Harari" coverSrc={src} />);
+    const cover = container.querySelector(".tl-cover")!;
+    expect(cover.classList.contains("embed")).toBe(true);
+    // The cloth treatment (palette class + gilt frame + painted title) is gone.
+    expect(cover.className).not.toMatch(/\bc[1-6]\b/);
+    expect(container.querySelector(".tl-cover-frame")).toBeNull();
+    expect(container.querySelector(".tl-cover-ct")).toBeNull();
+    const img = container.querySelector("img.tl-cover-img") as HTMLImageElement;
+    expect(img).not.toBeNull();
+    expect(img.getAttribute("src")).toBe(src);
+  });
+
+  it("marks a finished book with a completion check (not colour alone)", () => {
+    const { container } = render(<Cover title="Walden" author="Thoreau" finished />);
+    const done = container.querySelector(".tl-cover-done");
+    expect(done).not.toBeNull();
+    // The check is a glyph (svg path), so it survives a monochrome / high-contrast view.
+    expect(done!.querySelector("svg path")).not.toBeNull();
+  });
+
+  it("draws no completion check for an unfinished book", () => {
+    const { container } = render(<Cover title="Walden" author="Thoreau" />);
+    expect(container.querySelector(".tl-cover-done")).toBeNull();
+  });
+
   it("spreads its cloth across the small warm palette (not all one colour)", () => {
     const titles = [
       "Meditations", "Walden", "Pride and Prejudice", "Frankenstein", "Dracula",

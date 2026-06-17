@@ -3,47 +3,68 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import RemoveBookDialog from "./RemoveBookDialog";
 
-describe("RemoveBookDialog", () => {
-  it("names the book and warns what is deleted, with Remove / Cancel actions", () => {
-    render(<RemoveBookDialog bookTitle="Confessions" onConfirm={() => {}} onCancel={() => {}} />);
+describe("RemoveBookDialog — two source-specific confirmations", () => {
+  it("imported: names the real loss and reassures about the original file", () => {
+    render(
+      <RemoveBookDialog title="Sapiens" provenance="imported" onKeep={() => {}} onRemove={() => {}} />,
+    );
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(screen.getByRole("heading", { name: /Remove .*Confessions.* from your library\?/ })).toBeInTheDocument();
-    expect(screen.getByText(/place and notes for it will be deleted/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Remove Sapiens?" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Your reading progress, notes, and tutor history for it will be deleted."),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Your original file isn’t affected/)).toBeInTheDocument();
+    // Never any "only copy" language.
+    expect(dialog.textContent).not.toMatch(/only copy/i);
+  });
+
+  it("catalogue: light loss, free to re-add from the catalogue", () => {
+    render(
+      <RemoveBookDialog title="Meditations" provenance="catalogue" onKeep={() => {}} onRemove={() => {}} />,
+    );
+    expect(screen.getByRole("heading", { name: "Remove Meditations?" })).toBeInTheDocument();
+    expect(
+      screen.getByText("It leaves your library. You can add it back from the catalogue anytime, free."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Your reading plan and notes for it will be cleared.")).toBeInTheDocument();
+  });
+
+  it("offers Keep it / Remove, and opens with focus on Keep it (the safe default)", () => {
+    render(
+      <RemoveBookDialog title="Walden" provenance="imported" onKeep={() => {}} onRemove={() => {}} />,
+    );
+    expect(screen.getByRole("button", { name: "Keep it" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keep it" })).toHaveFocus();
   });
 
-  it("opens with focus on Cancel (the safe choice), not Remove", () => {
-    render(<RemoveBookDialog bookTitle="Confessions" onConfirm={() => {}} onCancel={() => {}} />);
-    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
-  });
-
-  it("Remove confirms; Cancel and Escape both cancel", async () => {
-    const onConfirm = vi.fn();
-    const onCancel = vi.fn();
+  it("Remove confirms; Keep it and Escape both keep the book", async () => {
+    const onRemove = vi.fn();
+    const onKeep = vi.fn();
     const user = userEvent.setup();
     const { rerender } = render(
-      <RemoveBookDialog bookTitle="Confessions" onConfirm={onConfirm} onCancel={onCancel} />,
+      <RemoveBookDialog title="Walden" provenance="imported" onKeep={onKeep} onRemove={onRemove} />,
     );
     await user.click(screen.getByRole("button", { name: "Remove" }));
-    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onRemove).toHaveBeenCalledTimes(1);
 
-    rerender(<RemoveBookDialog bookTitle="Confessions" onConfirm={onConfirm} onCancel={onCancel} />);
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(onCancel).toHaveBeenCalledTimes(1);
+    rerender(
+      <RemoveBookDialog title="Walden" provenance="imported" onKeep={onKeep} onRemove={onRemove} />,
+    );
+    await user.click(screen.getByRole("button", { name: "Keep it" }));
+    expect(onKeep).toHaveBeenCalledTimes(1);
 
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(onCancel).toHaveBeenCalledTimes(2);
+    expect(onKeep).toHaveBeenCalledTimes(2);
   });
 
-  it("returns focus to the opener when it closes", async () => {
-    const onCancel = vi.fn();
+  it("returns focus to the opener when it closes", () => {
     function Harness() {
       return (
         <>
           <button>opener</button>
-          <RemoveBookDialog bookTitle="Confessions" onConfirm={() => {}} onCancel={onCancel} />
+          <RemoveBookDialog title="Walden" provenance="catalogue" onKeep={() => {}} onRemove={() => {}} />
         </>
       );
     }
@@ -51,10 +72,8 @@ describe("RemoveBookDialog", () => {
     document.body.appendChild(opener);
     opener.focus();
     const { unmount } = render(<Harness />);
-    // Dialog took focus (Cancel).
-    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Keep it" })).toHaveFocus();
     unmount();
-    // On close, focus returns to whatever was focused when it opened.
     expect(opener).toHaveFocus();
     opener.remove();
   });

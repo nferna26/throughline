@@ -494,7 +494,10 @@ describe("Settings — 4-section redesign", () => {
     wire({ ai_provider: "company" });
     render(<Settings />);
     await waitFor(() => expect(screen.getByText("Throughline AI is active.")).toBeInTheDocument());
-    expect(screen.getByText("About 220 questions left.")).toBeInTheDocument();
+    // The credits line resolves from a SEPARATE async call (company credits) than
+    // the status line, so wait for it too — a bare sync getByText races under
+    // parallel-load timing and flakes (it is not painted in the same tick).
+    await waitFor(() => expect(screen.getByText("About 220 questions left.")).toBeInTheDocument());
     // Reader language only: questions, never tokens or dollars.
     expect(screen.queryByText(/token|\$\d/i)).toBeNull();
   });

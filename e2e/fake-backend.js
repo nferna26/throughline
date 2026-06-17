@@ -102,6 +102,81 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
   let noteSeq = 100;
   const nowIso = () => "2026-06-07T08:30:00Z";
 
+  // ── Library seed (handoff §1) ────────────────────────────────────────────────
+  // A self-contained SVG "embedded cover" for the imported-with-cover case — no
+  // external asset, so the cover renders identically in headless Chromium.
+  const EMBED_COVER =
+    "data:image/svg+xml;base64," +
+    btoa(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="180">' +
+        '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">' +
+        '<stop offset="0" stop-color="#1b2a33"/><stop offset="0.6" stop-color="#324653"/>' +
+        '<stop offset="1" stop-color="#5b7384"/></linearGradient></defs>' +
+        '<rect width="120" height="180" fill="url(#g)"/>' +
+        '<text x="12" y="42" fill="#fff" font-family="Georgia" font-size="14" font-weight="700">Sapiens</text>' +
+        '<text x="12" y="168" fill="rgba(255,255,255,.92)" font-family="Inter" font-size="8" letter-spacing="1.5">HARARI</text>' +
+        "</svg>",
+    );
+
+  const LIB_TITLES = [
+    "Walden", "Dracula", "The Trial", "Educated", "Emma", "Ulysses", "The Iliad",
+    "Middlemarch", "Notes from Underground", "Crime and Punishment", "Frankenstein",
+    "The Republic", "Heart of Darkness", "Sense & Sensibility", "Beyond Good & Evil",
+    "Pride & Prejudice", "War and Peace", "The Odyssey", "Bleak House", "Anna Karenina",
+  ];
+  const LIB_AUTHORS = [
+    "H. D. Thoreau", "Bram Stoker", "Franz Kafka", "Tara Westover", "Jane Austen",
+    "James Joyce", "Homer", "George Eliot", "Dostoevsky", "Dostoevsky", "Mary Shelley",
+    "Plato", "Joseph Conrad", "Jane Austen", "Friedrich Nietzsche", "Jane Austen",
+    "Leo Tolstoy", "Homer", "Charles Dickens", "Leo Tolstoy",
+  ];
+
+  // Build an n-book library: index 0 is the active/featured book (the TODAY
+  // book, so the featured card's progress matches the real card), index 2 is the
+  // one imported-with-cover book (Sapiens), the rest are catalogue cloth covers;
+  // roughly a third are finished. Recency descends with the index.
+  function makeLibrary(n) {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      if (i === 0) {
+        out.push({
+          id: BOOK.id, title: BOOK.title, author: BOOK.author, provenance: "imported",
+          has_cover: false, finished: false, fraction: TODAY.fraction_complete,
+          location: TODAY.chapter_label, last_opened_at: BOOK.last_opened_at, is_active: true,
+        });
+        continue;
+      }
+      const embed = i === 2;
+      const finished = !embed && i % 3 === 0;
+      out.push({
+        id: embed ? "lib_embed" : "lib_" + i,
+        title: embed ? "Sapiens" : LIB_TITLES[i % LIB_TITLES.length],
+        author: embed ? "Yuval Noah Harari" : LIB_AUTHORS[i % LIB_AUTHORS.length],
+        provenance: embed ? "imported" : "catalogue",
+        has_cover: embed,
+        finished,
+        fraction: finished ? 1 : 0.12 + ((i * 13) % 70) / 100,
+        location: "Chapter " + (1 + (i % 9)),
+        last_opened_at: "2026-06-" + String(Math.max(1, 28 - i)).padStart(2, "0") + "T09:00:00Z",
+        is_active: false,
+      });
+    }
+    return out;
+  }
+
+  function libraryDefault() {
+    if (window.__TL_FAKE_EMPTY__) return [];
+    const n = window.__TL_FAKE_LIBRARY_N__;
+    if (typeof n === "number") return makeLibrary(n);
+    // The everyday case: the active book as a one-book library.
+    return [{
+      id: BOOK.id, title: BOOK.title, author: BOOK.author,
+      provenance: window.__TL_FAKE_CATALOGUE__ ? "catalogue" : "imported",
+      has_cover: false, finished: false, fraction: TODAY.fraction_complete,
+      location: TODAY.chapter_label, last_opened_at: BOOK.last_opened_at, is_active: true,
+    }];
+  }
+
   // ── Command table ────────────────────────────────────────────────────────────
   function handle(cmd, args) {
     switch (cmd) {
@@ -162,6 +237,33 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
         window.__TL_FAKE_MAILTO_OPENED__ = true;
         return null;
       case "cmd_list_books": return window.__TL_FAKE_EMPTY__ ? [] : [BOOK];
+      // ── library surface (handoff §1/§4) ──
+      case "cmd_library": return libraryDefault();
+      case "cmd_read_book_cover":
+        return args && typeof args.bookId === "string" && args.bookId.indexOf("embed") !== -1
+          ? EMBED_COVER
+          : null;
+      case "cmd_book_origin":
+        return {
+          provenance: window.__TL_FAKE_CATALOGUE__ ? "catalogue" : "imported",
+          original_path: window.__TL_FAKE_MOVED_FILE__ ? "/Users/demo/Books/walden.epub" : null,
+          original_missing: !!window.__TL_FAKE_MOVED_FILE__,
+        };
+      case "cmd_relink_book": window.__TL_FAKE_MOVED_FILE__ = false; return null;
+      case "cmd_reveal_data_folder": window.__TL_FAKE_REVEAL_OPENED__ = true; return null;
+      case "cmd_paths_info":
+        return {
+          app_support: "/Users/demo/Library/Application Support/Throughline",
+          db_path: "/Users/demo/Library/Application Support/Throughline/reading.db",
+          export_root: "/Users/demo/Documents/Throughline",
+        };
+      // The file picker (plugin-dialog) + a created import, so the one-time
+      // data-folder moment can be driven in the walkthrough.
+      case "plugin:dialog|open": return window.__TL_FAKE_PICK_PATH__ || null;
+      case "cmd_import_book": {
+        window.__TL_FAKE_EMPTY__ = false;
+        return { book: Object.assign({}, BOOK, { id: "lib_embed", title: "Sapiens", author: "Yuval Noah Harari", source_type: "epub" }), created: true };
+      }
       case "cmd_assignable_sections": return SECTIONS;
       case "cmd_list_notes": return NOTES.slice();
       case "cmd_read_section_text": return SECTION_TEXT;

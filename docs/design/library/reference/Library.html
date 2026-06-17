@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Throughline · The library</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400;1,8..60,500&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --paper:#F4F1EA; --surface:#FBFAF6; --card:#FFFFFF;
+  --primary:#2E4A37; --primary-deep:#243B2C; --accent:#3E7A4E; --accent-soft:rgba(62,122,78,.10);
+  --ink:#1A1A18; --ink-70:rgba(26,26,24,.70); --muted:#6B6B66; --faint:#98937F;
+  --border:#E5E1D8; --border-strong:#D8D3C6; --on-primary:#F4F1EA;
+  --clay:#B4663C; --clay-soft:rgba(180,102,60,.10);
+  --serif:"Source Serif 4",Georgia,serif; --sans:Inter,-apple-system,system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  --shadow-win:0 30px 60px -18px rgba(30,28,18,.28),0 8px 20px -8px rgba(30,28,18,.16),0 0 0 1px rgba(40,36,24,.06);
+  --shadow-sm:0 1px 2px rgba(40,36,24,.05),0 0 0 1px rgba(40,36,24,.05);
+  --shadow-book:0 12px 24px -10px rgba(30,28,18,.32),0 2px 5px rgba(30,28,18,.14);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:#E6E3DB;color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.6;}
+.page{max-width:1280px;margin:0 auto;padding:56px 32px 120px;}
+
+.doc-head{max-width:780px;margin-bottom:8px;}
+.doc-kicker{font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 14px;}
+.doc-head h1{font-family:var(--serif);font-weight:500;font-size:40px;line-height:1.08;letter-spacing:-.02em;margin:0 0 14px;}
+.doc-head p{font-size:15.5px;color:var(--ink-70);margin:0;max-width:70ch;}
+
+/* model strip */
+.model{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin:28px 0 0;background:var(--paper);border:1px solid var(--border);border-radius:13px;overflow:hidden;}
+.model div{padding:16px 20px;border-right:1px solid var(--border);}
+.model div:last-child{border-right:none;}
+.model h5{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);margin:0 0 5px;}
+.model p{font-size:12px;color:var(--muted);margin:0;line-height:1.5;}
+.model p b{color:var(--ink);font-weight:600;}
+@media(max-width:860px){.model{grid-template-columns:1fr;}.model div{border-right:none;border-bottom:1px solid var(--border);}}
+
+.sec{margin-top:62px;}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px;}
+.sec-num{font-family:var(--serif);font-style:italic;font-size:20px;color:var(--accent);}
+.sec-head h2{font-family:var(--serif);font-weight:500;font-size:26px;letter-spacing:-.01em;margin:0;}
+.sec-tag{font-size:11.5px;font-weight:600;color:var(--faint);letter-spacing:.04em;border:1px solid var(--border-strong);border-radius:999px;padding:3px 10px;margin-left:auto;white-space:nowrap;}
+.sec-intro{font-size:14.5px;color:var(--muted);max-width:80ch;margin:0 0 24px;}
+.sec-intro b{color:var(--ink);font-weight:600;}
+
+.frame-label{display:flex;align-items:center;gap:10px;font-size:12px;color:#736f64;margin:0 0 12px 4px;}
+.frame-label b{color:#4a463d;font-weight:600;font-size:12.5px;}
+.frame-label .dot{width:5px;height:5px;border-radius:50%;background:#a39d8d;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px;}
+.grid2>*{min-width:0;}
+@media(max-width:1060px){.grid2{grid-template-columns:1fr;}}
+
+/* ===== window ===== */
+.win{border-radius:13px;overflow:hidden;box-shadow:var(--shadow-win);background:var(--paper);}
+.win.dark{--paper:#1C1914;--surface:#242018;--card:#2A251D;--ink:#ECE7DC;--ink-70:rgba(236,231,220,.72);
+  --muted:#9C968A;--faint:#7B7567;--border:#383329;--border-strong:#443E31;--primary:#A7C5B1;--primary-deep:#B9D2C1;
+  --accent:#A7C5B1;--accent-soft:rgba(167,197,177,.13);--on-primary:#16140F;--clay:#C99A6A;--clay-soft:rgba(201,154,106,.14);
+  --shadow-book:0 12px 24px -10px rgba(0,0,0,.5),0 2px 5px rgba(0,0,0,.3);--shadow-sm:0 1px 2px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.04);}
+.winbar{height:44px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:13px;padding:0 16px;}
+.tl{display:flex;gap:8px;}
+.tl i{width:12px;height:12px;border-radius:50%;display:block;}
+.tl .r{background:#E06B5C;}.tl .y{background:#E3B24C;}.tl .g{background:#6FA85B;}
+.winbar .bwm{display:inline-flex;align-items:center;gap:8px;margin-left:4px;}
+.winbar .bwm .m{width:21px;height:21px;border-radius:6px;background:var(--primary);display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:600;color:var(--on-primary);font-size:13px;}
+.winbar .bwm .t{font-family:var(--serif);font-size:14.5px;color:var(--ink);}
+.winbar .bwm .t b{font-weight:700;}
+.winbar .seg{margin-left:auto;display:flex;gap:2px;background:var(--paper);border:1px solid var(--border);border-radius:8px;padding:2px;}
+.winbar .seg span{font-size:11px;font-weight:500;color:var(--muted);padding:3px 11px;border-radius:6px;}
+.winbar .seg span.on{background:var(--card);color:var(--ink);box-shadow:var(--shadow-sm);}
+
+/* ===== cover object ===== */
+.cover{
+  border-radius:2px 5px 5px 2px;position:relative;overflow:hidden;
+  display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;
+  background-color:#2E4A37;
+  background-image:
+    repeating-linear-gradient(90deg,rgba(255,255,255,.022) 0 1px,transparent 1px 3px),
+    repeating-linear-gradient(0deg,rgba(0,0,0,.04) 0 1px,transparent 1px 3px),
+    linear-gradient(108deg,rgba(255,255,255,.07),transparent 40%);
+  box-shadow:inset 10px 0 11px -8px rgba(0,0,0,.55),inset -1px 0 0 rgba(255,255,255,.05),var(--shadow-book);
+}
+.cover::before{content:"";position:absolute;left:7px;top:0;bottom:0;width:1px;background:rgba(255,255,255,.13);}
+.cover.cloth::after{content:"";position:absolute;inset:9px 9px 9px 14px;border:1px solid rgba(216,186,128,.34);border-radius:1px;pointer-events:none;}
+.cover .ct{font-family:var(--serif);font-weight:600;line-height:1.16;letter-spacing:.015em;text-shadow:0 1px 0 rgba(0,0,0,.22);padding:0 12px;}
+.cover .ca{font-family:var(--serif);font-style:italic;margin-top:8px;letter-spacing:.02em;opacity:.78;}
+.cover.c1{background-color:#2E4A37;color:#ECE5D2;}
+.cover.c2{background-color:#7A5E3C;color:#F3EAD4;}
+.cover.c3{background-color:#69474C;color:#F1E4E1;}
+.cover.c4{background-color:#3C4A5A;color:#E4EAF1;}
+.cover.c5{background-color:#5B4A6B;color:#ECE4F1;}
+.cover.c6{background-color:#7A4A41;color:#F3E2DC;}
+.win.dark .cover.c1{background-color:#33523E;}.win.dark .cover.c2{background-color:#6E573B;}.win.dark .cover.c3{background-color:#5F454A;}
+.win.dark .cover.c4{background-color:#384655;}.win.dark .cover.c5{background-color:#52455F;}.win.dark .cover.c6{background-color:#6E4640;}
+/* embedded (real) cover — photographic, no gilt frame, no cloth */
+.cover.embed{background-image:none;box-shadow:var(--shadow-book);}
+.cover.embed.e1{background:linear-gradient(160deg,#1b2a33,#324653 60%,#5b7384);}
+.cover.embed.e2{background:linear-gradient(160deg,#6b2f2a,#9c4f3f 70%,#c98a5e);}
+.cover.embed . et{position:absolute;left:0;right:0;bottom:14px;font-family:var(--sans);font-size:8px;font-weight:600;letter-spacing:.04em;color:rgba(255,255,255,.92);text-transform:uppercase;}
+.cover.embed .eb{position:absolute;left:12px;right:12px;top:18px;font-family:var(--serif);font-size:12px;font-weight:600;color:#fff;line-height:1.15;}
+
+/* completion mark */
+.cover .done{position:absolute;right:7px;top:7px;width:17px;height:17px;border-radius:50%;background:rgba(20,18,12,.42);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px);}
+.cover .done svg{width:11px;height:11px;color:#F4F1EA;}
+
+/* ===== library surface ===== */
+.lib{height:560px;display:flex;flex-direction:column;}
+.lib-top{padding:20px 28px 0;}
+.lib-h{display:flex;align-items:baseline;gap:12px;margin-bottom:2px;}
+.lib-h h1{font-family:var(--serif);font-weight:500;font-size:22px;letter-spacing:-.01em;color:var(--ink);margin:0;}
+.lib-h .ct2{margin-left:auto;font-size:11.5px;color:var(--faint);}
+.lib-search{display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--border-strong);border-radius:9px;padding:8px 13px;box-shadow:var(--shadow-sm);margin-top:14px;}
+.lib-search svg{width:15px;height:15px;color:var(--faint);}
+.lib-search .ph{font-size:13px;color:var(--faint);}
+.lib-scroll{flex:1;overflow:hidden;padding:22px 28px 24px;position:relative;}
+.lib-fade{position:absolute;left:0;right:0;bottom:0;height:36px;background:linear-gradient(transparent,var(--paper));pointer-events:none;}
+
+/* the featured (active/Today) book */
+.feature{display:flex;gap:20px;align-items:center;padding:18px;background:var(--surface);border:1px solid var(--border);border-radius:14px;margin-bottom:26px;}
+.feature .cover{width:78px;height:115px;flex:none;}
+.feature .cover .ct{font-size:10px;}.feature .cover .ca{font-size:6.5px;margin-top:5px;}
+.feature .fmeta{min-width:0;flex:1;}
+.feature .fe{font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin:0 0 6px;}
+.feature .ft{font-family:var(--serif);font-size:19px;font-weight:600;color:var(--ink);margin:0 0 2px;line-height:1.15;}
+.feature .fa{font-size:12px;color:var(--muted);margin:0 0 10px;}
+.feature .fw{font-family:var(--serif);font-style:italic;font-size:12.5px;color:var(--ink-70);margin:0 0 13px;}
+.feature .cont{display:inline-flex;align-items:center;gap:7px;background:var(--primary);color:var(--on-primary);font-size:12.5px;font-weight:600;border-radius:8px;padding:9px 16px;}
+.feature .cont svg{width:14px;height:14px;}
+
+/* section label */
+.shelf-label{display:flex;align-items:baseline;gap:9px;margin:0 0 14px;}
+.shelf-label h3{font-family:var(--serif);font-weight:600;font-size:14px;color:var(--ink);margin:0;}
+.shelf-label .sc{font-size:11px;color:var(--faint);}
+.shelf-label.second{margin-top:26px;}
+
+/* grids */
+.lib-grid{display:grid;gap:8px 18px;align-items:start;}
+.lib-grid.few{grid-template-columns:repeat(4,1fr);}
+.lib-grid.many{grid-template-columns:repeat(6,1fr);gap:6px 13px;}
+.lbk{display:flex;flex-direction:column;align-items:center;text-align:center;cursor:pointer;}
+.lbk .cover{transition:transform .2s cubic-bezier(.2,.7,.2,1);}
+.lbk:hover .cover{transform:translateY(-5px);}
+.lib-grid.few .cover{width:92px;height:135px;}
+.lib-grid.few .cover .ct{font-size:10.5px;}.lib-grid.few .cover .ca{font-size:7px;margin-top:5px;}
+.lib-grid.many .cover{width:66px;height:97px;}
+.lib-grid.many .cover .ct{font-size:7.5px;}.lib-grid.many .cover .ca{font-size:5.5px;margin-top:3px;}
+.lbk h4{font-family:var(--serif);font-size:12px;font-weight:600;color:var(--ink);margin:11px 0 1px;line-height:1.2;}
+.lib-grid.many .lbk h4{font-size:10.5px;margin-top:8px;}
+.lbk .au{font-size:10px;color:var(--muted);margin:0;line-height:1.3;}
+.lib-grid.many .lbk .au{font-size:9px;}
+.lbk .prog{margin-top:9px;width:54px;height:3px;border-radius:2px;background:var(--border-strong);overflow:hidden;}
+.lbk .prog i{display:block;height:100%;background:var(--accent);}
+.lbk.fin h4{color:var(--ink-70);}
+
+/* progress caption under feature/in-progress, words not numbers */
+.libgrid-note{font-size:9.5px;color:var(--faint);font-style:italic;margin-top:5px;}
+
+/* empty state */
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;height:100%;padding:40px;}
+.empty .ei{display:flex;gap:-10px;margin-bottom:24px;}
+.empty .ei .cover{width:70px;height:103px;margin:0 -8px;opacity:.5;}
+.empty .ei .cover:nth-child(2){opacity:.8;transform:translateY(-6px);z-index:1;}
+.empty h3{font-family:var(--serif);font-weight:500;font-size:21px;color:var(--ink);margin:0 0 8px;}
+.empty p{font-size:13px;color:var(--muted);margin:0 0 20px;max-width:38ch;line-height:1.55;}
+.empty .btn-primary{display:inline-flex;align-items:center;gap:8px;background:var(--primary);color:var(--on-primary);font-size:13px;font-weight:600;border:none;border-radius:9px;padding:11px 20px;cursor:pointer;}
+.empty .btn-primary svg{width:15px;height:15px;}
+
+/* ===== switcher ===== */
+.swwrap{position:relative;height:430px;background:var(--paper);}
+.swbar-row{height:44px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:13px;padding:0 16px;}
+.swbtn{display:inline-flex;align-items:center;gap:7px;font-family:var(--serif);font-size:14.5px;color:var(--ink);background:var(--card);border:1px solid var(--border);border-radius:8px;padding:5px 11px;cursor:pointer;box-shadow:var(--shadow-sm);}
+.swbtn svg{width:13px;height:13px;color:var(--muted);}
+.swpop{position:absolute;left:16px;top:52px;width:300px;background:var(--card);border:1px solid var(--border);border-radius:13px;box-shadow:var(--shadow-win);overflow:hidden;z-index:5;}
+.swpop .sps{padding:11px 14px 9px;}
+.swpop .spsh{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:0 0 8px;padding:0 2px;}
+.swrow{display:flex;align-items:center;gap:11px;padding:7px 8px;border-radius:8px;cursor:pointer;}
+.swrow:hover{background:var(--surface);}
+.swrow.active{background:var(--accent-soft);}
+.swrow .cover{width:30px;height:44px;flex:none;}
+.swrow .cover .ct{font-size:5px;}.swrow .cover .ca{display:none;}
+.swrow .sr{min-width:0;flex:1;}
+.swrow .sr h5{font-family:var(--serif);font-size:13px;font-weight:600;color:var(--ink);margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.swrow .sr p{font-size:10.5px;color:var(--muted);margin:1px 0 0;}
+.swrow .now{font-size:9.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:none;}
+.swdiv{height:1px;background:var(--border);margin:2px 0;}
+.swfull{display:flex;align-items:center;gap:9px;padding:11px 14px;font-size:12.5px;font-weight:500;color:var(--primary);cursor:pointer;border-top:1px solid var(--border);}
+.win.dark .swfull{color:var(--accent);}
+.swfull svg{width:15px;height:15px;}
+.swctx{position:absolute;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-win);padding:5px;width:180px;z-index:7;}
+.swctx button{display:flex;align-items:center;gap:9px;width:100%;text-align:left;font-family:var(--sans);font-size:12.5px;color:var(--ink);background:none;border:none;padding:8px 10px;border-radius:7px;cursor:pointer;}
+.swctx button:hover{background:var(--surface);}
+.swctx button.danger{color:var(--clay);}
+.swctx button svg{width:14px;height:14px;}
+.swctx .cd{height:1px;background:var(--border);margin:4px 0;}
+
+/* ===== dialogs ===== */
+.dlgstage{position:relative;height:430px;background:var(--paper);display:flex;align-items:center;justify-content:center;overflow:hidden;}
+.dlgstage .scrim{position:absolute;inset:0;background:rgba(28,24,16,.34);backdrop-filter:blur(2px);}
+.win.dark .dlgstage .scrim{background:rgba(0,0,0,.5);}
+.dlg{position:relative;width:340px;background:var(--card);border:1px solid var(--border);border-radius:15px;box-shadow:var(--shadow-win);padding:24px;text-align:left;z-index:2;}
+.dlg .dt{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--ink);margin:0 0 8px;line-height:1.2;}
+.dlg p{font-size:12.5px;color:var(--ink-70);margin:0 0 8px;line-height:1.55;}
+.dlg p.calm{color:var(--muted);}
+.dlg .keep{font-size:12px;color:var(--muted);margin:0 0 18px;}
+.dlg .keep b{color:var(--ink-70);font-weight:600;}
+.dlg-act{display:flex;gap:10px;justify-content:flex-end;}
+.dlg-act button{font-family:var(--sans);font-size:12.5px;font-weight:600;border-radius:8px;padding:9px 16px;cursor:pointer;border:1px solid transparent;}
+.dlg-cancel{background:var(--card);color:var(--ink);border-color:var(--border-strong);}
+.dlg-remove{background:var(--clay);color:#fff;}
+.win.dark .dlg-remove{color:#1C1914;}
+
+/* undo toast */
+.toast{position:absolute;left:50%;bottom:20px;transform:translateX(-50%);display:flex;align-items:center;gap:14px;background:var(--ink);color:var(--paper);border-radius:10px;padding:11px 16px;box-shadow:var(--shadow-win);z-index:3;font-size:12.5px;}
+.win.dark .toast{background:#0E0C08;}
+.toast button{font-family:var(--sans);font-size:12.5px;font-weight:600;color:var(--accent);background:none;border:none;cursor:pointer;}
+
+/* ===== cover trio + edge ===== */
+.trio{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;}
+@media(max-width:860px){.trio{grid-template-columns:1fr;}}
+.trio .tcell{background:var(--paper);border:1px solid var(--border);border-radius:14px;padding:24px 20px;display:flex;flex-direction:column;align-items:center;text-align:center;}
+.trio .tcell .cover{width:104px;height:153px;margin-bottom:16px;}
+.trio .tcell .cover .ct{font-size:11px;}.trio .tcell .cover .ca{font-size:7.5px;margin-top:6px;}
+.trio .tcell h4{font-size:13px;font-weight:600;color:var(--ink);margin:0 0 5px;}
+.trio .tcell p{font-size:11.5px;color:var(--muted);margin:0;line-height:1.5;}
+.trio .tcell .tag{font-family:var(--serif);font-style:italic;font-size:11px;color:var(--faint);margin-top:8px;}
+
+.edge{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start;}
+@media(max-width:860px){.edge{grid-template-columns:1fr;}}
+.edge .win{align-self:start;}
+.dangle{padding:30px;display:flex;flex-direction:column;align-items:center;text-align:center;height:340px;justify-content:center;}
+.dangle .cover{width:90px;height:132px;margin-bottom:20px;}
+.dangle h3{font-family:var(--serif);font-weight:500;font-size:18px;color:var(--ink);margin:0 0 8px;}
+.dangle p{font-size:12.5px;color:var(--muted);margin:0 0 18px;max-width:34ch;line-height:1.55;}
+.dangle .da{display:flex;gap:10px;}
+.dangle .da button{font-size:12px;font-weight:600;border-radius:8px;padding:9px 15px;cursor:pointer;border:1px solid transparent;}
+.dangle .da .relink{background:var(--primary);color:var(--on-primary);}
+.dangle .da .dismiss{background:var(--card);color:var(--muted);border-color:var(--border-strong);}
+
+/* backup moment */
+.backup{padding:26px;display:flex;gap:16px;align-items:flex-start;height:340px;justify-content:center;flex-direction:column;}
+.backup .bi{width:34px;height:34px;border-radius:9px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;color:var(--accent);}
+.backup .bi svg{width:18px;height:18px;}
+.backup h3{font-family:var(--serif);font-weight:500;font-size:18px;color:var(--ink);margin:0 0 8px;}
+.backup p{font-size:12.5px;color:var(--ink-70);margin:0 0 8px;line-height:1.55;max-width:42ch;}
+.backup .bpath{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:7px 11px;display:inline-flex;align-items:center;gap:8px;margin:4px 0 16px;}
+.backup .bpath svg{width:13px;height:13px;color:var(--faint);}
+.backup .ba{display:flex;gap:10px;}
+.backup .ba button{font-size:12px;font-weight:600;border-radius:8px;padding:9px 15px;cursor:pointer;border:1px solid transparent;}
+.backup .ba .reveal{background:var(--primary);color:var(--on-primary);}
+.backup .ba .ok{background:var(--card);color:var(--muted);border-color:var(--border-strong);}
+
+/* annotation */
+.annot{display:flex;gap:9px;align-items:flex-start;font-size:12px;color:#6a665b;margin:14px 4px 0;line-height:1.45;max-width:84ch;}
+.annot::before{content:"";width:14px;height:14px;border:1.5px solid var(--accent);border-radius:50%;flex:none;margin-top:1px;background:radial-gradient(circle,var(--accent) 0 3px,transparent 3px);}
+
+/* copy + resolutions */
+.copy{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;}
+.copy-row{display:grid;grid-template-columns:188px 1fr;border-bottom:1px solid var(--border);}
+.copy-row:last-child{border-bottom:none;}
+.copy-k{padding:13px 18px;background:var(--surface);font-size:12px;font-weight:600;color:var(--ink);border-right:1px solid var(--border);}
+.copy-v{padding:13px 18px;font-size:12.5px;color:var(--ink-70);line-height:1.55;}
+.copy-v em{color:var(--muted);font-style:italic;}
+@media(max-width:720px){.copy-row{grid-template-columns:1fr;}.copy-k{border-right:none;border-bottom:1px solid var(--border);}}
+
+.qa{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+@media(max-width:860px){.qa{grid-template-columns:1fr;}}
+.qa .q{background:var(--accent-soft);border:1px solid rgba(62,122,78,.22);border-radius:13px;padding:17px 19px;}
+.qa .q h4{font-size:12.5px;font-weight:600;margin:0 0 6px;color:var(--ink);}
+.qa .q p{font-size:12px;color:var(--ink-70);margin:0;line-height:1.55;}
+.qa .q p b{color:var(--ink);font-weight:600;}
+
+.subhead{font-size:12px;font-weight:600;letter-spacing:.04em;color:var(--faint);text-transform:uppercase;margin:0 0 14px;}
+.foot{margin-top:60px;text-align:center;font-size:12px;color:#8a8576;}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="doc-head">
+    <p class="doc-kicker">Throughline · the library</p>
+    <h1>The books you've started, kept calm</h1>
+    <p>Where a reader sees the books they're reading, honors the ones they've finished, and removes what they no longer want. One unified shelf, never a backlog or a collection to maintain. A book lands here only when you start it, so the library is always books you chose to read, never a pile of obligation.</p>
+  </div>
+
+  <div class="model">
+    <div><h5>One shelf, quiet provenance</h5><p>Catalogue and imported books live together. <b>The cover carries the source</b>, no two visual classes, no badges on the shelf.</p></div>
+    <div><h5>Nothing to maintain</h5><p>Active book first, then reading and finished. <b>No tags, folders, ratings, or want-to-read.</b> Search arrives only when the shelf outgrows a screen.</p></div>
+    <div><h5>One calm verb</h5><p><b>Remove from library</b> deletes Throughline's copy and reading state. It never touches your original file. There is no "delete file."</p></div>
+  </div>
+
+  <!-- ===== 1 LIBRARY SURFACE ===== -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">1</span><h2>The library surface</h2><span class="sec-tag">active featured · reading · finished</span></div>
+    <p class="sec-intro">The active book (the one on Today) is featured at the top with a way straight back in. Below, a <b>Reading</b> shelf, then a quiet <b>Finished</b> shelf. Finished books stay on the same shelf wall, honored with a small letterpress completion mark, never a trophy or a count. Shown at three sizes.</p>
+
+    <p class="frame-label"><span class="dot"></span><b>A few books</b> &middot; the common case &middot; light &amp; dark</p>
+    <div class="grid2">
+      <!-- few, light -->
+      <div>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span><span class="seg"><span>Today</span><span class="on">Library</span><span>Notes</span></span></div>
+          <div class="lib">
+            <div class="lib-top"><div class="lib-h"><h1>Your library</h1><span class="ct2">6 books</span></div></div>
+            <div class="lib-scroll">
+              <div class="feature">
+                <div class="cover cloth c4"><div class="ct">The Old Man and the Sea</div><div class="ca">Hemingway</div></div>
+                <div class="fmeta">
+                  <p class="fe">Reading now</p>
+                  <p class="ft">The Old Man and the Sea</p>
+                  <p class="fa">Ernest Hemingway</p>
+                  <p class="fw">Chapter 2, about a third of the way through.</p>
+                  <span class="cont"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h12M11 5l5 5-5 5"/></svg>Continue reading</span>
+                </div>
+              </div>
+              <div class="shelf-label"><h3>Reading</h3><span class="sc">3</span></div>
+              <div class="lib-grid few">
+                <div class="lbk"><div class="cover cloth c1"><div class="ct">Meditations</div><div class="ca">Aurelius</div></div><h4>Meditations</h4><p class="au">Marcus Aurelius</p><div class="prog"><i style="width:48%"></i></div></div>
+                <div class="lbk"><div class="cover embed e1"><div class="eb">Sapiens</div><div class="et">Harari</div></div><h4>Sapiens</h4><p class="au">Yuval Noah Harari</p><div class="prog"><i style="width:22%"></i></div></div>
+                <div class="lbk"><div class="cover cloth c2"><div class="ct">Walden</div><div class="ca">Thoreau</div></div><h4>Walden</h4><p class="au">Henry D. Thoreau</p><div class="prog"><i style="width:71%"></i></div></div>
+              </div>
+              <div class="shelf-label second"><h3>Finished</h3><span class="sc">2</span></div>
+              <div class="lib-grid few">
+                <div class="lbk fin"><div class="cover cloth c3"><div class="ct">Pride &amp; Prejudice</div><div class="ca">Austen</div><span class="done"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></span></div><h4>Pride &amp; Prejudice</h4><p class="au">Jane Austen</p></div>
+                <div class="lbk fin"><div class="cover cloth c5"><div class="ct">Heart of Darkness</div><div class="ca">Conrad</div><span class="done"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></span></div><h4>Heart of Darkness</h4><p class="au">Joseph Conrad</p></div>
+              </div>
+              <div class="lib-fade"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- few, dark -->
+      <div>
+        <div class="win dark">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span><span class="seg"><span>Today</span><span class="on">Library</span><span>Notes</span></span></div>
+          <div class="lib">
+            <div class="lib-top"><div class="lib-h"><h1>Your library</h1><span class="ct2">6 books</span></div></div>
+            <div class="lib-scroll">
+              <div class="feature">
+                <div class="cover cloth c4"><div class="ct">The Old Man and the Sea</div><div class="ca">Hemingway</div></div>
+                <div class="fmeta">
+                  <p class="fe">Reading now</p>
+                  <p class="ft">The Old Man and the Sea</p>
+                  <p class="fa">Ernest Hemingway</p>
+                  <p class="fw">Chapter 2, about a third of the way through.</p>
+                  <span class="cont"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h12M11 5l5 5-5 5"/></svg>Continue reading</span>
+                </div>
+              </div>
+              <div class="shelf-label"><h3>Reading</h3><span class="sc">3</span></div>
+              <div class="lib-grid few">
+                <div class="lbk"><div class="cover cloth c1"><div class="ct">Meditations</div><div class="ca">Aurelius</div></div><h4>Meditations</h4><p class="au">Marcus Aurelius</p><div class="prog"><i style="width:48%"></i></div></div>
+                <div class="lbk"><div class="cover embed e1"><div class="eb">Sapiens</div><div class="et">Harari</div></div><h4>Sapiens</h4><p class="au">Yuval Noah Harari</p><div class="prog"><i style="width:22%"></i></div></div>
+                <div class="lbk"><div class="cover cloth c2"><div class="ct">Walden</div><div class="ca">Thoreau</div></div><h4>Walden</h4><p class="au">Henry D. Thoreau</p><div class="prog"><i style="width:71%"></i></div></div>
+              </div>
+              <div class="shelf-label second"><h3>Finished</h3><span class="sc">2</span></div>
+              <div class="lib-grid few">
+                <div class="lbk fin"><div class="cover cloth c3"><div class="ct">Pride &amp; Prejudice</div><div class="ca">Austen</div><span class="done"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></span></div><h4>Pride &amp; Prejudice</h4><p class="au">Jane Austen</p></div>
+                <div class="lbk fin"><div class="cover cloth c5"><div class="ct">Heart of Darkness</div><div class="ca">Conrad</div><span class="done"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></span></div><h4>Heart of Darkness</h4><p class="au">Joseph Conrad</p></div>
+              </div>
+              <div class="lib-fade"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="annot">Progress is a quiet hairline bar and a human phrase ("about a third of the way through"), never a percent or a page count. The <b>embedded cover</b> (Sapiens) sits naturally beside the cloth covers, that real cover is the provenance signal; no badge needed.</p>
+
+    <!-- ~20 + needs-search -->
+    <p class="frame-label" style="margin-top:34px;"><span class="dot"></span><b>About 20 books</b> (denser grid) &amp; <b>the shelf that needs search</b> &middot; light</p>
+    <div class="grid2">
+      <div>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span><span class="seg"><span>Today</span><span class="on">Library</span><span>Notes</span></span></div>
+          <div class="lib">
+            <div class="lib-top"><div class="lib-h"><h1>Your library</h1><span class="ct2">21 books</span></div></div>
+            <div class="lib-scroll">
+              <div class="shelf-label"><h3>Reading</h3><span class="sc">9</span></div>
+              <div class="lib-grid many">
+                <div class="lbk"><div class="cover cloth c4"><div class="ct">Old Man &amp; the Sea</div></div></div>
+                <div class="lbk"><div class="cover cloth c1"><div class="ct">Meditations</div></div></div>
+                <div class="lbk"><div class="cover embed e1"><div class="eb">Sapiens</div></div></div>
+                <div class="lbk"><div class="cover cloth c2"><div class="ct">Walden</div></div></div>
+                <div class="lbk"><div class="cover cloth c6"><div class="ct">Dracula</div></div></div>
+                <div class="lbk"><div class="cover cloth c5"><div class="ct">The Trial</div></div></div>
+                <div class="lbk"><div class="cover embed e2"><div class="eb">Educated</div></div></div>
+                <div class="lbk"><div class="cover cloth c3"><div class="ct">Emma</div></div></div>
+                <div class="lbk"><div class="cover cloth c4"><div class="ct">Ulysses</div></div></div>
+              </div>
+              <div class="shelf-label second"><h3>Finished</h3><span class="sc">12</span></div>
+              <div class="lib-grid many">
+                <div class="lbk fin"><div class="cover cloth c2"><div class="ct">Walden</div><span class="done"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></span></div></div>
+                <div class="lbk fin"><div class="cover cloth c1"><div class="ct">Beyond Good &amp; Evil</div><span class="done"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></span></div></div>
+                <div class="lbk fin"><div class="cover cloth c6"><div class="ct">Frankenstein</div><span class="done"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></span></div></div>
+                <div class="lbk fin"><div class="cover cloth c5"><div class="ct">Heart of Darkness</div><span class="done"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></span></div></div>
+                <div class="lbk fin"><div class="cover cloth c3"><div class="ct">Sense &amp; Sensibility</div><span class="done"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></span></div></div>
+                <div class="lbk fin"><div class="cover cloth c4"><div class="ct">The Republic</div><span class="done"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg></span></div></div>
+              </div>
+              <div class="lib-fade"></div>
+            </div>
+          </div>
+        </div>
+        <p class="annot" style="max-width:none;">~20 books: covers shrink to a denser 6-up grid, title/author drop away under the small cover (the cover carries it), the shelf stays calm and scannable.</p>
+      </div>
+      <div>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="bwm"><span class="m">T</span><span class="t">Through<b>line</b></span></span><span class="seg"><span>Today</span><span class="on">Library</span><span>Notes</span></span></div>
+          <div class="lib">
+            <div class="lib-top">
+              <div class="lib-h"><h1>Your library</h1><span class="ct2">58 books</span></div>
+              <div class="lib-search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="5.5"/><path d="M13.5 13.5L17 17"/></svg><span class="ph">Find a book in your library</span></div>
+            </div>
+            <div class="lib-scroll">
+              <div class="shelf-label"><h3>Reading</h3><span class="sc">14</span></div>
+              <div class="lib-grid many">
+                <div class="lbk"><div class="cover cloth c4"><div class="ct">Old Man &amp; the Sea</div></div></div>
+                <div class="lbk"><div class="cover cloth c1"><div class="ct">Meditations</div></div></div>
+                <div class="lbk"><div class="cover embed e1"><div class="eb">Sapiens</div></div></div>
+                <div class="lbk"><div class="cover cloth c2"><div class="ct">Walden</div></div></div>
+                <div class="lbk"><div class="cover cloth c6"><div class="ct">Dracula</div></div></div>
+                <div class="lbk"><div class="cover cloth c5"><div class="ct">The Trial</div></div></div>
+                <div class="lbk"><div class="cover embed e2"><div class="eb">Educated</div></div></div>
+                <div class="lbk"><div class="cover cloth c3"><div class="ct">Emma</div></div></div>
+                <div class="lbk"><div class="cover cloth c4"><div class="ct">Ulysses</div></div></div>
+                <div class="lbk"><div class="cover cloth c1"><div class="ct">The Iliad</div></div></div>
+                <div class="lbk"><div class="cover cloth c2"><div class="ct">Middlemarch</div></div></div>
+                <div class="lbk"><div class="cover cloth c6"><div class="ct">Notes Underground</div></div></div>
+              </div>
+              <div class="lib-fade"></div>
+            </div>
+          </div>
+        </div>
+        <p class="annot" style="max-width:none;">Past ~one screen of books, a single <b>"Find a book in your library"</b> field appears in the header. That's the only thing that changes, no filters, no sort menus, no chores. Search covers titles and authors already on the shelf.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 2 SWITCHER ===== -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">2</span><h2>The book switcher</h2><span class="sec-tag">recents · jump · full library</span></div>
+    <p class="sec-intro">The quick jump from the title bar, refined to fit. Recents first (the active book marked), a calm jump field once there are more than a handful, and a way through to the full library. Right-click a row for the calm per-book actions, including Remove.</p>
+    <div class="grid2">
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Switcher</b> &middot; light</p>
+        <div class="win">
+          <div class="swwrap">
+            <div class="swbar-row"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="swbtn"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8l4 4 4-4"/></svg>The Old Man and the Sea</span></div>
+            <div class="swpop">
+              <div class="sps">
+                <p class="spsh">Recent</p>
+                <div class="swrow active"><div class="cover cloth c4"><div class="ct">Old</div></div><div class="sr"><h5>The Old Man and the Sea</h5><p>Chapter 2</p></div><span class="now">Now</span></div>
+                <div class="swrow"><div class="cover cloth c1"><div class="ct">Med</div></div><div class="sr"><h5>Meditations</h5><p>Book IV</p></div></div>
+                <div class="swrow"><div class="cover embed e1"></div><div class="sr"><h5>Sapiens</h5><p>Part Two</p></div></div>
+                <div class="swrow"><div class="cover cloth c2"><div class="ct">Wal</div></div><div class="sr"><h5>Walden</h5><p>Economy</p></div></div>
+              </div>
+              <div class="swfull"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M7 4v12"/></svg>All books in your library</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Right-click a book</b> &middot; calm per-book actions &middot; dark</p>
+        <div class="win dark">
+          <div class="swwrap">
+            <div class="swbar-row"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="swbtn"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8l4 4 4-4"/></svg>The Old Man and the Sea</span></div>
+            <div class="swpop">
+              <div class="sps">
+                <p class="spsh">Recent</p>
+                <div class="swrow active"><div class="cover cloth c4"><div class="ct">Old</div></div><div class="sr"><h5>The Old Man and the Sea</h5><p>Chapter 2</p></div><span class="now">Now</span></div>
+                <div class="swrow"><div class="cover cloth c1"><div class="ct">Med</div></div><div class="sr"><h5>Meditations</h5><p>Book IV</p></div></div>
+                <div class="swrow"><div class="cover embed e1"></div><div class="sr"><h5>Sapiens</h5><p>Part Two</p></div></div>
+              </div>
+              <div class="swfull"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M7 4v12"/></svg>All books in your library</div>
+            </div>
+            <div class="swctx" style="left:150px;top:150px;">
+              <button><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h12M11 5l5 5-5 5"/></svg>Continue reading</button>
+              <button><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3v9M6 8.5l4 4 4-4"/><path d="M4 16.5h12"/></svg>Show in library</button>
+              <div class="cd"></div>
+              <button class="danger"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h10M8 6V4.5h4V6M6 6l.7 9.5h6.6L14 6"/></svg>Remove from library</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="annot">The jump field appears in the switcher only past ~8 recents; below that, the short recents list is enough. "All books in your library" hands off to surface 1. Remove is reachable here for convenience, but its real home is the book's detail view.</p>
+  </div>
+
+  <!-- ===== 3 REMOVE ===== -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">3</span><h2>Remove from library</h2><span class="sec-tag">two calm confirmations · undo</span></div>
+    <p class="sec-intro">One verb. The confirmation is <b>stakes-honest, not alarming</b>, and it differs by source because the loss differs: a catalogue book is cheap to re-add, an imported book's reading state is the real thing being deleted. Neither ever touches the reader's original file, and there is no "delete file" anywhere. A brief undo restores the reading state if it was a slip.</p>
+    <div class="grid2">
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Catalogue book</b> &middot; light loss &middot; light</p>
+        <div class="win">
+          <div class="dlgstage">
+            <div class="scrim"></div>
+            <div class="dlg">
+              <p class="dt">Remove Meditations?</p>
+              <p class="calm">It leaves your library. You can add it back from the catalogue anytime, free.</p>
+              <p class="keep"><b>Your reading plan and notes</b> for it will be cleared.</p>
+              <div class="dlg-act"><button class="dlg-cancel">Keep it</button><button class="dlg-remove">Remove</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Imported book</b> &middot; names the real loss &middot; dark</p>
+        <div class="win dark">
+          <div class="dlgstage">
+            <div class="scrim"></div>
+            <div class="dlg">
+              <p class="dt">Remove Sapiens?</p>
+              <p>Your reading progress, notes, and tutor history for it will be deleted.</p>
+              <p class="calm">Your original file isn't affected, it stays wherever you keep it, and you can import it again.</p>
+              <div class="dlg-act"><button class="dlg-cancel">Keep it</button><button class="dlg-remove">Remove</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="frame-label" style="margin-top:24px;"><span class="dot"></span><b>After removing</b> &middot; a brief, quiet undo &middot; light</p>
+    <div class="win">
+      <div class="dlgstage" style="height:300px;">
+        <div class="lib" style="height:auto;width:100%;">
+          <div class="lib-top"><div class="lib-h"><h1>Your library</h1><span class="ct2">5 books</span></div></div>
+        </div>
+        <div class="toast"><span>Meditations removed from your library.</span><button>Undo</button></div>
+      </div>
+    </div>
+    <p class="annot">No scary "this is your only copy" language anywhere, because it never is. The undo restores the reading state (plan, notes, AI history) for a short window; for catalogue books it also keeps the downloaded text so undo is instant. "Keep it" is the calm, safe default and takes the affirmative left position.</p>
+  </div>
+
+  <!-- ===== 4 COVERS + EDGES ===== -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">4</span><h2>Covers, dangling files, and backup</h2><span class="sec-tag">treatment · edges</span></div>
+    <p class="sec-intro">The cover treatment carries provenance without two visual classes, plus the two honest local-first edges: an imported book whose original moved, and the one-time data-folder moment.</p>
+
+    <p class="subhead">Cover treatment — embedded-first hybrid</p>
+    <div class="trio">
+      <div class="tcell">
+        <div class="cover embed e1"><div class="eb">Sapiens</div><div class="et">Harari</div></div>
+        <h4>Imported, with its own cover</h4>
+        <p>Shows the book's real embedded cover and metadata as-is. We never overwrite it for brand consistency.</p>
+        <p class="tag">the cover is the provenance</p>
+      </div>
+      <div class="tcell">
+        <div class="cover cloth c2"><div class="ct">A Field Guide</div><div class="ca">M. Rivers</div></div>
+        <h4>Imported, no cover</h4>
+        <p>A plain .txt or a cover-less .epub falls back to the cloth cover, built from its title and author.</p>
+        <p class="tag">cloth fallback, faint edge tick →</p>
+      </div>
+      <div class="tcell">
+        <div class="cover cloth c1"><div class="ct">Meditations</div><div class="ca">Aurelius</div></div>
+        <h4>Catalogue (public domain)</h4>
+        <p>Always the cloth cover, generated from title and author. Re-downloadable, cheap to remove and re-add.</p>
+        <p class="tag">cloth, the house default</p>
+      </div>
+    </div>
+    <p class="annot">Should a cloth fallback for an import look different from a catalogue cloth cover? <b>Only barely.</b> They share the treatment so the shelf stays unified; the one quiet difference lives in the book's <em>detail view</em>, where an imported book reads a small italic "Imported · your file" line and a catalogue book reads "From the catalogue." Provenance is available when you look for it, invisible when you don't, never a badge stamped across the shelf.</p>
+
+    <div class="edge" style="margin-top:34px;">
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>The moved-file edge</b> &middot; calm &middot; light</p>
+        <div class="win">
+          <div class="dangle">
+            <div class="cover cloth c2"><div class="ct">A Field Guide</div><div class="ca">M. Rivers</div></div>
+            <h3>Still here, still readable</h3>
+            <p>Looks like the original file for this book moved. Throughline keeps its own copy, so your reading isn't affected. You can point it at the file again if you'd like.</p>
+            <div class="da"><button class="relink">Locate the file</button><button class="dismiss">Leave it</button></div>
+          </div>
+        </div>
+        <p class="annot" style="max-width:none;">Because Throughline holds its own copy, a "dangling" import is never broken, reading continues. So this is a quiet, dismissible offer in the book's detail view, not an error and never a shelf-wide alarm. Re-link just re-associates the original for future re-export; "Leave it" is completely fine.</p>
+      </div>
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>The one-time data-folder moment</b> &middot; dark</p>
+        <div class="win dark">
+          <div class="backup">
+            <div class="bi"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5.5C3 4.5 3.8 4 5 4h3l2 2h5c1.2 0 2 .5 2 1.5v7c0 1-.8 1.5-2 1.5H5c-1.2 0-2-.5-2-1.5z"/></svg></div>
+            <h3>Everything lives in one folder</h3>
+            <p>Your books and notes are kept here on this Mac. Catalogue books re-download anytime, so there's nothing you must back up. If you'd like a copy, this is the folder to save.</p>
+            <span class="bpath"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5.5C3 4.5 3.8 4 5 4h3l2 2h5c1.2 0 2 .5 2 1.5v7c0 1-.8 1.5-2 1.5H5c-1.2 0-2-.5-2-1.5z"/></svg>~/Library/Throughline</span>
+            <div class="ba"><button class="reveal">Show in Finder</button><button class="ok">Got it</button></div>
+          </div>
+        </div>
+        <p class="annot" style="max-width:none;">Shown <b>once</b>, the first time a reader imports their own file (catalogue-only readers never need it). It states where things live and that catalogue books need no backup, then never returns. No recurring "back up now" guilt, no badge, no nag.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 5 RESOLUTIONS + COPY ===== -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">5</span><h2>Open questions, resolved</h2><span class="sec-tag">decisions</span></div>
+    <div class="qa">
+      <div class="q"><h4>The provenance signal</h4><p><b>The cover reality carries it.</b> Imported books show their real embedded cover; catalogue and cover-less imports wear the cloth cover. The only words ("Imported · your file" / "From the catalogue") live in the book's detail view. No shelf badges, no two visual classes.</p></div>
+      <div class="q"><h4>Finished books</h4><p><b>They stay on the same shelf, in a quiet "Finished" section below "Reading."</b> Honored with a small letterpress check on the cover, no trophy case, no count celebrated, no streak. Completion is marked, never rewarded into collecting.</p></div>
+      <div class="q"><h4>Where Remove lives</h4><p><b>Primarily in the book's detail view</b>, and reachable by right-clicking a book in the switcher or on the shelf. Never a row of delete buttons sitting out on the shelf inviting the act.</p></div>
+      <div class="q"><h4>When search appears</h4><p><b>Once the shelf outgrows roughly one screen (~16 books).</b> A single "Find a book in your library" field joins the header; nothing else changes. No sort, no filter, no maintenance, ever.</p></div>
+    </div>
+
+    <p class="subhead" style="margin-top:30px;">Final copy</p>
+    <div class="copy">
+      <div class="copy-row"><div class="copy-k">Surface title</div><div class="copy-v">Your library &middot; <em>{n} books</em></div></div>
+      <div class="copy-row"><div class="copy-k">Sections</div><div class="copy-v">Reading &middot; Finished</div></div>
+      <div class="copy-row"><div class="copy-k">Featured eyebrow</div><div class="copy-v">Reading now</div></div>
+      <div class="copy-row"><div class="copy-k">Progress phrasing</div><div class="copy-v"><em>About a third of the way through &middot; Chapter 2</em> (human terms, never a percent or page number)</div></div>
+      <div class="copy-row"><div class="copy-k">Search field</div><div class="copy-v">Find a book in your library</div></div>
+      <div class="copy-row"><div class="copy-k">Detail provenance</div><div class="copy-v">Imported · your file &middot; <em>or</em> &middot; From the catalogue</div></div>
+      <div class="copy-row"><div class="copy-k">Remove verb</div><div class="copy-v">Remove from library</div></div>
+      <div class="copy-row"><div class="copy-k">Confirm · catalogue</div><div class="copy-v">Remove {Title}? <em>It leaves your library. You can add it back from the catalogue anytime, free. Your reading plan and notes for it will be cleared.</em></div></div>
+      <div class="copy-row"><div class="copy-k">Confirm · imported</div><div class="copy-v">Remove {Title}? <em>Your reading progress, notes, and tutor history for it will be deleted. Your original file isn't affected, it stays wherever you keep it, and you can import it again.</em></div></div>
+      <div class="copy-row"><div class="copy-k">Confirm buttons</div><div class="copy-v">Keep it &middot; Remove</div></div>
+      <div class="copy-row"><div class="copy-k">Undo toast</div><div class="copy-v">{Title} removed from your library. &middot; Undo</div></div>
+      <div class="copy-row"><div class="copy-k">Moved-file</div><div class="copy-v">Still here, still readable. <em>Looks like the original file for this book moved. Throughline keeps its own copy, so your reading isn't affected. You can point it at the file again if you'd like.</em> &middot; Locate the file · Leave it</div></div>
+      <div class="copy-row"><div class="copy-k">Data folder (once)</div><div class="copy-v">Everything lives in one folder. <em>Your books and notes are kept here on this Mac. Catalogue books re-download anytime, so there's nothing you must back up. If you'd like a copy, this is the folder to save.</em> &middot; Show in Finder · Got it</div></div>
+      <div class="copy-row"><div class="copy-k">Empty / return</div><div class="copy-v">Your library is empty for now. <em>The books you start will gather here.</em> &middot; Browse the library</div></div>
+    </div>
+
+    <div class="annot" style="margin-top:18px;">Accessibility: the segmented Today / Library / Notes control and shelves are keyboard-navigable; each book is a button labelled with title, author, and state ("Walden, Thoreau, finished"). The Remove dialog traps focus, "Keep it" is the default focus and Esc cancels, and the undo toast is announced politely with its action reachable by keyboard before it fades. Reduced-motion removes the cover hover-lift and toast slide. Completion is never color-only, it pairs the check glyph with the "Finished" section and the detail-view label.</div>
+  </div>
+
+  <p class="foot">Throughline · the library · one calm shelf of books you've started · light and dark</p>
+
+</div>
+</body>
+</html>

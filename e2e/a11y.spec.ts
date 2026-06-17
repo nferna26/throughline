@@ -44,6 +44,57 @@ test("a11y: today", async ({ page }) => {
   expect(await serious(page)).toEqual([]);
 });
 
+test("a11y: the library tab (shelves)", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_LIBRARY_N__ = 6; });
+  await page.goto("/");
+  await page.getByRole("heading", { name: "Meditations" }).first().waitFor();
+  await page.getByRole("tab", { name: "Library" }).click();
+  await page.getByRole("heading", { name: "Your library" }).waitFor();
+  expect(await serious(page)).toEqual([]);
+});
+
+test("a11y: the library tab with search (large shelf)", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_LIBRARY_N__ = 58; });
+  await page.goto("/");
+  await page.getByRole("heading", { name: "Meditations" }).first().waitFor();
+  await page.getByRole("tab", { name: "Library" }).click();
+  await page.getByPlaceholder("Find a book in your library").waitFor();
+  expect(await serious(page)).toEqual([]);
+});
+
+test("a11y: the book switcher (recents)", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_LIBRARY_N__ = 6; });
+  await page.goto("/");
+  await page.getByRole("heading", { name: "Meditations" }).first().waitFor();
+  await page.getByTitle("Switch book").click();
+  await page.getByText("All books in your library").waitFor();
+  expect(await serious(page)).toEqual([]);
+});
+
+test("a11y: the remove confirmation (focus-trapped, Keep it default)", async ({ page }) => {
+  await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_LIBRARY_N__ = 6; });
+  await page.goto("/");
+  await page.getByRole("heading", { name: "Meditations" }).first().waitFor();
+  await page.getByTitle("Switch book").click();
+  await page.getByRole("button", { name: "Dracula, Bram Stoker, reading" }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Remove from library" }).click();
+  await page.getByRole("dialog").waitFor();
+  expect(await serious(page)).toEqual([]);
+});
+
+test("a11y: the one-time data-folder moment", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_EMPTY__ = true;
+    w.__TL_FAKE_PICK_PATH__ = "/Users/demo/Books/sapiens.epub";
+    try { window.localStorage.removeItem("tl.dataFolderSeen"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /Import a \.txt or \.epub/i }).click();
+  await page.getByText("Everything lives in one folder").waitFor();
+  expect(await serious(page)).toEqual([]);
+});
+
 test("a11y: reader", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Continue reading" }).click();

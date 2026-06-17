@@ -233,8 +233,9 @@ test("book-chosen-then-reading-pace-dark", async ({ page }) => {
 });
 
 test("remove-from-library-affordance-and-confirm", async ({ page }) => {
-  // CORE-1093: the deliberate "Remove from library" affordance (PlansView) and
-  // the calm confirmation dialog (focus on Cancel, in-voice copy). Light theme.
+  // CORE-1093 / handoff §3: the deliberate "Remove from library" affordance (the
+  // book detail view) and the source-specific confirmation (focus on "Keep it",
+  // in-voice copy). The detail view is an imported book → it names the real loss.
   await page.goto("/");
   await page.getByRole("button", { name: /earlier attempt/i }).click();
   const remove = page.getByRole("button", { name: /Remove from library/i });
@@ -244,8 +245,9 @@ test("remove-from-library-affordance-and-confirm", async ({ page }) => {
   await remove.click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("heading", { name: /Remove .*Meditations.* from your library\?/ })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await expect(dialog.getByRole("heading", { name: "Remove Meditations?" })).toBeVisible();
+  await expect(dialog.getByText(/tutor history for it will be deleted/)).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Keep it" })).toBeFocused();
   await shoot(page, "27-remove-confirm");
 });
 
@@ -265,10 +267,11 @@ test("remove-from-library-affordance-and-confirm-dark", async ({ page }) => {
 });
 
 test("book-switcher-per-book-remove", async ({ page }) => {
-  // The same removal reachable from the book-switcher menu (a per-book control).
+  // The same removal reachable by right-clicking a book in the switcher (§2).
   await page.goto("/");
-  await page.getByRole("button", { name: /Meditations/ }).first().click();
-  await expect(page.getByRole("menuitem", { name: /Remove Meditations from library/i })).toBeVisible();
+  await page.getByTitle("Switch book").click();
+  await page.getByRole("button", { name: "Meditations, Marcus Aurelius, reading" }).click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Remove from library" })).toBeVisible();
   await shoot(page, "28-switcher-remove");
 });
 

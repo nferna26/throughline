@@ -1,68 +1,108 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import BookSwitcher from "./BookSwitcher";
-import type { Book } from "../types";
+import type { Book, LibraryEntry } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
 const mockInvoke = vi.mocked(invoke);
 
 function mkBook(id: string, title: string): Book {
+  return { id, title, author: null, source_type: "epub", source_path: "", source_sha256: id, created_at: "2026-01-01", last_opened_at: null };
+}
+function entry(p: Partial<LibraryEntry> & { id: string; title: string }): LibraryEntry {
   return {
-    id,
-    title,
     author: null,
-    source_type: "epub",
-    source_path: "",
-    source_sha256: id,
-    created_at: "2026-01-01",
-    last_opened_at: null,
+    provenance: "imported",
+    has_cover: false,
+    finished: false,
+    fraction: 0.3,
+    location: "Chapter 1",
+    last_opened_at: "2026-06-01",
+    is_active: false,
+    ...p,
   };
 }
 
 const active = mkBook("b1", "Active Book");
-const allBooks = [active, mkBook("b2", "Second Book"), mkBook("b3", "Third Book")];
+const entries: LibraryEntry[] = [
+  entry({ id: "b1", title: "Active Book", location: "Chapter 5", last_opened_at: "2026-06-03", is_active: true }),
+  entry({ id: "b2", title: "Second Book", author: "Author Two", provenance: "catalogue", location: "Chapter 2", last_opened_at: "2026-06-02" }),
+  entry({ id: "b3", title: "Third Book", finished: true, location: null, last_opened_at: "2026-06-01" }),
+];
+
+function mockLibrary() {
+  mockInvoke.mockImplementation((cmd: string) => {
+    if (cmd === "cmd_library") return Promise.resolve(entries);
+    if (cmd === "cmd_read_book_cover") return Promise.resolve(null);
+    return Promise.resolve(null);
+  });
+}
 
 beforeEach(() => mockInvoke.mockReset());
 
-describe("BookSwitcher", () => {
+const props = {
+  activeBook: active,
+  refreshKey: 0,
+  pendingRemovalId: null,
+  onSwitch: () => {},
+  onOpenLibrary: () => {},
+  onShowInLibrary: () => {},
+  onContinueReading: () => {},
+  onRemoveBook: () => {},
+};
+
+describe("BookSwitcher — recents, Now, all-books, context menu", () => {
   it("shows the active book's title on the collapsed chip", () => {
-    render(<BookSwitcher activeBook={active} onSwitch={() => {}} onDiscover={() => {}} onImport={() => {}} onRemoveBook={() => {}} />);
+    render(<BookSwitcher {...props} />);
     expect(screen.getByRole("button", { name: /Active Book/ })).toBeInTheDocument();
   });
 
-  it("lists every imported book when opened", async () => {
-    mockInvoke.mockResolvedValueOnce(allBooks);
+  it("opens a recents list from cmd_library, marking the active book Now", async () => {
+    mockLibrary();
     const user = userEvent.setup();
-    render(<BookSwitcher activeBook={active} onSwitch={() => {}} onDiscover={() => {}} onImport={() => {}} onRemoveBook={() => {}} />);
+    render(<BookSwitcher {...props} />);
     await user.click(screen.getByRole("button", { name: /Active Book/ }));
-    expect(await screen.findByText("Second Book")).toBeInTheDocument();
-    expect(screen.getByText("Third Book")).toBeInTheDocument();
-    expect(mockInvoke).toHaveBeenCalledWith("cmd_list_books");
+    // Each row's accessible name is title + author + state (the cloth cover that
+    // also paints the title is aria-hidden, so it never double-announces).
+    expect(await screen.findByRole("button", { name: "Second Book, Author Two, reading" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Third Book, finished" })).toBeInTheDocument();
+    expect(screen.getByText("Now")).toBeInTheDocument();
+    expect(screen.getByText("Chapter 2")).toBeInTheDocument(); // a row's location line
+    expect(mockInvoke).toHaveBeenCalledWith("cmd_library");
   });
 
-  it("calls onSwitch with the chosen book's id", async () => {
-    mockInvoke.mockResolvedValueOnce(allBooks);
+  it("switches to a chosen book", async () => {
+    mockLibrary();
     const onSwitch = vi.fn();
     const user = userEvent.setup();
-    render(<BookSwitcher activeBook={active} onSwitch={onSwitch} onDiscover={() => {}} onImport={() => {}} onRemoveBook={() => {}} />);
+    render(<BookSwitcher {...props} onSwitch={onSwitch} />);
     await user.click(screen.getByRole("button", { name: /Active Book/ }));
-    await user.click(await screen.findByText("Second Book"));
+    await user.click(await screen.findByRole("button", { name: "Second Book, Author Two, reading" }));
     expect(onSwitch).toHaveBeenCalledWith("b2");
   });
 
-  it("offers a per-book Remove affordance that asks the parent (never deletes inline)", async () => {
-    mockInvoke.mockResolvedValueOnce(allBooks);
+  it("'All books in your library' opens the Library surface", async () => {
+    mockLibrary();
+    const onOpenLibrary = vi.fn();
+    const user = userEvent.setup();
+    render(<BookSwitcher {...props} onOpenLibrary={onOpenLibrary} />);
+    await user.click(screen.getByRole("button", { name: /Active Book/ }));
+    await user.click(await screen.findByRole("button", { name: "All books in your library" }));
+    expect(onOpenLibrary).toHaveBeenCalledTimes(1);
+  });
+
+  it("right-click → Remove asks the parent with provenance (never deletes inline)", async () => {
+    mockLibrary();
     const onRemoveBook = vi.fn();
     const user = userEvent.setup();
-    render(<BookSwitcher activeBook={active} onSwitch={() => {}} onDiscover={() => {}} onImport={() => {}} onRemoveBook={onRemoveBook} />);
+    render(<BookSwitcher {...props} onRemoveBook={onRemoveBook} />);
     await user.click(screen.getByRole("button", { name: /Active Book/ }));
-    // Each listed book gets its own labelled remove control.
-    const remove = await screen.findByRole("menuitem", { name: "Remove Second Book from library" });
-    await user.click(remove);
-    expect(onRemoveBook).toHaveBeenCalledWith(allBooks[1]);
-    // The switcher only requests removal — it must not delete on its own.
+    const row = await screen.findByRole("button", { name: "Second Book, Author Two, reading" });
+    fireEvent.contextMenu(row, { clientX: 60, clientY: 60 });
+    await user.click(await screen.findByRole("menuitem", { name: "Remove from library" }));
+    expect(onRemoveBook).toHaveBeenCalledWith({ id: "b2", title: "Second Book", provenance: "catalogue" });
     expect(mockInvoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
   });
 });

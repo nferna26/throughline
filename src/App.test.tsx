@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, cleanup, act, within } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, act, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // ── Tauri surface mocks ──────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ import App, { handleDroppedPaths, importErrorText } from "./App";
 import { resetUpdateCheckGate } from "./components/UpdateChecker";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { errorMessage } from "./types";
-import type { TodayCard } from "./types";
+import type { TodayCard, LibraryEntry } from "./types";
 
 const BOOK = {
   id: "b1",
@@ -63,6 +63,14 @@ const BOOK = {
   created_at: "2026-06-09",
   last_opened_at: null,
 };
+
+// A library shelf entry for the switcher (which now reads cmd_library).
+function libEntry(book: typeof BOOK, over: Partial<LibraryEntry> = {}): LibraryEntry {
+  return {
+    id: book.id, title: book.title, author: book.author, provenance: "imported", has_cover: false,
+    finished: false, fraction: 0.2, location: "Chapter 1", last_opened_at: book.last_opened_at, is_active: false, ...over,
+  };
+}
 
 beforeEach(() => {
   cleanup();
@@ -251,7 +259,7 @@ describe("App first-run back-nav undo", () => {
   });
 });
 
-// ── Remove from library, with confirmation (CORE-1093) ───────────────────────
+// ── Remove from library, two confirmations + a brief undo (CORE-1093 / §3) ────
 describe("App remove-from-library", () => {
   const NO_PLAN_FOR = (book: typeof BOOK): TodayCard => ({
     book,
@@ -261,61 +269,102 @@ describe("App remove-from-library", () => {
     sitting_end_locator: null, resume_locator: null, resume_percent: null,
     memory: { last_capture: null, highlight_count: 0, note_count: 0 }, teaser: null,
   });
-
-  it("confirms, deletes the active book, and lands on the front door when the library is now empty", async () => {
-    let deleted = false;
-    setAppImpl({
-      cmd_today: () => Promise.resolve(deleted ? null : NO_PLAN_FOR(BOOK)),
-      cmd_list_books: () => Promise.resolve(deleted ? [] : [BOOK]),
-      cmd_delete_book: () => { deleted = true; return Promise.resolve(null); },
-    });
-    const user = userEvent.setup();
-    render(<App />);
+  // Open the switcher, right-click the named book's row, and choose "Remove from
+  // library" from the calm context menu — the §2 path to Remove.
+  async function rightClickRemove(user: ReturnType<typeof userEvent.setup>, rowName: string) {
     const chip = await screen.findByRole("button", { name: /Confessions/, expanded: false });
     await user.click(chip);
-    await user.click(await screen.findByRole("menuitem", { name: "Remove Confessions from library" }));
-    // A confirmation is required — nothing is deleted until the reader confirms.
-    const dialog = await screen.findByRole("dialog");
-    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
-    await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+    const row = await screen.findByRole("button", { name: rowName });
+    fireEvent.contextMenu(row, { clientX: 40, clientY: 40 });
+    await user.click(await screen.findByRole("menuitem", { name: "Remove from library" }));
+  }
 
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_delete_book", { bookId: "b1" }));
-    expect(await screen.findByText(/Begin with a book you mean to finish/i)).toBeInTheDocument();
-  });
-
-  it("removing the active book switches Today to the most-recent remaining book (never stranded)", async () => {
-    let deleted = false;
-    setAppImpl({
-      cmd_today: () => Promise.resolve(deleted ? NO_PLAN_FOR(BOOK2) : NO_PLAN_FOR(BOOK)),
-      cmd_list_books: () => Promise.resolve(deleted ? [BOOK2] : [BOOK, BOOK2]),
-      cmd_delete_book: () => { deleted = true; return Promise.resolve(null); },
-    });
-    const user = userEvent.setup();
-    render(<App />);
-    const chip = await screen.findByRole("button", { name: /Confessions/, expanded: false });
-    await user.click(chip);
-    await user.click(await screen.findByRole("menuitem", { name: "Remove Confessions from library" }));
-    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
-
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_delete_book", { bookId: "b1" }));
-    // Today now points at the remaining book, not the deleted one.
-    expect(await screen.findByRole("button", { name: /Middlemarch/, expanded: false })).toBeInTheDocument();
-  });
-
-  it("Cancel dismisses the confirm without deleting", async () => {
+  it("requires a source-specific confirm and offers a brief undo (delete deferred)", async () => {
     setAppImpl({
       cmd_today: () => Promise.resolve(NO_PLAN_FOR(BOOK)),
       cmd_list_books: () => Promise.resolve([BOOK]),
+      cmd_library: () => Promise.resolve([libEntry(BOOK, { is_active: true })]),
     });
     const user = userEvent.setup();
     render(<App />);
-    const chip = await screen.findByRole("button", { name: /Confessions/, expanded: false });
-    await user.click(chip);
-    await user.click(await screen.findByRole("menuitem", { name: "Remove Confessions from library" }));
-    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
-
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await rightClickRemove(user, "Confessions, Augustine, reading");
+    // Imported confirmation names the real loss; nothing deleted before confirm.
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/tutor history for it will be deleted/)).toBeInTheDocument();
     expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
+    await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+    // The book is hidden behind a brief undo; the hard delete is NOT immediate.
+    expect(await screen.findByText("Confessions removed from your library.")).toBeInTheDocument();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
+  });
+
+  it("Undo within the window keeps the book and never deletes", async () => {
+    setAppImpl({
+      cmd_today: () => Promise.resolve(NO_PLAN_FOR(BOOK)),
+      cmd_list_books: () => Promise.resolve([BOOK]),
+      cmd_library: () => Promise.resolve([libEntry(BOOK, { is_active: true })]),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await rightClickRemove(user, "Confessions, Augustine, reading");
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
+    await user.click(await screen.findByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(screen.queryByText("Confessions removed from your library.")).toBeNull());
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
+  });
+
+  it("removing the active book drops Today onto the next book (never stranded)", async () => {
+    let activeId = "b1";
+    setAppImpl({
+      cmd_today: () => Promise.resolve(activeId === "b1" ? NO_PLAN_FOR(BOOK) : NO_PLAN_FOR(BOOK2)),
+      cmd_list_books: () => Promise.resolve([BOOK, BOOK2]),
+      cmd_library: () => Promise.resolve([libEntry(BOOK, { is_active: true }), libEntry(BOOK2, {})]),
+      cmd_set_active_book: () => { activeId = "b2"; return Promise.resolve(null); },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await rightClickRemove(user, "Confessions, Augustine, reading");
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText("Confessions removed from your library.")).toBeInTheDocument();
+    // Today now points at the remaining book, not the one mid-removal.
+    expect(await screen.findByRole("button", { name: /Middlemarch/, expanded: false })).toBeInTheDocument();
+  });
+
+  it("Keep it dismisses the confirm without removing", async () => {
+    setAppImpl({
+      cmd_today: () => Promise.resolve(NO_PLAN_FOR(BOOK)),
+      cmd_list_books: () => Promise.resolve([BOOK]),
+      cmd_library: () => Promise.resolve([libEntry(BOOK, { is_active: true })]),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await rightClickRemove(user, "Confessions, Augustine, reading");
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Keep it" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByText("Confessions removed from your library.")).toBeNull();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
+  });
+
+  it("commits the hard delete after the undo window elapses", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let deleted = false;
+      setAppImpl({
+        cmd_today: () => Promise.resolve(deleted ? null : NO_PLAN_FOR(BOOK)),
+        cmd_list_books: () => Promise.resolve(deleted ? [] : [BOOK]),
+        cmd_library: () => Promise.resolve(deleted ? [] : [libEntry(BOOK, { is_active: true })]),
+        cmd_delete_book: () => { deleted = true; return Promise.resolve(null); },
+      });
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<App />);
+      await rightClickRemove(user, "Confessions, Augustine, reading");
+      await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
+      await screen.findByText("Confessions removed from your library.");
+      await act(async () => { await vi.advanceTimersByTimeAsync(8200); });
+      await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_delete_book", { bookId: "b1" }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -401,6 +450,7 @@ describe("App command failures use the in-app banner (CORE-1041)", () => {
     setAppImpl({
       cmd_today: NO_PLAN_TODAY,
       cmd_list_books: [BOOK, BOOK2],
+      cmd_library: [libEntry(BOOK, { is_active: true }), libEntry(BOOK2, {})],
       cmd_set_active_book: () =>
         Promise.reject({ kind: "NotFound", resource: "book", id: null }),
     });
@@ -408,7 +458,7 @@ describe("App command failures use the in-app banner (CORE-1041)", () => {
 
     // Open the book switcher and pick the other book.
     await userEvent.click(await screen.findByTitle("Switch book"));
-    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Middlemarch/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Middlemarch/ }));
 
     const banner = await screen.findByRole("alert");
     expect(banner).toHaveTextContent("Could not switch book: book not found");
