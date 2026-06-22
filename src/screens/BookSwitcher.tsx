@@ -133,7 +133,7 @@ export default function BookSwitcher({
 
   return (
     <div
-      style={{ position: "relative" }}
+      style={{ position: "relative", minWidth: 0 }}
       ref={containerRef}
       onKeyDown={(e) => {
         if (e.key === "Escape" && open && !menu) {
@@ -151,7 +151,7 @@ export default function BookSwitcher({
         title="Switch book"
       >
         <TLIcon name="book" size={16} />
-        <span className="ttl">{activeBook.title}</span>
+        <span className="ttl" title={activeBook.title}>{activeBook.title}</span>
         <TLIcon name="chevronDown" size={15} />
       </button>
 

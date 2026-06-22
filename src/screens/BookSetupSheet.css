@@ -70,6 +70,13 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  /* Own query container so the chosen-hero title scales with the screen width
+     (cqi), named so it never falls back to the viewport. width:100% gives it a
+     DEFINITE inline size — without it, inline-size containment on a content-sized
+     flex item collapses the box to zero width and hides the title. */
+  width: 100%;
+  container-type: inline-size;
+  container-name: chosen;
 }
 .tl-chosen .tl-cover {
   margin-bottom: 26px;
@@ -85,13 +92,37 @@
 .tl-chosen-h {
   font-family: var(--tl-serif);
   font-weight: 500;
-  font-size: 26px;
-  line-height: 1.12;
+  /* Fluid + bounded: a long EPUB title ("{main} is yours to begin.") can never
+     run the screen over. rem min/max keep it zoom-safe; 3-line clamp caps the
+     height; the full title stays in title= + the heading's aria-label. */
+  font-size: clamp(1.5rem, 1.25rem + 1.4cqi, 2.1rem);
+  line-height: 1.14;
   letter-spacing: -0.015em;
   text-wrap: balance;
   color: var(--tl-ink);
+  margin: 0 0 8px;
+  max-width: 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+/* The subtitle (after the first colon): quieter, two lines max, never overflows.
+   Decorative for AT — the full title is in the heading's aria-label. */
+.tl-chosen-subtitle {
+  font-family: var(--tl-serif);
+  font-size: clamp(0.9rem, 0.85rem + 0.5cqi, 1.1rem);
+  line-height: 1.4;
+  color: var(--tl-muted);
   margin: 0 0 10px;
-  max-width: 20ch;
+  max-width: 46ch;
+  text-wrap: pretty;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
 }
 .tl-chosen-line {
   font-size: 13.5px;
@@ -99,6 +130,7 @@
   color: var(--tl-ink-soft);
   margin: 0;
   max-width: 42ch;
+  text-wrap: pretty;
 }
 
 /* ── your reading pace ── */

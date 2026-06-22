@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import TLIcon, { type IconName } from "./TLIcon";
 import type { BookOriginInfo, PlanSummary, Provenance, TodayCard } from "../types";
+import { splitDisplayTitle } from "../displayTitle";
 
 /**
  * Plans for a book — the "frontispiece + back-matter" view (design handoff).
@@ -157,7 +158,23 @@ export default function PlansView({
           </button>
           <div className="tl-plans-top">
             <div className="tl-eyebrow"><span className="dot" /> Plans for this book</div>
-            <h1 className="tl-plans-book">{bookTitle}</h1>
+            {(() => {
+              // Same bounded big-title treatment as the Today hero: a long EPUB
+              // title can't overflow here either. Full title kept in title=/aria.
+              const { main, subtitle } = splitDisplayTitle(bookTitle);
+              return (
+                <>
+                  <h1
+                    className={subtitle ? "tl-plans-book has-sub" : "tl-plans-book"}
+                    title={bookTitle}
+                    aria-label={bookTitle}
+                  >
+                    {main}
+                  </h1>
+                  {subtitle && <p className="tl-plans-subtitle" aria-hidden="true">{subtitle}</p>}
+                </>
+              );
+            })()}
             {bookAuthor && <div className="tl-plans-byline">{bookAuthor}</div>}
             {origin && (
               // Provenance, in words — available when you look for it, invisible

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import Cover from "../components/Cover";
 import type { Book } from "../types";
 import { errorMessage } from "../types";
+import { splitDisplayTitle } from "../displayTitle";
 import "./BookSetupSheet.css";
 
 interface Props {
@@ -179,6 +180,11 @@ export default function BookSetupSheet({ book, onDone, onBack }: Props) {
     return <div className="tl-journey-screen" aria-busy="true" />;
   }
 
+  // The chosen-screen hero gets the same bounded big-title treatment as Today:
+  // a long EPUB title shows its main part big (split on the first colon only),
+  // with the subtitle quieter below and the FULL title kept for hover + AT.
+  const chosen = splitDisplayTitle(book.title);
+
   return (
     <div className="tl-journey-screen">
       <div className="tl-journey-scroll">
@@ -202,7 +208,14 @@ export default function BookSetupSheet({ book, onDone, onBack }: Props) {
             <div className="tl-chosen">
               <Cover title={book.title} author={book.author} size="full" />
               <p className="tl-chosen-eyebrow">Added to Today</p>
-              <h1 className="tl-chosen-h">{book.title} is yours to begin.</h1>
+              <h1 className="tl-chosen-h" title={book.title} aria-label={`${book.title} is yours to begin.`}>
+                {chosen.main} is yours to begin.
+              </h1>
+              {chosen.subtitle && (
+                <p className="tl-chosen-subtitle" aria-hidden="true">
+                  {chosen.subtitle}
+                </p>
+              )}
               <p className="tl-chosen-line">
                 It's waiting on Today now. One last thing before you start: how do you like to read?
               </p>

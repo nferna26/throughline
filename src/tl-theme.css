@@ -222,7 +222,13 @@
 }
 .tl-bookhead-inner {
   width: 100%; max-width: 640px; margin: 0 auto;
-  display: flex; align-items: center; justify-content: space-between;
+  /* A query container + a 2-column grid: the switcher column flexes and truncates
+     (minmax 0 lets it shrink below its content), the segmented control hugs the
+     right. Named so the @container rule below targets THIS element's width, not
+     the viewport. */
+  container-type: inline-size; container-name: bookbar;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center; gap: var(--tl-3);
 }
 .tl-chip {
   display: inline-flex; align-items: center; gap: var(--tl-2);
@@ -234,17 +240,33 @@
   transition: border-color 150ms ease, background 150ms ease;
 }
 .tl-chip:hover { border-color: var(--tl-ink-10); }
-.tl-chip .ttl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-chip .ttl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .tl-chip svg { color: var(--tl-muted); flex-shrink: 0; }
+/* In the top bar the chip yields to its grid column: capped at 320px AND at the
+   column width, so the active title ellipsizes when the bar gets tight. */
+.tl-bookhead .tl-chip { max-width: min(320px, 100%); }
 
 .tl-seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--tl-ink-06); border-radius: var(--tl-r-pill); }
 .tl-seg button {
   appearance: none; border: none; background: transparent;
+  display: inline-flex; align-items: center; gap: 6px;
   font-family: var(--tl-sans); font-size: 13px; font-weight: 550; color: var(--tl-muted);
   padding: 5px 14px; border-radius: var(--tl-r-pill); cursor: pointer;
   transition: color 150ms ease, background 150ms ease, box-shadow 150ms ease;
 }
 .tl-seg button[aria-selected="true"] { color: var(--tl-ink); background: var(--tl-panel); box-shadow: var(--tl-shadow-sm); }
+/* Tab labels by default; the icon is the fallback when the bar is tight. */
+.tl-seg-ico { display: none; line-height: 0; }
+.tl-seg-label { display: inline; }
+/* Tight bar → collapse the Today/Library/Notes labels to icons. The buttons keep
+   their aria-label, so the accessible names never change. No vertical stacking —
+   the 640px min window floor keeps the bar out of that regime in production; the
+   icon mode is the responsive fallback at narrower widths. */
+@container bookbar (max-width: 30rem) {
+  .tl-seg-ico { display: inline-flex; }
+  .tl-seg-label { display: none; }
+  .tl-seg button { padding: 6px 9px; }
+}
 
 /* ════════ Today — the book on the desk (Stage 2, Direction A) ════════ */
 .tl-kicker {
@@ -260,7 +282,13 @@
 .tl-desk {
   flex: 1; display: flex; flex-direction: column;
   align-items: center; justify-content: center; text-align: center;
-  padding: 36px 44px; max-width: 46ch; margin: 0 auto; width: 100%;
+  padding: 36px 44px; max-width: 68ch; margin-inline: auto; width: 100%;
+  /* The hero is its OWN query container so the title's clamp() scales with the
+     composition width (cqi), bounded in rem so it stays zoom / WCAG-1.4.4 safe.
+     Named so cqi never silently falls back to the viewport (the no-container
+     gotcha). */
+  container-type: inline-size;
+  container-name: desk;
 }
 .tl-desk-kicker {
   font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
@@ -268,9 +296,28 @@
   color: var(--tl-muted); margin: 0 0 18px;
 }
 .tl-desk-title {
-  font-family: var(--tl-serif); font-weight: 500; font-size: 46px;
-  line-height: 1.05; letter-spacing: -0.015em; text-wrap: balance;
-  color: var(--tl-ink); margin: 0;
+  font-family: var(--tl-serif); font-weight: 500;
+  /* Fluid within the hero container; rem min/max keep it zoom-safe. */
+  font-size: clamp(1.75rem, 1.25rem + 3.2cqi, 3.25rem);
+  line-height: 1.1; letter-spacing: -0.015em;
+  text-wrap: balance; /* progressive enhancement — degrades to normal wrapping */
+  color: var(--tl-ink); margin: 0; max-width: 100%;
+  /* Cap the height: an unbounded EPUB title can never run away. Clamp to 3 lines
+     (2 when a subtitle is split off below). Full text stays in the DOM + title=
+     + the heading's aria-label, so assistive tech still receives all of it. */
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden;
+}
+.tl-desk-title.has-sub { -webkit-line-clamp: 2; line-clamp: 2; }
+/* The subtitle slot (everything after the first colon): quieter, two lines max,
+   never allowed to overflow either. Decorative for AT — the full title already
+   lives in the heading's aria-label. */
+.tl-desk-subtitle {
+  font-family: var(--tl-serif); font-size: clamp(0.95rem, 0.9rem + 0.6cqi, 1.2rem);
+  line-height: 1.35; color: var(--tl-muted); margin: 10px 0 0; max-width: 56ch;
+  text-wrap: pretty;
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
 }
 .tl-desk-author {
   font-family: var(--tl-serif); font-style: italic; font-size: 15px;
@@ -290,7 +337,7 @@
 /* Orientation: two quiet lines. The serif-italic .phrase line is the reserved
    slot Stage 3's evocative phrase swaps into — two lines of height are held
    now so its arrival is a pure text swap with zero layout shift. */
-.tl-desk-orient { font-size: 14px; color: var(--tl-ink-soft); line-height: 1.55; margin: 0 0 22px; }
+.tl-desk-orient { font-size: 14px; color: var(--tl-ink-soft); line-height: 1.55; margin: 0 0 22px; text-wrap: pretty; }
 .tl-desk-orient .line { margin: 0; }
 /* Reserved AND capped at two lines: the Stage-3 phrase swap must hold the
    layout still even at the contract maxima (80-char phrase, long label). */
@@ -313,9 +360,13 @@
   display: inline-flex; align-items: center; justify-content: center; margin-bottom: 16px;
 }
 .tl-desk-done {
-  font-family: var(--tl-serif); font-weight: 500; font-size: 26px;
+  font-family: var(--tl-serif); font-weight: 500;
+  font-size: clamp(1.4rem, 1.2rem + 1.4cqi, 1.85rem);
   line-height: 1.2; letter-spacing: -0.012em; text-wrap: balance;
-  color: var(--tl-ink); margin: 0 0 12px;
+  color: var(--tl-ink); margin: 0 0 12px; max-width: 100%;
+  /* "You finished {title}." — bound a long title here too (3 lines). */
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden;
 }
 .tl-desk-finish-actions { display: flex; align-items: center; justify-content: center; gap: 16px; }
 
@@ -520,7 +571,24 @@
 .tl-plans-top { padding-top: calc(var(--tl-6) * var(--tl-density)); }
 .tl-eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--tl-muted); display: flex; align-items: center; gap: var(--tl-2); }
 .tl-eyebrow .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--tl-accent); }
-.tl-plans-book { font-family: var(--tl-serif); font-weight: 500; font-size: 27px; line-height: 1.15; letter-spacing: -0.012em; color: var(--tl-ink); margin: var(--tl-2) 0 2px; }
+/* Bound the plans-screen book title the same way as the Today hero: a long EPUB
+   title clamps to 3 lines (2 with a subtitle) and never overflows; the full title
+   stays in title= + aria-label. font-size in rem keeps it zoom-safe. */
+.tl-plans-book {
+  font-family: var(--tl-serif); font-weight: 500;
+  font-size: 1.65rem; /* rem, not vw — zoom/WCAG-1.4.4 safe; the clamp here is the line-clamp */
+  line-height: 1.15; letter-spacing: -0.012em; color: var(--tl-ink);
+  margin: var(--tl-2) 0 2px; max-width: 100%;
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden;
+}
+.tl-plans-book.has-sub { -webkit-line-clamp: 2; line-clamp: 2; }
+.tl-plans-subtitle {
+  font-family: var(--tl-serif); font-size: 15px; line-height: 1.4;
+  color: var(--tl-muted); margin: 2px 0 0; max-width: 52ch; text-wrap: pretty;
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+}
 .tl-plans-byline { font-size: 14px; color: var(--tl-muted); }
 
 .tl-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; letter-spacing: 0.02em; }

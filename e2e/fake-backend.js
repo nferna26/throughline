@@ -185,26 +185,36 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       // __TL_FAKE_RETURNING__ → returning; __TL_FAKE_NO_PLAN__ → no_plan
       // (cmd_configure_plan clears it, so Begin reading lands in the reader);
       // __TL_FAKE_SPLIT_SITTING__ → the sitting is a sub-range of Book II.
-      case "cmd_today":
-        if (window.__TL_FAKE_EMPTY__) return null;
-        if (window.__TL_FAKE_DONE__)
-          return Object.assign({}, TODAY, { state: "finished", section: null, next_label: "Book XII", sitting_start_locator: null, sitting_end_locator: null, resume_locator: null, fraction_complete: 1 });
-        if (window.__TL_FAKE_DAY_ONE__)
-          return Object.assign({}, TODAY, { state: "day_one", fraction_complete: 0, resume_locator: null });
-        if (window.__TL_FAKE_RETURNING__)
-          return Object.assign({}, TODAY, { state: "returning", resume_locator: "64" });
-        if (window.__TL_FAKE_NO_PLAN__)
-          return Object.assign({}, TODAY, { state: "no_plan", section: null, sitting_start_locator: null, sitting_end_locator: null, resume_locator: null, plan: { id: "", book_id: BOOK.id, start_date: "2026-06-11", status: "no_plan", activated_at: null, sitting_length_minutes: null } });
-        if (window.__TL_FAKE_SPLIT_SITTING__)
-          return Object.assign({}, TODAY, { sitting_end_locator: FIRST_PARA_END });
-        if (window.__TL_FAKE_PHRASE__)
-          return Object.assign({}, TODAY, { phrase: "the morning resolve at the day's door" });
-        if (window.__TL_FAKE_PHRASE_MAX__)
-          return Object.assign({}, TODAY, {
-            chapter_label: "The Second Book of the Meditations of Marcus Aurelius Antoninus, continued",
-            phrase: "the busybody, the ungrateful, the arrogant, the deceitful, the envious met calmly",
-          });
-        return TODAY;
+      case "cmd_today": {
+        const card = (() => {
+          if (window.__TL_FAKE_EMPTY__) return null;
+          if (window.__TL_FAKE_DONE__)
+            return Object.assign({}, TODAY, { state: "finished", section: null, next_label: "Book XII", sitting_start_locator: null, sitting_end_locator: null, resume_locator: null, fraction_complete: 1 });
+          if (window.__TL_FAKE_DAY_ONE__)
+            return Object.assign({}, TODAY, { state: "day_one", fraction_complete: 0, resume_locator: null });
+          if (window.__TL_FAKE_RETURNING__)
+            return Object.assign({}, TODAY, { state: "returning", resume_locator: "64" });
+          if (window.__TL_FAKE_NO_PLAN__)
+            return Object.assign({}, TODAY, { state: "no_plan", section: null, sitting_start_locator: null, sitting_end_locator: null, resume_locator: null, plan: { id: "", book_id: BOOK.id, start_date: "2026-06-11", status: "no_plan", activated_at: null, sitting_length_minutes: null } });
+          if (window.__TL_FAKE_SPLIT_SITTING__)
+            return Object.assign({}, TODAY, { sitting_end_locator: FIRST_PARA_END });
+          if (window.__TL_FAKE_PHRASE__)
+            return Object.assign({}, TODAY, { phrase: "the morning resolve at the day's door" });
+          if (window.__TL_FAKE_PHRASE_MAX__)
+            return Object.assign({}, TODAY, {
+              chapter_label: "The Second Book of the Meditations of Marcus Aurelius Antoninus, continued",
+              phrase: "the busybody, the ungrateful, the arrogant, the deceitful, the envious met calmly",
+            });
+          return TODAY;
+        })();
+        // __TL_FAKE_LONG_TITLE__ (a string) overrides the book title at display
+        // time — the long-title torture case for the bounded Today hero and, via
+        // "Start a plan", the first-journey chosen screen.
+        const longTitle = window.__TL_FAKE_LONG_TITLE__;
+        return card && longTitle
+          ? Object.assign({}, card, { book: Object.assign({}, card.book, { title: longTitle }) })
+          : card;
+      }
       case "cmd_get_settings": {
         const base = Object.assign({}, SETTINGS, { ai_phrases: AI_PHRASES_ON });
         if (window.__TL_FAKE_COMPANY_ACTIVE__ || window.__TL_FAKE_COMPANY_UNLICENSED__)

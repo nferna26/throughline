@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import TLIcon from "../components/TLIcon";
 import type { TodayCard, Book, PlanSummary } from "../types";
+import { splitDisplayTitle } from "../displayTitle";
 
 interface Props {
   today: TodayCard | null;
@@ -85,6 +86,35 @@ function FinishAddPrompt({
   );
 }
 
+/** The book title as the bounded serif hero. EPUB titles are unbounded and messy,
+ *  so the big headline shows the main part (split on the first colon only — never
+ *  comma/paren), capped by clamp() + line-clamp in CSS, with any subtitle below in
+ *  a quieter line. The FULL stored title is always kept for hover (title=) and for
+ *  screen readers (the heading's aria-label) — the visual clamp never hides info
+ *  from assistive tech. */
+function HeroTitle({ title }: { title: string }) {
+  const { main, subtitle } = splitDisplayTitle(title);
+  // aria-label carries the FULL stored title to assistive tech (the visible text
+  // is the clamped main part); title= is the hover tooltip. The visual clamp
+  // never hides information from AT.
+  return (
+    <>
+      <h1
+        className={subtitle ? "tl-desk-title has-sub" : "tl-desk-title"}
+        title={title}
+        aria-label={title}
+      >
+        {main}
+      </h1>
+      {subtitle && (
+        <p className="tl-desk-subtitle" aria-hidden="true">
+          {subtitle}
+        </p>
+      )}
+    </>
+  );
+}
+
 export default function Today({ today, onDiscover, onImport, onStart, onNewPlan, onReviewNotes, onPlans }: Props) {
   const bookId = today?.book.id;
   // How many plans this book has — drives the quiet "Plans · N earlier" link.
@@ -110,7 +140,7 @@ export default function Today({ today, onDiscover, onImport, onStart, onNewPlan,
     return (
       <div className="tl-desk">
         <p className="tl-desk-kicker">On your desk</p>
-        <h1 className="tl-desk-title">{book.title}</h1>
+        <HeroTitle title={book.title} />
         {book.author && <p className="tl-desk-author">{book.author}</p>}
         <div className="tl-hairline" aria-hidden="true"><span className="fill" style={{ width: 0 }} /></div>
         <p className="tl-desk-orient">There's no plan right now. Set a gentle pace whenever you're ready.</p>
@@ -124,7 +154,9 @@ export default function Today({ today, onDiscover, onImport, onStart, onNewPlan,
     return (
       <div className="tl-desk">
         <span className="tl-check-ring" aria-hidden="true"><TLIcon name="check" size={20} /></span>
-        <h1 className="tl-desk-done">You finished {book.title}.</h1>
+        <h1 className="tl-desk-done" title={book.title} aria-label={`You finished ${book.title}.`}>
+          You finished {splitDisplayTitle(book.title).main}.
+        </h1>
         <p className="tl-desk-orient">
           Nicely done.{next_label ? ` ${next_label} was the last of it.` : ""} Sit with it, or pick up something new.
         </p>
@@ -150,7 +182,7 @@ export default function Today({ today, onDiscover, onImport, onStart, onNewPlan,
   return (
     <div className="tl-desk">
       <p className="tl-desk-kicker">{kicker}</p>
-      <h1 className="tl-desk-title">{book.title}</h1>
+      <HeroTitle title={book.title} />
       {book.author && <p className="tl-desk-author">{book.author}</p>}
 
       <div className="tl-hairline" aria-hidden="true">

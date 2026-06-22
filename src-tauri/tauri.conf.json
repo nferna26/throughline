@@ -15,6 +15,9 @@
         "title": "Throughline",
         "width": 960,
         "height": 720,
+        "minWidth": 640,
+        "minHeight": 480,
+        "resizable": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true
       }

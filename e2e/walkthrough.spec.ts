@@ -18,6 +18,26 @@ async function shoot(page: Page, name: string) {
   await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: true });
 }
 
+// CORE-1154 long-title torture string: an unbounded EPUB dc:title with edition
+// (comma), subtitle (colon), and series tail (parens) — exactly the shape that
+// overflowed the Today hero and the chosen screen.
+const CHASM_TITLE =
+  "Crossing the Chasm, 3rd Edition: Marketing and Selling Disruptive Products to Mainstream Customers (Collins Business Essentials)";
+
+// The three window widths the fluid type + responsive chrome must stay calm at.
+const WIDTHS = [
+  { name: "narrow", w: 640 },
+  { name: "default", w: 960 },
+  { name: "max", w: 1440 },
+] as const;
+
+async function shootWidths(page: Page, base: string) {
+  for (const { name, w } of WIDTHS) {
+    await page.setViewportSize({ width: w, height: 820 });
+    await shoot(page, `${base}-${name}`);
+  }
+}
+
 test("front-door-first-run", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_EMPTY__ = true; });
   await page.goto("/");
@@ -820,4 +840,146 @@ test("notes-tab", async ({ page }) => {
     await notesTab.click();
     await shoot(page, "07-notes");
   }
+});
+
+// ════════ CORE-1154: fluid title typography + responsive chrome ════════
+
+test("long-title-hero-stays-bounded (torture)", async ({ page }) => {
+  await page.addInitScript((t) => { (window as unknown as Record<string, unknown>).__TL_FAKE_LONG_TITLE__ = t; }, CHASM_TITLE);
+  await page.goto("/");
+  const h1 = page.locator("h1.tl-desk-title");
+  await expect(h1).toBeVisible();
+  // The FULL stored title is kept for hover (title=) and screen readers (aria-label);
+  // the visible headline is the bounded main part (split on the first colon only).
+  await expect(h1).toHaveAttribute("title", CHASM_TITLE);
+  await expect(h1).toHaveAttribute("aria-label", CHASM_TITLE);
+  await expect(h1).toContainText("Crossing the Chasm, 3rd Edition");
+  await expect(page.locator(".tl-desk-subtitle")).toContainText("Marketing and Selling Disruptive Products");
+  // Bounded at every width: a clamped height (never the ~8 lines an unbounded
+  // 46px title would wrap to) and no horizontal overflow.
+  for (const { w } of WIDTHS) {
+    await page.setViewportSize({ width: w, height: 820 });
+    const box = await h1.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeLessThan(200);
+    const overflow = await h1.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+  }
+  await shootWidths(page, "33-long-title-hero");
+});
+
+test("long-title-hero-stays-bounded-dark (torture)", async ({ page }) => {
+  await page.addInitScript((t) => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_LONG_TITLE__ = t;
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  }, CHASM_TITLE);
+  await page.goto("/");
+  await expect(page.locator("h1.tl-desk-title")).toContainText("Crossing the Chasm, 3rd Edition");
+  await shootWidths(page, "33b-long-title-hero-dark");
+});
+
+test("short-title-hero-reads-grand", async ({ page }) => {
+  // The default seed is the short "Meditations" — it must still read large and
+  // centered at all three widths (the clamp's lower bound, not a shrunk title).
+  await page.goto("/");
+  await expect(page.locator("h1.tl-desk-title")).toHaveText("Meditations");
+  await shootWidths(page, "36-short-title-hero");
+});
+
+test("short-title-hero-reads-grand-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await expect(page.locator("h1.tl-desk-title")).toHaveText("Meditations");
+  await shootWidths(page, "36b-short-title-hero-dark");
+});
+
+test("long-title-chosen-screen-stays-bounded (torture)", async ({ page }) => {
+  await page.addInitScript((t) => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_LONG_TITLE__ = t;
+    w.__TL_FAKE_NO_PLAN__ = true;
+  }, CHASM_TITLE);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start a plan" }).click();
+  const h1 = page.locator("h1.tl-chosen-h");
+  await expect(h1).toBeVisible();
+  await expect(h1).toHaveAttribute("title", CHASM_TITLE);
+  await expect(h1).toHaveAttribute("aria-label", `${CHASM_TITLE} is yours to begin.`);
+  await expect(h1).toContainText("Crossing the Chasm, 3rd Edition is yours to begin.");
+  await expect(page.locator(".tl-chosen-subtitle")).toContainText("Marketing and Selling Disruptive Products");
+  for (const { w } of WIDTHS) {
+    await page.setViewportSize({ width: w, height: 820 });
+    const box = await h1.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeLessThan(220);
+    const overflow = await h1.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+  }
+  await shootWidths(page, "34-long-title-chosen");
+});
+
+test("long-title-chosen-screen-stays-bounded-dark (torture)", async ({ page }) => {
+  await page.addInitScript((t) => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_LONG_TITLE__ = t;
+    w.__TL_FAKE_NO_PLAN__ = true;
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  }, CHASM_TITLE);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start a plan" }).click();
+  await expect(page.locator("h1.tl-chosen-h")).toContainText("Crossing the Chasm, 3rd Edition is yours to begin.");
+  await shoot(page, "34b-long-title-chosen-dark");
+});
+
+test("long-title-plans-screen-stays-bounded (torture)", async ({ page }) => {
+  // The "earlier attempts" screen reached from the Today hero renders the book
+  // title big too — it gets the same bounded treatment (review-found sibling).
+  await page.addInitScript((t) => { (window as unknown as Record<string, unknown>).__TL_FAKE_LONG_TITLE__ = t; }, CHASM_TITLE);
+  await page.goto("/");
+  await page.getByRole("button", { name: /earlier attempt/i }).click();
+  const h1 = page.locator("h1.tl-plans-book");
+  await expect(h1).toBeVisible();
+  await expect(h1).toHaveAttribute("title", CHASM_TITLE);
+  await expect(h1).toHaveAttribute("aria-label", CHASM_TITLE);
+  await expect(h1).toContainText("Crossing the Chasm, 3rd Edition");
+  await expect(page.locator(".tl-plans-subtitle")).toContainText("Marketing and Selling Disruptive Products");
+  const box = await h1.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.height).toBeLessThan(180);
+  const overflow = await h1.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  await shoot(page, "37-long-title-plans");
+});
+
+test("topbar-labels-wide-icons-narrow", async ({ page }) => {
+  await page.goto("/");
+  // Wide: the segmented control shows text labels.
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await expect(page.locator("#tab-today .tl-seg-label")).toBeVisible();
+  await expect(page.locator("#tab-today .tl-seg-ico")).toBeHidden();
+  await shoot(page, "35-topbar-wide-labels");
+  // Tight bar (bookbar container < 30rem): labels collapse to icons, accessible
+  // names preserved via each tab's aria-label.
+  await page.setViewportSize({ width: 460, height: 800 });
+  await expect(page.locator("#tab-today .tl-seg-label")).toBeHidden();
+  await expect(page.locator("#tab-today .tl-seg-ico")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Today" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Library" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Notes" })).toBeVisible();
+  await shoot(page, "35b-topbar-narrow-icons");
+});
+
+test("topbar-labels-wide-icons-narrow-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await shoot(page, "35c-topbar-wide-labels-dark");
+  await page.setViewportSize({ width: 460, height: 800 });
+  await expect(page.locator("#tab-today .tl-seg-ico")).toBeVisible();
+  await shoot(page, "35d-topbar-narrow-icons-dark");
 });

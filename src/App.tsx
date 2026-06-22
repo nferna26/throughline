@@ -690,25 +690,28 @@ export default function App() {
                   />
                   <div className="tl-seg" role="tablist" aria-label="View">
                     <button
-                      role="tab" id="tab-today"
+                      role="tab" id="tab-today" aria-label="Today"
                       aria-selected={tab === "today"} aria-controls="book-panel"
                       onClick={() => setTab("today")}
                     >
-                      Today
+                      <span className="tl-seg-ico" aria-hidden="true"><TLIcon name="book" size={16} /></span>
+                      <span className="tl-seg-label">Today</span>
                     </button>
                     <button
-                      role="tab" id="tab-library"
+                      role="tab" id="tab-library" aria-label="Library"
                       aria-selected={tab === "library"} aria-controls="book-panel"
                       onClick={() => setTab("library")}
                     >
-                      Library
+                      <span className="tl-seg-ico" aria-hidden="true"><TLIcon name="columns" size={16} /></span>
+                      <span className="tl-seg-label">Library</span>
                     </button>
                     <button
-                      role="tab" id="tab-notes"
+                      role="tab" id="tab-notes" aria-label="Notes"
                       aria-selected={tab === "notes"} aria-controls="book-panel"
                       onClick={() => setTab("notes")}
                     >
-                      Notes
+                      <span className="tl-seg-ico" aria-hidden="true"><TLIcon name="note" size={16} /></span>
+                      <span className="tl-seg-label">Notes</span>
                     </button>
                   </div>
                 </div>
