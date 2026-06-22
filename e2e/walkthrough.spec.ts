@@ -110,8 +110,25 @@ test("finished-book", async ({ page }) => {
   // The finishing moment is a calm card, not silence (Epic E1).
   await expect(page.getByText(/You finished Meditations/i)).toBeVisible();
   await expect(page.getByRole("button", { name: /Review your notes/i })).toBeVisible();
+  // The post-finish "add another book?" moment: a quiet question with both
+  // acquisition paths and a dismissible "Not now" (never a nag).
+  await expect(page.getByText("Want to add another book?")).toBeVisible();
   await expect(page.getByRole("button", { name: /Find another book/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Import a file" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Not now" })).toBeVisible();
   await shoot(page, "17-finished-book");
+});
+
+test("finished-book-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_DONE__ = true;
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await expect(page.getByText(/You finished Meditations/i)).toBeVisible();
+  await expect(page.getByText("Want to add another book?")).toBeVisible();
+  await shoot(page, "17b-finished-book-dark");
 });
 
 test("day-one-does-not-preprint-the-opening", async ({ page }) => {
@@ -273,6 +290,54 @@ test("book-switcher-per-book-remove", async ({ page }) => {
   await page.getByRole("button", { name: "Meditations, Marcus Aurelius, reading" }).click({ button: "right" });
   await expect(page.getByRole("menuitem", { name: "Remove from library" })).toBeVisible();
   await shoot(page, "28-switcher-remove");
+});
+
+test("switcher-add-a-book-and-mini-covers", async ({ page }) => {
+  // The acquisition affordance regressed when it was dropped from the switcher;
+  // it returns as two quiet rows below "All books in your library". The recents
+  // thumbnails use the no-text "mini" cover (cloth + spine, no clipped title).
+  await page.goto("/");
+  await page.getByTitle("Switch book").click();
+  await expect(page.getByRole("button", { name: "All books in your library" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Find a book in the catalogue" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Import a file" })).toBeVisible();
+  // The recents rows render the text-free mini cover.
+  expect(await page.locator(".tl-cover.sz-mini").count()).toBeGreaterThan(0);
+  await shoot(page, "31-switcher-add-a-book");
+});
+
+test("switcher-add-a-book-and-mini-covers-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await page.getByTitle("Switch book").click();
+  await expect(page.getByRole("button", { name: "Find a book in the catalogue" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Import a file" })).toBeVisible();
+  expect(await page.locator(".tl-cover.sz-mini").count()).toBeGreaterThan(0);
+  await shoot(page, "31b-switcher-add-a-book-dark");
+});
+
+test("library-tab-add-a-book", async ({ page }) => {
+  // The in-app Library surface (not the catalogue): its header carries the same
+  // add-a-book pair so acquisition is reachable wherever books are managed.
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Library" }).click();
+  await expect(page.getByRole("heading", { name: "Your library" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add a book" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Import a file" })).toBeVisible();
+  await shoot(page, "32-library-add-a-book");
+});
+
+test("library-tab-add-a-book-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Library" }).click();
+  await expect(page.getByRole("heading", { name: "Your library" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add a book" })).toBeVisible();
+  await shoot(page, "32b-library-add-a-book-dark");
 });
 
 test("returning-reader-skips-the-pace-step", async ({ page }) => {

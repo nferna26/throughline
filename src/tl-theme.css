@@ -193,6 +193,12 @@
 }
 .tl-iconbtn:hover { background: var(--tl-ink-06); color: var(--tl-ink); }
 .tl-iconbtn[aria-pressed="true"], .tl-iconbtn.active { color: var(--tl-ink); background: var(--tl-ink-06); }
+/* A disabled icon button (e.g. section nav at the sitting's first/last section)
+   must READ as inert, not just be inert — dim it and drop the hover affordance,
+   so an arrow that no-ops at the sitting boundary never looks like a dead live
+   control. The next step there is Finish, not Next. */
+.tl-iconbtn:disabled { opacity: 0.32; cursor: default; }
+.tl-iconbtn:disabled:hover { background: transparent; color: var(--tl-muted); }
 
 /* ════════ window body / scroll region ════════ */
 .tl-body {
@@ -1654,10 +1660,9 @@
 .tl-switcher-row:hover { background: var(--tl-sheet); }
 .tl-switcher-row.active { background: var(--tl-accent-soft); }
 .tl-switcher-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--tl-focus); }
+/* The recents thumbnail uses the Cover "mini" size (cloth texture + spine only,
+   no title text to clip); dimensions + frame come from .tl-cover.sz-mini. */
 .tl-switcher-cover.tl-cover { width: 30px; height: 44px; }
-.tl-switcher-cover .tl-cover-ct { font-size: 5px; }
-.tl-switcher-cover .tl-cover-ca { display: none; }
-.tl-switcher-cover .tl-cover-frame { inset: 4px 4px 4px 6px; }
 .tl-switcher-meta { min-width: 0; flex: 1; display: flex; flex-direction: column; }
 .tl-switcher-title {
   font-family: var(--tl-serif);
@@ -1727,3 +1732,46 @@
   max-width: 52ch;
 }
 .tl-moved-act { display: flex; gap: 10px; }
+
+/* ── add-a-book affordances (library header, switcher, post-finish) ── */
+/* Library header: a quiet "Add a book" + an "Import a file" secondary. */
+.tl-library-add { display: inline-flex; align-items: center; gap: 12px; margin-left: 14px; }
+.tl-btn.tl-library-add-primary { padding: 7px 13px; font-size: 12.5px; gap: 6px; }
+
+/* Switcher dropdown: catalogue + import rows below "All books in your library". */
+.tl-switcher-add { border-top: 1px solid var(--tl-line); }
+.tl-switcher-addrow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 14px;
+  font-family: var(--tl-sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--tl-muted);
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+.tl-switcher-addrow:hover { background: var(--tl-sheet); color: var(--tl-ink); }
+.tl-switcher-addrow:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--tl-focus); }
+.tl-switcher-addrow svg { flex: none; color: var(--tl-faint); }
+
+/* Post-finish: a subtle, dismissible nudge toward the next book. */
+.tl-finish-add { margin-top: 22px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.tl-finish-add-q { font-size: 13px; color: var(--tl-muted); margin: 0; }
+.tl-finish-add-actions { display: inline-flex; align-items: center; gap: 16px; }
+.tl-finish-add-dismiss {
+  font-family: var(--tl-sans);
+  font-size: 12.5px;
+  color: var(--tl-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--tl-r-sm);
+}
+.tl-finish-add-dismiss:hover { color: var(--tl-ink-soft); }
+.tl-finish-add-dismiss:focus-visible { outline: 2px solid var(--tl-focus); outline-offset: 2px; }

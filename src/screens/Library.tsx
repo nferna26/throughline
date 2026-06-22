@@ -33,8 +33,10 @@ interface Props {
   onOpenBook: (bookId: string) => void;
   /** Right-click → Remove from library (opens the confirmation in the parent). */
   onRequestRemove: (entry: LibraryEntry) => void;
-  /** Empty-state "Browse the library" → the public-domain catalogue. */
+  /** "Browse the library" / "Add a book" → the public-domain catalogue. */
   onBrowse: () => void;
+  /** "Import a file" → the local .txt/.epub picker. */
+  onImport: () => void;
 }
 
 /** Fetch the embedded cover (a data: URI) for every entry that has one, cached
@@ -76,6 +78,7 @@ export default function Library({
   onOpenBook,
   onRequestRemove,
   onBrowse,
+  onImport,
 }: Props) {
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
   const [query, setQuery] = useState("");
@@ -137,6 +140,14 @@ export default function Library({
           <h1 className="tl-library-title">Your library</h1>
           <span className="tl-library-count">
             {total} {total === 1 ? "book" : "books"}
+          </span>
+          <span className="tl-library-add">
+            <button type="button" className="tl-btn tl-btn-ghost tl-library-add-primary" onClick={onBrowse}>
+              <TLIcon name="plus" size={15} /> Add a book
+            </button>
+            <button type="button" className="tl-link-quiet" onClick={onImport}>
+              Import a file
+            </button>
           </span>
         </div>
         {canSearch && (

@@ -956,8 +956,8 @@ export default function TextReader({ today, onExit }: Props) {
         <div className="tl-tb-div" />
         <button className={showNote ? "tl-iconbtn active" : "tl-iconbtn"} aria-label="Add note" title="Add note (or select text for the Companion Margin)" onClick={() => setShowNote(true)}><TLIcon name="pencil" size={18} /></button>
         <div className="tl-tb-div" />
-        <button className="tl-iconbtn" disabled={currentIdx <= spanRange.min} aria-label="Previous section" onClick={goPrev}><TLIcon name="chevronLeft" size={18} /></button>
-        <button className="tl-iconbtn" disabled={currentIdx >= spanRange.max} aria-label="Next section" onClick={goNext}><TLIcon name="chevronRight" size={18} /></button>
+        <button className="tl-iconbtn" disabled={currentIdx <= spanRange.min} aria-disabled={currentIdx <= spanRange.min} aria-label="Previous section" onClick={goPrev}><TLIcon name="chevronLeft" size={18} /></button>
+        <button className="tl-iconbtn" disabled={currentIdx >= spanRange.max} aria-disabled={currentIdx >= spanRange.max} aria-label="Next section" onClick={goNext}><TLIcon name="chevronRight" size={18} /></button>
         <div className="tl-tb-div" />
         <button
           className={marginIsVisible ? "tl-iconbtn tl-paneltoggle active" : "tl-iconbtn tl-paneltoggle"}

@@ -19,6 +19,10 @@ interface Props {
   onShowInLibrary: (bookId: string) => void;
   /** Context menu "Continue reading" → switch + open the reader. */
   onContinueReading: (bookId: string) => void;
+  /** "Find a book in the catalogue" → the public-domain catalogue. */
+  onDiscover: () => void;
+  /** "Import a file" → the local .txt/.epub picker. */
+  onImport: () => void;
   /** Context menu "Remove from library" → opens the confirmation in the parent. */
   onRemoveBook: (entry: { id: string; title: string; provenance: Provenance }) => void;
 }
@@ -44,6 +48,8 @@ export default function BookSwitcher({
   onOpenLibrary,
   onShowInLibrary,
   onContinueReading,
+  onDiscover,
+  onImport,
   onRemoveBook,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -187,7 +193,7 @@ export default function BookSwitcher({
                 <Cover
                   title={b.title}
                   author={b.author}
-                  size="search"
+                  size="mini"
                   className="tl-switcher-cover"
                   coverSrc={b.has_cover ? covers[b.id] : undefined}
                 />
@@ -203,6 +209,14 @@ export default function BookSwitcher({
           <button type="button" className="tl-switcher-all" onClick={() => { close(true); onOpenLibrary(); }}>
             <TLIcon name="columns" size={15} /> All books in your library
           </button>
+          <div className="tl-switcher-add">
+            <button type="button" className="tl-switcher-addrow" onClick={() => { close(true); onDiscover(); }}>
+              <TLIcon name="search" size={15} /> Find a book in the catalogue
+            </button>
+            <button type="button" className="tl-switcher-addrow" onClick={() => { close(true); onImport(); }}>
+              <TLIcon name="upload" size={15} /> Import a file
+            </button>
+          </div>
         </div>
       )}
 

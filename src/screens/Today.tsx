@@ -7,6 +7,8 @@ interface Props {
   today: TodayCard | null;
   /** Open the public-domain catalogue (the "find another book" path). */
   onDiscover: () => void;
+  /** Import a local .txt/.epub (the post-finish "Import a file" secondary). */
+  onImport?: () => void;
   /** Open the reader at the current sitting. */
   onStart: (t: TodayCard) => void;
   /** Create a fresh plan for the book (the plan-less "Start a plan" flow). */
@@ -38,7 +40,52 @@ function minutesPhrase(n: number): string {
   return `About ${word} minute${n === 1 ? "" : "s"}.`;
 }
 
-export default function Today({ today, onDiscover, onStart, onNewPlan, onReviewNotes, onPlans }: Props) {
+/** A subtle, dismissible post-finish nudge: after a book is finished, gently
+ *  offer the next one. Never a nag — once "Not now" is chosen for this book it
+ *  stays dismissed (persisted per book), and there is no streak or upsell tone. */
+function FinishAddPrompt({
+  bookId,
+  onDiscover,
+  onImport,
+}: {
+  bookId: string;
+  onDiscover: () => void;
+  onImport?: () => void;
+}) {
+  const key = `tl.finishAddDismissed.${bookId}`;
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(key) === "1";
+    } catch {
+      return false;
+    }
+  });
+  if (dismissed) return null;
+  return (
+    <div className="tl-finish-add" role="group" aria-label="Add another book">
+      <p className="tl-finish-add-q">Want to add another book?</p>
+      <div className="tl-finish-add-actions">
+        <button className="tl-link-quiet" onClick={onDiscover}>Find another book</button>
+        {onImport && <button className="tl-link-quiet" onClick={onImport}>Import a file</button>}
+        <button
+          className="tl-finish-add-dismiss"
+          onClick={() => {
+            try {
+              localStorage.setItem(key, "1");
+            } catch {
+              /* ignore */
+            }
+            setDismissed(true);
+          }}
+        >
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function Today({ today, onDiscover, onImport, onStart, onNewPlan, onReviewNotes, onPlans }: Props) {
   const bookId = today?.book.id;
   // How many plans this book has — drives the quiet "Plans · N earlier" link.
   const [plansCount, setPlansCount] = useState(0);
@@ -85,8 +132,8 @@ export default function Today({ today, onDiscover, onStart, onNewPlan, onReviewN
           {onReviewNotes && (
             <button className="tl-btn tl-btn-ghost" onClick={onReviewNotes}>Review your notes</button>
           )}
-          <button className="tl-link-quiet" onClick={onDiscover}>Find another book</button>
         </div>
+        <FinishAddPrompt bookId={book.id} onDiscover={onDiscover} onImport={onImport} />
       </div>
     );
   }

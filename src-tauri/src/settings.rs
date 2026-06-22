@@ -244,7 +244,7 @@ pub fn validate_export_path(raw: &str) -> Result<PathBuf> {
         .any(|c| matches!(c, std::path::Component::ParentDir))
     {
         return Err(anyhow!(
-            "the export folder path can't contain \"..\" — choose the folder directly"
+            "the export folder path can't contain \"..\", so choose the folder directly"
         ));
     }
     // Refuse to overwrite obvious system directories. `starts_with` compares

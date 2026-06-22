@@ -766,7 +766,7 @@ async fn codex_refresh_resolved(client: &reqwest::Client, r: &mut ResolvedCodex)
 /// failure would strand the app AND the reader's Codex CLI with revoked
 /// credentials and no signal why — it must surface as the call's error.
 const CODEX_PERSIST_FAILED_MSG: &str =
-    "Your ChatGPT sign-in was refreshed but couldn't be saved — sign in again in Settings → Assistance.";
+    "Your ChatGPT sign-in was refreshed but couldn't be saved. Sign in again in Settings → Assistance.";
 
 /// Persist rotated Codex tokens back to whichever store they came from.
 /// Separated from the OAuth round-trip so the write-back is testable hermetically.
@@ -1714,7 +1714,7 @@ mod tests {
             .expect_err("write-back into a read-only CODEX_HOME must error, not be swallowed");
         let msg = format!("{err}");
         assert!(
-            msg.contains("sign in again"),
+            msg.to_lowercase().contains("sign in again"),
             "error must tell the reader what to do, got: {msg}"
         );
     }

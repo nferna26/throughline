@@ -402,7 +402,7 @@ fn refine_oversized_sections(
             for p in 0..parts {
                 let ps = if p == 0 { s } else { split(p) };
                 let pe = if p == parts - 1 { e } else { split(p + 1) };
-                refined.push((format!("{} — pt {}", label, p + 1), ps, pe));
+                refined.push((format!("{}, part {}", label, p + 1), ps, pe));
             }
         } else {
             refined.push((label, s, e));

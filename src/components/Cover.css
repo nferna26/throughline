@@ -169,6 +169,11 @@
 .tl-cover.sz-full   .tl-cover-ct { font-size: 16px; }
 .tl-cover.sz-full   .tl-cover-ca { font-size: 10.5px; margin-top: 10px; }
 
+/* mini: a switcher-recents thumbnail. Cloth texture + spine only, no text — the
+   gilt frame is pulled in so it fits the small object. */
+.tl-cover.sz-mini   { width: 30px; height: 44px; padding: 0; }
+.tl-cover.sz-mini   .tl-cover-frame { inset: 4px 4px 4px 6px; }
+
 /* ── the cover-as-button primitive (the only motion is a subtle hover lift) ── */
 .tl-book {
   background: none;

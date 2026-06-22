@@ -54,6 +54,7 @@ function renderToday(today: TodayCard | null, over: Partial<Parameters<typeof To
 beforeEach(() => {
   vi.mocked(invoke).mockReset();
   vi.mocked(invoke).mockResolvedValue([]);
+  localStorage.clear(); // FinishAddPrompt persists per-book dismissal; isolate tests
 });
 
 describe("Today — no book yet", () => {
@@ -181,6 +182,33 @@ describe("Today — the book on the desk (five states)", () => {
     expect(onReviewNotes).toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Find another book" }));
     expect(onDiscover).toHaveBeenCalled();
+  });
+
+  it("finished: the post-finish nudge offers Import too, and 'Not now' dismisses it for that book", () => {
+    const onDiscover = vi.fn();
+    const onImport = vi.fn();
+    const c = card("finished");
+    const { unmount } = renderToday(c, { onDiscover, onImport });
+
+    // The subtle "add another book?" moment: a question + both acquisition paths.
+    expect(screen.getByText("Want to add another book?")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Import a file" }));
+    expect(onImport).toHaveBeenCalledTimes(1);
+
+    // "Not now" dismisses it; the dismissal persists, so it does not nag on return.
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    expect(screen.queryByText("Want to add another book?")).toBeNull();
+    unmount();
+    renderToday(c, { onDiscover, onImport });
+    expect(screen.queryByText("Want to add another book?")).toBeNull();
+  });
+
+  it("finished: without onImport, the nudge shows only the catalogue path (no dead Import)", () => {
+    const c = card("finished");
+    renderToday(c, { onDiscover: vi.fn() }); // no onImport
+    expect(screen.getByText("Want to add another book?")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Find another book" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Import a file" })).toBeNull();
   });
 
   it("no_plan: the book still owns Today, with one calm action — Start a plan", () => {

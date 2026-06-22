@@ -42,6 +42,7 @@ const baseProps = {
   onOpenBook: noop,
   onRequestRemove: noop,
   onBrowse: noop,
+  onImport: noop,
 };
 
 beforeEach(() => mockInvoke.mockReset());
@@ -73,6 +74,18 @@ describe("Library surface", () => {
     expect(screen.getByRole("heading", { name: "Finished" })).toBeInTheDocument();
     // The finished book is labelled "finished" for assistive tech (not colour-only).
     expect(screen.getByRole("button", { name: "Walden, finished" })).toBeInTheDocument();
+  });
+
+  it("the populated header offers add-a-book: 'Add a book' → onBrowse, 'Import a file' → onImport", async () => {
+    mockLibrary([entry({ id: "a", title: "Active", is_active: true })]);
+    const onBrowse = vi.fn();
+    const onImport = vi.fn();
+    const user = userEvent.setup();
+    render(<Library {...baseProps} today={todayFor("a", "Active")} onBrowse={onBrowse} onImport={onImport} />);
+    await user.click(await screen.findByRole("button", { name: "Add a book" }));
+    expect(onBrowse).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Import a file" }));
+    expect(onImport).toHaveBeenCalledTimes(1);
   });
 
   it("no search field for a small library; a search field appears for a large one", async () => {

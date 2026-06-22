@@ -684,6 +684,8 @@ export default function App() {
                     onOpenLibrary={() => setTab("library")}
                     onShowInLibrary={() => setTab("library")}
                     onContinueReading={openLibraryBook}
+                    onDiscover={openDiscover}
+                    onImport={importBook}
                     onRemoveBook={(e) => requestRemove(e.id, e.title, e.provenance)}
                   />
                   <div className="tl-seg" role="tablist" aria-label="View">
@@ -718,7 +720,7 @@ export default function App() {
                 aria-labelledby={tab === "today" ? "tab-today" : tab === "library" ? "tab-library" : "tab-notes"}
               >
                 {tab === "today" ? (
-                  <Today today={today} onDiscover={openDiscover} onStart={startReading} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} onPlans={() => setView({ kind: "plans" })} />
+                  <Today today={today} onDiscover={openDiscover} onImport={importBook} onStart={startReading} onNewPlan={newPlan} onReviewNotes={() => setTab("notes")} onPlans={() => setView({ kind: "plans" })} />
                 ) : tab === "library" ? (
                   <Library
                     today={today}
@@ -728,6 +730,7 @@ export default function App() {
                     onOpenBook={openLibraryBook}
                     onRequestRemove={(entry) => requestRemove(entry.id, entry.title, entry.provenance)}
                     onBrowse={openDiscover}
+                    onImport={importBook}
                   />
                 ) : (
                   <NotesBrowser book={today.book} />

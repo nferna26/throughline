@@ -50,6 +50,8 @@ const props = {
   onOpenLibrary: () => {},
   onShowInLibrary: () => {},
   onContinueReading: () => {},
+  onDiscover: () => {},
+  onImport: () => {},
   onRemoveBook: () => {},
 };
 
@@ -91,6 +93,24 @@ describe("BookSwitcher — recents, Now, all-books, context menu", () => {
     await user.click(screen.getByRole("button", { name: /Active Book/ }));
     await user.click(await screen.findByRole("button", { name: "All books in your library" }));
     expect(onOpenLibrary).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers add-a-book rows: catalogue → onDiscover, import → onImport", async () => {
+    mockLibrary();
+    const onDiscover = vi.fn();
+    const onImport = vi.fn();
+    const user = userEvent.setup();
+    render(<BookSwitcher {...props} onDiscover={onDiscover} onImport={onImport} />);
+    await user.click(screen.getByRole("button", { name: /Active Book/ }));
+    // The acquisition affordance regressed when it was dropped from the switcher;
+    // it lives below "All books in your library" as two quiet rows.
+    await user.click(await screen.findByRole("button", { name: "Find a book in the catalogue" }));
+    expect(onDiscover).toHaveBeenCalledTimes(1);
+    expect(onImport).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /Active Book/ })); // reopen (the first click closed it)
+    await user.click(await screen.findByRole("button", { name: "Import a file" }));
+    expect(onImport).toHaveBeenCalledTimes(1);
   });
 
   it("right-click → Remove asks the parent with provenance (never deletes inline)", async () => {
