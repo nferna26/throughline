@@ -258,9 +258,13 @@ pub fn build_prompt_with_depth(mode: StubMode, depth: Depth, ctx: &PromptContext
 
 {preamble}
 
-In 2-3 sentences (about 55 words, never more), in plain flowing prose, tell me \
-the single main point this passage makes and why it matters for reading these \
-lines. Don't open with a wind-up like \"This passage\" — start with the \
+Explain ONLY the selected lines. In 2-3 sentences (about 55 words, never more), \
+in plain flowing prose, give the single main point this passage makes and decode \
+the one thing that makes it hard right here — the irony, the ambiguous referent, \
+the archaic word, or the buried metaphor — not a surface paraphrase. Never \
+mention or imply anything beyond the selection: no later events, outcomes, or \
+characters' fates, and never say it \"foreshadows,\" \"sets up,\" or \"leads to\" \
+what follows. Don't open with a wind-up like \"This passage\" — start with the \
 substance. No headers, no lists, no closing question. At most one **bold** term \
 for the key idea. Stop the instant the point is made.
 
@@ -275,10 +279,13 @@ for the key idea. Stop the instant the point is made.
 I've already read a 2-3 sentence gist of this passage and asked to go deeper, \
 so do NOT restate it. In at most ~130 words (one or two short paragraphs of \
 plain prose), go down one altitude: unpack the author's reasoning move — the \
-hidden assumption the claim rests on, the tension or counter-position it \
-answers, or how this step sets up what follows. At most one **bold** named \
-distinction. No headers, no numbered or multi-level lists, no closing question. \
-Build past the gist; don't summarize it.
+hidden assumption the claim rests on, or the tension or counter-position it \
+answers — working only from what these lines themselves show. Stay strictly \
+inside the selection: never mention or imply later events, outcomes, or \
+characters' fates, and never say it \"foreshadows,\" \"sets up,\" or \"leads \
+to\" what follows. At most one **bold** named distinction. No headers, no \
+numbered or multi-level lists, no closing question. Build past the gist; don't \
+summarize it.
 
 {fenced}
 "
@@ -673,6 +680,39 @@ mod tests {
         assert!(
             !p.contains("what assumption it rests on"),
             "the old two-part essay directive must be removed from brief:\n{p}"
+        );
+    }
+
+    #[test]
+    fn explain_lenses_forbid_forward_reach_and_spoilers() {
+        // CORE-1146: the Explain lens explains only the selection and never reaches
+        // forward into later plot. Both depths carry the no-spoiler contract; the
+        // brief additionally pins the explain-only + decode-the-hard-thing rule.
+        for depth in [Depth::Brief, Depth::Deep] {
+            let p = build_prompt_with_depth(StubMode::Explain, depth, &ctx("Sample."));
+            assert!(
+                p.contains("foreshadows"),
+                "{depth:?}: missing forward-reach ban:\n{p}"
+            );
+            assert!(
+                p.contains("leads to"),
+                "{depth:?}: missing leads-to ban:\n{p}"
+            );
+            let lc = p.to_lowercase();
+            assert!(
+                lc.contains("never mention or imply anything beyond the selection")
+                    || lc.contains("never mention or imply later events"),
+                "{depth:?}: missing no-spoiler rule:\n{p}"
+            );
+        }
+        let brief = build_prompt_with_depth(StubMode::Explain, Depth::Brief, &ctx("Sample."));
+        assert!(
+            brief.contains("Explain ONLY the selected lines"),
+            "brief missing explain-only contract:\n{brief}"
+        );
+        assert!(
+            brief.contains("not a surface paraphrase"),
+            "brief missing decode-not-paraphrase contract:\n{brief}"
         );
     }
 
