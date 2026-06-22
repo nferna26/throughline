@@ -461,8 +461,9 @@ export default function MarginTutorCard(props: {
         // "ask for more" a quiet tertiary link — never a paywall.
         <div className="tl-tutor-consent tl-caphit">
           <p>
-            <strong>Your included Throughline AI is used up.</strong> Reading and notes are
-            untouched. Pick how the tutor keeps answering:
+            You've used the generous tutoring included with your license. That's a lot of
+            reading. The tutor keeps working: add your own API key or switch to a local model
+            below, free. Reading is unaffected.
           </p>
           <AiSetupSheet
             ctx={{
@@ -474,15 +475,16 @@ export default function MarginTutorCard(props: {
             }}
             initialState="not_connected"
             title="Keep going free"
-            subtitle="Use your own API key, or run a local model on this Mac — free either way."
+            subtitle="Use your own API key, or run a local model on this Mac. Free either way."
             onConnected={onSetupConnected}
           />
           <div className="tl-caphit-doors">
+            <p className="tl-caphit-secondary">Prefer to stay on the built-in tutor?</p>
             <button
               className="tl-tutor-ghost"
               onClick={(e) => { e.stopPropagation(); topUp(); }}
             >
-              Get another full allowance — $20
+              Get another full allowance for $20
             </button>
             {topUpUrl !== null && (
               <p className="tl-tutorfuel-note" role="status">
@@ -490,9 +492,9 @@ export default function MarginTutorCard(props: {
                   <>Couldn't start checkout. Try again in a moment.</>
                 ) : (
                   <>
-                    Opening checkout in your browser… If it doesn't open,{" "}
+                    Opening checkout in your browser. If it doesn't open,{" "}
                     <a href={topUpUrl} target="_blank" rel="noopener noreferrer">continue here</a>.
-                    After you buy, activation happens automatically — then{" "}
+                    After you buy, activation happens automatically, then{" "}
                     <button className="tl-caphit-link" onClick={(e) => { e.stopPropagation(); retryAfterTopUp(); }}>
                       try again
                     </button>.
@@ -504,7 +506,7 @@ export default function MarginTutorCard(props: {
               className="tl-caphit-link"
               onClick={(e) => { e.stopPropagation(); void invoke("cmd_open_support_email").catch(() => {}); }}
             >
-              Think you should get more included? Let me know →
+              Think you hit this unusually early? Reply to your purchase email and tell me.
             </button>
           </div>
         </div>

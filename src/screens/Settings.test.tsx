@@ -71,27 +71,38 @@ describe("Settings — 4-section redesign", () => {
     expect(screen.getByText("About")).toBeInTheDocument();
   });
 
-  // FT-11: the allowance meter must read the REAL remaining_fraction, not a constant.
-  it("renders the allowance meter from cmd_company_credits (real fraction, not hardcoded)", async () => {
+  // The included-tutoring status is calm + qualitative: no bar, no number, no
+  // percent (the no-counter rule). 0.42 (> 0.33) reads as a calm "On".
+  it("renders a calm included-tutoring status (no bar, no number, no percent)", async () => {
     wire({ ai_provider: "company" }, { credits: { status: "active", remaining_fraction: 0.42, approx_questions_left: 120 } });
-    render(<Settings />);
-    const meter = await screen.findByRole("progressbar", { name: /Reading help remaining/i });
-    expect(meter).toHaveAttribute("aria-valuenow", "42");
-    const fill = meter.querySelector(".meter-fill") as HTMLElement;
-    expect(fill.style.width).toBe("42%");
-    // Calm state word + accent (not warn) while there is plenty.
-    expect(screen.getByText("Plenty left")).toBeInTheDocument();
+    const { container } = render(<Settings />);
+    expect(await screen.findByText(/Plenty remaining for your reading/i)).toBeInTheDocument();
+    expect(container.querySelector(".allowance-state")?.textContent).toBe("On");
+    expect(container.querySelector(".allowance")).not.toHaveClass("low");
     expect(screen.queryByText("Running low")).toBeNull();
+    // HARD RULE: no progressbar/meter anywhere; no raw count or percent in the block.
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(container.querySelector(".meter, .meter-fill")).toBeNull();
+    const block = container.querySelector(".allowance")?.textContent ?? "";
+    expect(block).not.toMatch(/120/);
+    expect(block).not.toMatch(/%/);
   });
 
-  it("switches the meter to a warn 'Running low' state only when genuinely low", async () => {
+  it("shows a calm 'running low' status (warn class, no bar/number) only when genuinely low", async () => {
     wire({ ai_provider: "company" }, { credits: { status: "active", remaining_fraction: 0.08, approx_questions_left: 12 } });
-    render(<Settings />);
-    expect(await screen.findByText("Running low")).toBeInTheDocument();
-    expect(screen.queryByText("Plenty left")).toBeNull();
-    // The low state pairs the warn color with a word + recolors via the `.low` class.
-    const meter = screen.getByRole("progressbar", { name: /Reading help remaining/i });
-    expect(meter.closest(".allowance")).toHaveClass("low");
+    const { container } = render(<Settings />);
+    expect(
+      await screen.findByText(
+        /Your included tutoring is running low\. When it runs out, the tutor keeps working with your own API key or a local model, free\./i,
+      ),
+    ).toBeInTheDocument();
+    expect(container.querySelector(".allowance")).toHaveClass("low");
+    expect(container.querySelector(".allowance-state")?.textContent).toBe("Running low");
+    // HARD RULE even when low: no number, no percent, no progressbar.
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    const block = container.querySelector(".allowance")?.textContent ?? "";
+    expect(block).not.toMatch(/12/);
+    expect(block).not.toMatch(/%/);
   });
 
   it("shows no meter and no dollars/tokens/percent-jargon in company mode copy", async () => {
@@ -490,16 +501,16 @@ describe("Settings — 4-section redesign", () => {
     });
   });
 
-  it("company mode shows the active status and usage as approximate questions", async () => {
+  it("company mode shows the active status as a calm qualitative line (no number)", async () => {
     wire({ ai_provider: "company" });
-    render(<Settings />);
+    const { container } = render(<Settings />);
     await waitFor(() => expect(screen.getByText("Throughline AI is active.")).toBeInTheDocument());
-    // The credits line resolves from a SEPARATE async call (company credits) than
-    // the status line, so wait for it too — a bare sync getByText races under
-    // parallel-load timing and flakes (it is not painted in the same tick).
-    await waitFor(() => expect(screen.getByText("About 220 questions left.")).toBeInTheDocument());
-    // Reader language only: questions, never tokens or dollars.
+    // The included-tutoring status is calm + qualitative (default 0.74 fraction reads "On").
+    await waitFor(() => expect(screen.getByText(/Plenty remaining for your reading/i)).toBeInTheDocument());
+    // No raw count, no tokens, no dollars, no percent anywhere in the status.
+    expect(screen.queryByText(/220/)).toBeNull();
     expect(screen.queryByText(/token|\$\d/i)).toBeNull();
+    expect(container.querySelector(".allowance")?.textContent ?? "").not.toMatch(/%|\d/);
   });
 
   it("without a license, Settings offers the activation-code door and activates", async () => {

@@ -375,16 +375,18 @@ test("cap-exhausted-fallback", async ({ page }) => {
   });
   await page.getByRole("button", { name: /^Explain/ }).click();
   // Credits spent → the three-door cap screen, free path first, never a dead end.
-  await expect(page.getByText(/included Throughline AI is used up/i)).toBeVisible();
-  await expect(page.getByText(/Reading and notes are untouched/i)).toBeVisible();
+  await expect(page.getByText(/You've used the generous tutoring included with your license/i)).toBeVisible();
+  await expect(page.getByText(/Reading is unaffected/i)).toBeVisible();
   // PRIMARY free door (the only tl-btn-primary), SECONDARY $20 ghost, TERTIARY quiet link.
   await expect(page.getByText("Keep going free")).toBeVisible();
   const freeBtn = page.getByRole("button", { name: /Paste API key & ask/i });
   await expect(freeBtn).toHaveClass(/tl-btn-primary/);
-  const buyBtn = page.getByRole("button", { name: /another full allowance — \$20/i });
+  const buyBtn = page.getByRole("button", { name: /another full allowance for \$20/i });
   await expect(buyBtn).toBeVisible();
   await expect(buyBtn).not.toHaveClass(/tl-btn-primary/);
-  await expect(page.getByRole("button", { name: /Let me know/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Reply to your purchase email/i })).toBeVisible();
+  // HARD RULE: no usage count, no percent, no bar on the cap-hit screen.
+  await expect(page.getByRole("progressbar")).toHaveCount(0);
   await shoot(page, "20-cap-exhausted");
   // The $20 door reuses checkout and offers the post-activation retry.
   await buyBtn.click();
@@ -417,8 +419,10 @@ test("tutor-fuel-strip-when-low", async ({ page }) => {
     document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   });
   await page.getByRole("button", { name: /^Explain/ }).click();
-  await expect(page.getByText(/Running low/)).toBeVisible();
-  await expect(page.getByText(/about 80 left/)).toBeVisible();
+  await expect(page.getByText(/Included tutoring is running low/i)).toBeVisible();
+  // HARD RULE: the low-note has no number and no depleting bar.
+  await expect(page.getByText(/about 80 left/)).toHaveCount(0);
+  await expect(page.locator(".tl-fuel-bar")).toHaveCount(0);
   await shoot(page, "22-fuel-low");
 });
 
@@ -445,7 +449,7 @@ test("tutor-fuel-strip-stays-quiet-with-plenty-left", async ({ page }) => {
   });
   await page.getByRole("button", { name: /^Explain/ }).click();
   await expect(page.getByText(/Aurelius is bracing himself|Stoic/).first()).toBeVisible();
-  await expect(page.getByText(/Running low/)).toHaveCount(0);
+  await expect(page.getByText(/running low/i)).toHaveCount(0);
   await shoot(page, "23-fuel-quiet");
 });
 
@@ -501,7 +505,7 @@ test("company-activation", async ({ page }) => {
   await page.getByRole("button", { name: "Activate" }).click();
   // The same window event the deep link fires refreshes the surface in place.
   await expect(page.getByText("Throughline AI is active.")).toBeVisible();
-  await expect(page.getByText("Reading help remaining")).toBeVisible();
+  await expect(page.getByText("Included tutoring")).toBeVisible();
 });
 
 test("company-checkout", async ({ page }) => {
@@ -523,7 +527,7 @@ test("company-checkout", async ({ page }) => {
     document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   });
   await page.getByRole("button", { name: /^Explain/ }).click();
-  await page.getByRole("button", { name: /another full allowance — \$20/i }).click();
+  await page.getByRole("button", { name: /another full allowance for \$20/i }).click();
   await expect(page.getByText(/Opening checkout in your browser/i)).toBeVisible();
   await expect(page.getByRole("link", { name: /continue here/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /try again/i })).toBeVisible();
@@ -534,24 +538,116 @@ test("company-fuel-gauge", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_COMPANY_ACTIVE__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  // Company status + the real allowance meter, in reader language.
+  // Calm qualitative status — NO bar, NO number, NO percent (the no-counter rule).
   await expect(page.getByText("Throughline AI is active.")).toBeVisible();
-  await expect(page.getByText("Reading help remaining")).toBeVisible();
-  await expect(page.getByText("Plenty left")).toBeVisible();
-  await expect(page.getByRole("progressbar", { name: /Reading help remaining/i })).toBeVisible();
+  await expect(page.getByText("Included tutoring")).toBeVisible();
+  await expect(page.getByText(/Plenty remaining for your reading/i)).toBeVisible();
+  await expect(page.getByRole("progressbar")).toHaveCount(0);
+  await expect(page.locator(".meter")).toHaveCount(0);
   await shoot(page, "19-company-fuel");
 });
 
-test("usage-as-questions-not-dollars", async ({ page }) => {
-  // Replaces the dollars/spend-cap usage card: usage reads as approximate
-  // questions from the relay's own numbers — never tokens, never dollars.
+test("company-fuel-gauge-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_COMPANY_ACTIVE__ = true;
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByText(/Plenty remaining for your reading/i)).toBeVisible();
+  await shoot(page, "19b-company-fuel-dark");
+});
+
+test("settings-tutoring-low", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_COMPANY_ACTIVE__ = true;
+    w.__TL_FAKE_REMAINING_FRACTION__ = 0.1; // <= 0.33 -> calm "Running low"
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByText(/Your included tutoring is running low/i)).toBeVisible();
+  await expect(page.getByRole("progressbar")).toHaveCount(0);
+  await shoot(page, "19c-settings-low");
+});
+
+test("settings-tutoring-low-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_COMPANY_ACTIVE__ = true;
+    w.__TL_FAKE_REMAINING_FRACTION__ = 0.1;
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByText(/Your included tutoring is running low/i)).toBeVisible();
+  await shoot(page, "19d-settings-low-dark");
+});
+
+test("included-tutoring-status-no-counter", async ({ page }) => {
+  // The no-counter rule: the included-tutoring status is a calm qualitative line,
+  // never a usage number, percent, bar, spend-cap, tokens, or dollars.
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_COMPANY_ACTIVE__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByText("About 300 questions left.")).toBeVisible();
+  await expect(page.getByText(/Plenty remaining for your reading/i)).toBeVisible();
+  await expect(page.getByText(/\d+\s*questions/i)).toHaveCount(0);
   await expect(page.getByText(/spend cap/i)).toHaveCount(0);
   await expect(page.getByText(/token/i)).toHaveCount(0);
+  await expect(page.getByRole("progressbar")).toHaveCount(0);
   await shoot(page, "11-usage-questions");
+});
+
+test("cap-exhausted-fallback-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_CAP_EXHAUSTED__ = true;
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Continue reading" }).click();
+  await expect(page.locator(".tl-readcol p").first()).toBeVisible();
+  await page.evaluate(() => {
+    const ps = document.querySelectorAll(".tl-readcol p");
+    const p = ps[1] || ps[0];
+    if (!p) return;
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const sel = window.getSelection();
+    sel!.removeAllRanges();
+    sel!.addRange(range);
+    document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  await page.getByRole("button", { name: /^Explain/ }).click();
+  await expect(page.getByText(/You've used the generous tutoring included with your license/i)).toBeVisible();
+  await shoot(page, "20c-cap-exhausted-dark");
+});
+
+test("tutor-fuel-strip-when-low-dark", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_COMPANY_ACTIVE__ = true;
+    w.__TL_FAKE_REMAINING_FRACTION__ = 0.2;
+    try { window.localStorage.setItem("tl.theme", "dark"); } catch { /* ignore */ }
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Continue reading" }).click();
+  await expect(page.locator(".tl-readcol p").first()).toBeVisible();
+  await page.evaluate(() => {
+    const ps = document.querySelectorAll(".tl-readcol p");
+    const p = ps[1] || ps[0];
+    if (!p) return;
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const sel = window.getSelection();
+    sel!.removeAllRanges();
+    sel!.addRange(range);
+    document.querySelector(".tl-reader-main")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  await page.getByRole("button", { name: /^Explain/ }).click();
+  await expect(page.getByText(/Included tutoring is running low/i)).toBeVisible();
+  await shoot(page, "22b-fuel-low-dark");
 });
 
 test("phrase-arrives-mid-view-with-zero-CLS", async ({ page }) => {

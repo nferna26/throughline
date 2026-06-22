@@ -45,17 +45,26 @@ describe("TutorFuel — low-allowance strip", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("shows the 'Running low' strip at ≥75% used, with the approx count and no dollars", async () => {
+  it("shows a calm low-note at >=75% used: no count, no bar, no percent, no dollars (no-counter rule)", async () => {
     setCredits(0.2, "active", 12); // 80% used
-    render(<TutorFuel provider="company" />);
-    expect(await screen.findByText(/Running low — about 12 left/i)).toBeInTheDocument();
-    expect(screen.queryByText(/\$/)).toBeNull();
+    const { container } = render(<TutorFuel provider="company" />);
+    expect(
+      await screen.findByText(
+        /Included tutoring is running low\. It keeps working with your own key or a local model, free\./i,
+      ),
+    ).toBeInTheDocument();
+    const text = container.textContent ?? "";
+    expect(text).not.toMatch(/12/); // no raw count
+    expect(text).not.toMatch(/%/); // no percent
+    expect(text).not.toMatch(/\$/); // no dollars
+    expect(container.querySelector(".tl-fuel-bar, .fill, [role='progressbar']")).toBeNull(); // no depleting bar
   });
 
-  it("still shows the strip at ≥90% used", async () => {
+  it("still shows the calm low-note at >=90% used (still no count)", async () => {
     setCredits(0.07, "active", 3); // 93% used
-    render(<TutorFuel provider="company" />);
-    expect(await screen.findByText(/Running low — about 3 left/i)).toBeInTheDocument();
+    const { container } = render(<TutorFuel provider="company" />);
+    expect(await screen.findByText(/Included tutoring is running low/i)).toBeInTheDocument();
+    expect(container.textContent ?? "").not.toMatch(/\b3\b/);
   });
 
   it("renders nothing when the license is not active (cap screen owns that state)", async () => {

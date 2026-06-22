@@ -314,24 +314,35 @@ describe("MarginTutorCard — cap-hit three doors (CM6)", () => {
 
   it("renders the three doors with the free path as the only primary", async () => {
     render(card());
-    expect(await screen.findByText(/included Throughline AI is used up/i)).toBeInTheDocument();
+    expect(await screen.findByText(/You've used the generous tutoring included with your license/i)).toBeInTheDocument();
     // PRIMARY: the free door (AiSetupSheet with cap framing) holds the only
     // tl-btn-primary on the screen.
     expect(screen.getByText("Keep going free")).toBeInTheDocument();
     const freeBtn = screen.getByRole("button", { name: /Paste API key & ask/i });
     expect(freeBtn.className).toContain("tl-btn-primary");
     // SECONDARY: the $20 door is a ghost button, never primary.
-    const buyBtn = screen.getByRole("button", { name: /another full allowance — \$20/i });
+    const buyBtn = screen.getByRole("button", { name: /another full allowance for \$20/i });
     expect(buyBtn.className).not.toContain("tl-btn-primary");
     // TERTIARY: the quiet mailto link.
-    expect(screen.getByRole("button", { name: /Let me know/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Reply to your purchase email/i })).toBeInTheDocument();
     // The stale "nothing has been sent" framing must not appear at the cap.
     expect(screen.queryByText(/Nothing has been sent/i)).toBeNull();
   });
 
+  it("renders NO raw allowance number, percent, or progress bar (no-counter rule)", async () => {
+    const { container } = render(card());
+    await screen.findByText(/You've used the generous tutoring included with your license/i);
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(container.querySelector(".meter, .meter-fill, .tl-fuel-bar, .fill")).toBeNull();
+    const text = container.textContent ?? "";
+    // No usage count (the cap mock returns 0/0); the $20 price is allowed (re-purchase, not a meter).
+    expect(text).not.toMatch(/\b\d+\s*(questions|left|remaining)\b/i);
+    expect(text).not.toMatch(/%/);
+  });
+
   it("the $20 door reuses the buy→activate flow and offers a retry", async () => {
     render(card());
-    fireEvent.click(await screen.findByRole("button", { name: /another full allowance — \$20/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /another full allowance for \$20/i }));
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_company_checkout"));
     expect(await screen.findByText(/Opening checkout in your browser/i)).toBeInTheDocument();
     // "try again" clears the cap state and refires the lens.
@@ -343,7 +354,7 @@ describe("MarginTutorCard — cap-hit three doors (CM6)", () => {
 
   it("the quiet door opens the fixed support email (no payload from the app)", async () => {
     render(card());
-    fireEvent.click(await screen.findByRole("button", { name: /Let me know/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Reply to your purchase email/i }));
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_open_support_email"));
   });
 });

@@ -469,15 +469,14 @@ export default function Settings() {
     }
   }
 
-  // ── Allowance derivation (FT-11): real fraction → bar + state word ──
+  // ── Allowance derivation: a qualitative on/low signal ONLY. The fraction stays
+  //    internal; no number, percent, or bar is ever rendered (the no-counter rule).
+  //    The "low" boundary (<=0.33) mirrors the in-margin note so the two surfaces
+  //    agree about when to gently flag "running low".
   const allowance = useMemo(() => {
     if (!credits || credits.status !== "active") return null;
     const frac = Math.max(0, Math.min(1, credits.remaining_fraction));
-    // "Running low" once genuinely low; otherwise calm "Plenty left". The
-    // boundary (>0.33 = plenty) mirrors the in-margin fuel gauge so the two
-    // surfaces never disagree about how much is left.
-    const low = frac <= 0.33;
-    return { pct: Math.round(frac * 100), low, state: low ? "Running low" : "Plenty left" };
+    return { low: frac <= 0.33 };
   }, [credits]);
 
   // ── Audit grouping (by book) for the expanded list ─────────────────
@@ -628,31 +627,22 @@ export default function Settings() {
                   </div>
               )}
 
-              {/* Allowance meter — shown only in the included mode, real data. */}
+              {/* Included-tutoring status — calm + qualitative. No bar, no number,
+                  no percent (the no-counter rule): the included allowance is
+                  generous and exists as an abuse bound, not a ration. */}
               {mode === "included" && allowance && (
                 <div className={`allowance${allowance.low ? " low" : ""}`}>
                   <div className="allowance-top">
                     <span className="allowance-label">
                       <Icon d={ICON.gauge} size={16} />
-                      Reading help remaining
+                      Included tutoring
                     </span>
-                    <span className="allowance-state">{allowance.state}</span>
+                    <span className="allowance-state">{allowance.low ? "Running low" : "On"}</span>
                   </div>
-                  <div
-                    className="meter"
-                    role="progressbar"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={allowance.pct}
-                    aria-label={`Reading help remaining: ${allowance.state}`}
-                  >
-                    <div className="meter-fill" style={{ width: `${allowance.pct}%` }} />
-                  </div>
-                  <p className="allowance-questions">About {credits!.approx_questions_left} questions left.</p>
                   <p className="allowance-foot">
                     {allowance.low
-                      ? "Included with your one-time purchase, and running low. When it's gone you can keep going with your own AI below — your own key or a model on this Mac."
-                      : "Included with your one-time purchase — enough for weeks of normal reading. The margin lets you know if it ever runs low."}
+                      ? "Your included tutoring is running low. When it runs out, the tutor keeps working with your own API key or a local model, free."
+                      : "Plenty remaining for your reading."}
                   </p>
                 </div>
               )}
