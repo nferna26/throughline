@@ -24,10 +24,11 @@ when you push a version tag. One macOS job produces, for a **universal** binary
 | `Throughline.app.tar.gz.sig` | minisign signature of the payload. |
 | `latest.json` | The update manifest the app polls. |
 
-tauri-action uploads all four to a GitHub Release and **publishes it
-immediately**. Pushing the tag is the single switch that (a) makes the download
-link live and (b) activates auto-update for existing users — so all review
-happens **before** tagging (the repo's RC practice: `SHOT1_RC.md`,
+tauri-action still builds, signs, notarizes, and may upload the artifacts to a
+GitHub Release, but runtime distribution lives on Cloudflare R2 behind
+`readthroughline.com`. Pushing the tag is the single switch that uploads
+`Throughline.dmg`, the updater payload, its `.sig`, and `latest.json` to R2, so
+all review happens **before** tagging (the repo's RC practice: `SHOT1_RC.md`,
 `WEEKEND_RC_LOG.md`).
 
 ```
@@ -76,6 +77,13 @@ Set these in the GitHub repo: **Settings → Secrets and variables → Actions**
 | `TAURI_SIGNING_PRIVATE_KEY` | full contents of `~/.throughline-updater.key` |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | empty (the key was generated without one) |
 
+**Cloudflare R2 distribution (required before the repo goes private):**
+
+| Secret | Value |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare token with R2 object edit access |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account that owns `throughline-downloads` |
+
 **Apple signing + notarization (required for a clean install):**
 
 | Secret | Where it comes from |
@@ -93,48 +101,37 @@ Full walkthrough for the Apple ones: [`SIGNING.md`](./SIGNING.md).
 
 ## Putting the download on your website
 
-The published GitHub release exposes a **stable** asset URL:
+The public install URL is stable:
 
 ```
-https://github.com/<owner>/<repo>/releases/latest/download/Throughline_<ver>_universal.dmg
+https://readthroughline.com/download
 ```
 
-Two ways to wire your site's **Download / Buy** button:
-
-- **Link straight to that URL.** Simplest. The catch: a public GitHub release is
-  publicly downloadable, so the `$5` is honor-system (which fits the "$5, or free
-  for vibecoders" model — the free path is the open-source guts anyway).
-- **Deliver the `.dmg` through your store after payment.** Upload the same `.dmg`
-  to your checkout (Gumroad, Lemon Squeezy, Paddle, etc.) and let it hand the
-  file to buyers. This gates the *download*. Note that auto-update still needs
-  the manifest + payload reachable publicly (next section), so updates are not
-  gated even if the first download is — fine, since only people who already paid
-  for/installed the app ever fetch them.
-
-> **Heads-up on the public release.** If you want the very first `.dmg` to be
-> paid-only, you have two choices: (a) deliver it via your store and keep the
-> GitHub release for updater artifacts only, or (b) accept the honor-system
-> model. You cannot have a published release whose `latest.json` is public but
-> whose `.dmg` asset is private — published assets are all public.
+The site Worker streams `Throughline.dmg` from the Cloudflare R2 bucket
+`throughline-downloads`. The release workflow uploads the newest universal DMG
+to that object key after signing and notarization. This keeps the customer
+download independent of GitHub Releases, so the source repo can be private
+without breaking install.
 
 ---
 
 ## Where auto-update artifacts live
 
-The in-app updater (Settings → Software → Updates) fetches the URL in
-`tauri.conf.json → plugins.updater.endpoints`. Two hosting options:
+The in-app updater (Settings → Software → Updates) fetches
+`https://readthroughline.com/updates/latest.json`, configured in
+`tauri.conf.json → plugins.updater.endpoints`.
 
-1. **GitHub Releases (default, zero extra infra).** Endpoint stays
-   `https://github.com/<owner>/<repo>/releases/latest/download/latest.json`.
-   tauri-action already publishes `latest.json` + the payload there. Nothing else
-   to host. **Recommended to start.**
+The release workflow uploads three updater files to the same R2 bucket under
+`updates/`:
 
-2. **Your own domain.** Point the endpoint at e.g.
-   `https://yourdomain.com/throughline/latest.json` and upload the three updater
-   files (`latest.json`, `*.app.tar.gz`, `*.app.tar.gz.sig`) there each release.
-   Full control + lets you keep GitHub out of the loop entirely. Costs you an
-   upload step (rsync/S3/Netlify) and keeping the URLs in `latest.json` pointing
-   at your host.
+- `updates/latest.json`
+- `updates/Throughline.app.tar.gz`
+- `updates/Throughline.app.tar.gz.sig`
+
+Before upload, the workflow rewrites each `latest.json` platform `url` to
+`https://readthroughline.com/updates/Throughline.app.tar.gz`. It does not alter
+or re-sign the payload; the minisign signature remains valid because it covers
+the `.app.tar.gz` bytes, not the URL where those bytes are hosted.
 
 Either way the payload is **minisign-signed** and verified against the public key
 baked into `tauri.conf.json`, so hosting it publicly is safe — a tampered update
@@ -155,20 +152,21 @@ won't install.
 3. Review the release candidate **now** — pushing the tag publishes, there is no
    draft to catch mistakes afterwards.
 4. `git tag vX.Y.Z && git push origin vX.Y.Z`.
-5. Watch the **Release** workflow go green. The release is published the moment
-   the workflow finishes: your website's download link (pointing at
-   `/releases/latest/download/...`) serves it, and existing users get the update
-   next time they click *Check for updates*.
+5. Watch the **Release** workflow go green. The release is usable the moment the
+   workflow finishes: `https://readthroughline.com/download` serves the newest
+   DMG, and existing users get the update next time they click *Check for
+   updates*.
 6. **Confirm the updater can see it** — this gate is what catches a broken
    pipeline before a reader does:
 
    ```
    curl -sL -o /dev/null -w '%{http_code}' \
-     https://github.com/nferna26/throughline/releases/latest/download/latest.json
+     https://readthroughline.com/updates/latest.json
    ```
 
-   Must print `200`. Anything else means the release didn't publish — stop and
-   fix before announcing.
+   Must print `200`. Also confirm `https://readthroughline.com/download`
+   resolves. Anything else means the R2 publish or site Worker is broken — stop
+   and fix before announcing or making the repo private.
 7. Sanity-check the `.dmg` opens cleanly on a real Mac (ideally one that never
    had the dev build).
 
@@ -177,14 +175,12 @@ won't install.
 ## Status / what's left before the first public release
 
 Done:
-- ✅ **Repo renamed** to `nferna26/throughline`, so the updater endpoint resolves.
 - ✅ **Apple signing + notarization secrets** set, and the *Developer ID
   Application: Trainable LLC* cert is in the keychain.
 - ✅ **Updater signing key** (`TAURI_SIGNING_PRIVATE_KEY`) uploaded; its public
   half matches the `pubkey` baked into `tauri.conf.json`.
-- ✅ **Releases publish on tag.** v0.4.0 is live, `/releases/latest` resolves,
-  and the workflow publishes every future tag directly — no draft step, no
-  manual Publish click to forget (it was forgotten four releases in a row).
+- ✅ **Releases publish on tag.** The workflow publishes every future tag
+  directly, then uploads runtime distribution artifacts to R2.
 
 Remaining:
 - **Push the branch + a tag.** The release workflow checks out the tagged commit,
@@ -192,3 +188,7 @@ Remaining:
   `git push` the branch and `git tag vX.Y.Z && git push origin vX.Y.Z`.
 - **Test the notarized `.dmg`** on a clean Mac — Gatekeeper should open it with no
   warning and no right-click.
+- **Do not make the GitHub repo private** until a real release has uploaded
+  `Throughline.dmg`, `updates/latest.json`, `updates/Throughline.app.tar.gz`,
+  and `updates/Throughline.app.tar.gz.sig` to R2, and both `/download` and
+  `/updates/latest.json` resolve from `readthroughline.com`.

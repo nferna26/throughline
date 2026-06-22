@@ -4,7 +4,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import TLIcon, { type IconName } from "./TLIcon";
 
-export const LATEST_RELEASE_URL = "https://github.com/nferna26/throughline/releases/latest";
+export const FALLBACK_DOWNLOAD_URL = "https://readthroughline.com/download";
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export type UpdatePillPhase = "hidden" | "ready" | "updating" | "restart" | "fallback";
@@ -59,7 +59,7 @@ export function updatePillView(phase: Exclude<UpdatePillPhase, "hidden">): PillV
 }
 
 function logUpdateFallback(reason: FallbackReason, err: unknown) {
-  console.warn(`[throughline:update] ${reason} failed; falling back to GitHub releases.`, err);
+  console.warn(`[throughline:update] ${reason} failed; falling back to the public download.`, err);
 }
 
 type Props = {
@@ -158,7 +158,7 @@ export default function UpdateChecker({ visible = true, now = defaultNow }: Prop
   }
 
   function openFallbackDownload() {
-    window.open(LATEST_RELEASE_URL, "_blank", "noopener,noreferrer");
+    window.open(FALLBACK_DOWNLOAD_URL, "_blank", "noopener,noreferrer");
   }
 
   if (!visible || phase === "hidden") return null;

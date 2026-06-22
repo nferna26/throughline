@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 // @ts-expect-error The release verifier is a Node CLI script with named testable exports.
 import { parseArgs, verifyReleaseAssets } from "../scripts/verify-release-assets.mjs";
 
-const repo = "owner/repo";
-const manifestUrl = `https://github.com/${repo}/releases/latest/download/latest.json`;
-const payloadUrl = `https://github.com/${repo}/releases/download/v1.2.3/Throughline_universal.app.tar.gz`;
+const origin = "https://readthroughline.com";
+const manifestUrl = `${origin}/updates/latest.json`;
+const payloadUrl = `${origin}/updates/Throughline.app.tar.gz`;
 const sigUrl = `${payloadUrl}.sig`;
-const dmgUrl = `https://github.com/${repo}/releases/download/v1.2.3/Throughline_1.2.3_universal.dmg`;
+const dmgUrl = `${origin}/download`;
 
 function response(body: string, status = 200) {
   return new Response(body, { status, headers: { "content-type": "text/plain" } });
@@ -34,24 +34,24 @@ function fetchFrom(fixtures: FixtureMap, seen: string[] = []) {
   };
 }
 
-function manifest(signature = "sig-text") {
+function manifest(signature = "sig-text", url = payloadUrl) {
   return JSON.stringify({
     version: "1.2.3",
     platforms: {
-      "darwin-aarch64": { signature, url: payloadUrl },
-      "darwin-x86_64": { signature, url: payloadUrl },
+      "darwin-aarch64": { signature, url },
+      "darwin-x86_64": { signature, url },
       linux: { signature: "ignored", url: "https://example.test/linux.tar.gz" },
     },
   });
 }
 
 describe("verifyReleaseAssets", () => {
-  it("verifies latest.json, darwin updater payload/signature, and the universal dmg", async () => {
+  it("verifies R2 latest.json, darwin updater payload/signature, and the public dmg", async () => {
     const seen: string[] = [];
     const logs: string[] = [];
 
     const result = await verifyReleaseAssets({
-      repo,
+      origin,
       expectedVersion: "v1.2.3",
       fetchImpl: fetchFrom(
         {
@@ -67,7 +67,7 @@ describe("verifyReleaseAssets", () => {
     });
 
     expect(result).toMatchObject({
-      repo,
+      origin,
       version: "1.2.3",
       platformCount: 2,
       payloadCount: 1,
@@ -81,7 +81,7 @@ describe("verifyReleaseAssets", () => {
   it("fails when latest.json does not resolve", async () => {
     await expect(
       verifyReleaseAssets({
-        repo,
+        origin,
         fetchImpl: fetchFrom({ [manifestUrl]: 404 }),
         log: () => {},
         retry: { attempts: 1, delayMs: 0 },
@@ -89,12 +89,12 @@ describe("verifyReleaseAssets", () => {
     ).rejects.toThrow("latest.json did not resolve (404)");
   });
 
-  it("retries transient release propagation failures before succeeding", async () => {
+  it("retries transient site propagation failures before succeeding", async () => {
     const seen: string[] = [];
     const logs: string[] = [];
 
     const result = await verifyReleaseAssets({
-      repo,
+      origin,
       fetchImpl: fetchFrom(
         {
           [manifestUrl]: [404, new Error("cdn reset"), manifest()],
@@ -108,7 +108,7 @@ describe("verifyReleaseAssets", () => {
       retry: { attempts: 3, delayMs: 0 },
     });
 
-    expect(result).toMatchObject({ repo, version: "1.2.3", dmgUrl });
+    expect(result).toMatchObject({ origin, version: "1.2.3", dmgUrl });
     expect(seen.filter((url) => url === manifestUrl)).toHaveLength(3);
     expect(seen.filter((url) => url === payloadUrl)).toHaveLength(2);
     expect(seen.filter((url) => url === sigUrl)).toHaveLength(1);
@@ -124,7 +124,7 @@ describe("verifyReleaseAssets", () => {
 
     await expect(
       verifyReleaseAssets({
-        repo,
+        origin,
         fetchImpl: fetchFrom({ [manifestUrl]: 404 }, seen),
         log: (line: string) => logs.push(line),
         retry: { attempts: 2, delayMs: 0 },
@@ -136,10 +136,26 @@ describe("verifyReleaseAssets", () => {
     expect(logs[0]).toContain("retry 2/2");
   });
 
+  it("fails when latest.json still points updater payloads at GitHub", async () => {
+    await expect(
+      verifyReleaseAssets({
+        origin,
+        fetchImpl: fetchFrom({
+          [manifestUrl]: manifest(
+            "sig-text",
+            "https://github.com/nferna26/throughline/releases/download/v1.2.3/Throughline.app.tar.gz",
+          ),
+        }),
+        log: () => {},
+        retry: { attempts: 1, delayMs: 0 },
+      }),
+    ).rejects.toThrow("updater payload must use https://readthroughline.com/updates/");
+  });
+
   it("fails when latest.json and the .sig asset disagree", async () => {
     await expect(
       verifyReleaseAssets({
-        repo,
+        origin,
         fetchImpl: fetchFrom({
           [manifestUrl]: manifest("manifest-sig"),
           [payloadUrl]: "app bytes",
@@ -153,10 +169,9 @@ describe("verifyReleaseAssets", () => {
 });
 
 describe("parseArgs", () => {
-  it("accepts repo, tag, and expected-version options", () => {
-    expect(parseArgs(["--repo", "a/b", "--tag", "v1.2.3", "--expected-version", "1.2.3"])).toEqual({
-      repo: "a/b",
-      tag: "v1.2.3",
+  it("accepts origin and expected-version options", () => {
+    expect(parseArgs(["--origin", "https://example.com/", "--expected-version", "1.2.3"])).toEqual({
+      origin: "https://example.com",
       expectedVersion: "1.2.3",
     });
   });

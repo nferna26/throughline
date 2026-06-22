@@ -30,15 +30,13 @@ The updater verifies every download against a **minisign** public key baked into
 ## Releasing an update
 
 The release workflow ([`.github/workflows/release.yml`](../.github/workflows/release.yml))
-now builds, signs, and publishes everything below automatically on a `v*` tag —
+now builds, signs, notarizes, and uploads everything below on a `v*` tag,
 including the updater signing env (`TAURI_SIGNING_PRIVATE_KEY` /
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). The full website-distribution pipeline
 (secrets, hosting, cutting a release) lives in
-[`DISTRIBUTION.md`](./DISTRIBUTION.md). The workflow **publishes the release as
-part of the tag build** — review happens before tagging, and once the workflow
-goes green, `/releases/latest` resolves and every installed app's *Check for
-updates* sees it. Each release publishes, to the GitHub Releases of the repo
-the `endpoints` URL points at:
+[`DISTRIBUTION.md`](./DISTRIBUTION.md). Review happens before tagging, and once
+the workflow goes green, the public site serves both install and update assets
+from Cloudflare R2. Each release publishes to `readthroughline.com`:
 
 1. The signed + notarized `.app` (you already build this in CI — see
    [`SIGNING.md`](./SIGNING.md)).
@@ -52,29 +50,32 @@ the `endpoints` URL points at:
      "notes": "What changed",
      "pub_date": "2026-06-04T00:00:00Z",
      "platforms": {
-       "darwin-aarch64": {
-         "signature": "<contents of Throughline.app.tar.gz.sig>",
-         "url": "https://github.com/<owner>/<repo>/releases/download/v0.2.0/Throughline.app.tar.gz"
-       },
+         "darwin-aarch64": {
+           "signature": "<contents of Throughline.app.tar.gz.sig>",
+           "url": "https://readthroughline.com/updates/Throughline.app.tar.gz"
+         },
        "darwin-x86_64": { "signature": "...", "url": "..." }
      }
    }
    ```
 
-This is handled by **`tauri-apps/tauri-action`** in the release workflow, which
-builds, signs the update, and uploads `latest.json` for you. The env is already
-wired; you just set the matching **repo secrets**:
+`tauri-apps/tauri-action` still builds and minisign-signs the updater payload.
+The workflow then rewrites only the manifest URL fields and uploads the
+unchanged `.app.tar.gz`, its `.sig`, and the rewritten `latest.json` to R2. The
+env is already wired; you just set the matching **repo secrets**:
 
 - `TAURI_SIGNING_PRIVATE_KEY` = contents of `~/.throughline-updater.key`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` = `` (empty, as generated)
+- `CLOUDFLARE_API_TOKEN` = Cloudflare token with R2 object edit access
+- `CLOUDFLARE_ACCOUNT_ID` = Cloudflare account that owns `throughline-downloads`
 
 ## ⚠️ Finalize before shipping
 
 - **Endpoint URL.** `plugins.updater.endpoints` points at
-  `https://github.com/nferna26/throughline/releases/latest/download/latest.json`.
-  This resolves as long as the latest tagged release went green — the release
-  workflow publishes on tag, and the post-release check in
-  [`DISTRIBUTION.md`](./DISTRIBUTION.md) (curl must print `200`) confirms it.
+  `https://readthroughline.com/updates/latest.json`. Do not make the repo
+  private until a real release has uploaded `latest.json`, the payload, and the
+  `.sig` to R2 and the post-release check in [`DISTRIBUTION.md`](./DISTRIBUTION.md)
+  passes.
 - **`version`** in `tauri.conf.json` must increase for each release, and
   `latest.json`'s `version` must be greater than the installed app's for the
   updater to offer it.

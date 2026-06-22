@@ -1,29 +1,27 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_REPO = "nferna26/throughline";
+const DEFAULT_ORIGIN = "https://readthroughline.com";
 const DEFAULT_RETRIES = 5;
 const DEFAULT_RETRY_DELAY_MS = 2_000;
 
 function usage() {
-  return `Usage: node scripts/verify-release-assets.mjs [--repo owner/name] [--tag vX.Y.Z] [--expected-version vX.Y.Z]
+  return `Usage: node scripts/verify-release-assets.mjs [--origin https://readthroughline.com] [--expected-version vX.Y.Z]
 
-Verifies the public GitHub release assets used by Throughline's updater and download links:
-  - latest.json resolves
-  - every darwin platform payload URL resolves
+Verifies the public R2-backed assets used by Throughline's updater and download links:
+  - /updates/latest.json resolves from the site
+  - every darwin platform payload URL resolves from /updates/
   - each darwin manifest signature matches the matching .sig asset
-  - Throughline_<version>_universal.dmg resolves
+  - /download resolves for the public DMG
 `;
 }
 
 export function parseArgs(argv) {
-  const opts = { repo: DEFAULT_REPO, tag: null, expectedVersion: null };
+  const opts = { origin: DEFAULT_ORIGIN, expectedVersion: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--repo") {
-      opts.repo = argv[++i];
-    } else if (arg === "--tag") {
-      opts.tag = argv[++i];
+    if (arg === "--origin") {
+      opts.origin = argv[++i];
     } else if (arg === "--expected-version") {
       opts.expectedVersion = argv[++i];
     } else if (arg === "--help" || arg === "-h") {
@@ -33,23 +31,37 @@ export function parseArgs(argv) {
     }
   }
   if (opts.help) return opts;
-  if (!opts.repo || !/^[^/\s]+\/[^/\s]+$/.test(opts.repo)) {
-    throw new Error(`--repo must be owner/name, got ${JSON.stringify(opts.repo)}`);
-  }
+  opts.origin = normalizeOrigin(opts.origin);
   return opts;
+}
+
+function normalizeOrigin(origin) {
+  const raw = String(origin || "").trim();
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`--origin must be an absolute https URL, got ${JSON.stringify(origin)}`);
+  }
+  if (url.protocol !== "https:") {
+    throw new Error(`--origin must use https, got ${JSON.stringify(origin)}`);
+  }
+  url.pathname = url.pathname.replace(/\/+$/, "");
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
 }
 
 function versionWithoutV(version) {
   return String(version || "").trim().replace(/^v/i, "");
 }
 
-function releaseDownloadBase(repo, tag) {
-  return `https://github.com/${repo}/releases/download/${encodeURIComponent(tag)}`;
+function manifestUrlFor(origin) {
+  return `${origin}/updates/latest.json`;
 }
 
-function manifestUrlFor(repo, tag) {
-  if (tag) return `${releaseDownloadBase(repo, tag)}/latest.json`;
-  return `https://github.com/${repo}/releases/latest/download/latest.json`;
+function dmgUrlFor(origin) {
+  return `${origin}/download`;
 }
 
 function sigUrlFor(payloadUrl) {
@@ -94,7 +106,7 @@ function retryMessage(label, url, attempt, attempts, delayMs, reason) {
   return `↻ ${label} did not resolve (${reason}); retry ${attempt + 1}/${attempts} in ${delayMs}ms: ${url}`;
 }
 
-async function fetchText(fetchImpl, url, label, { retry = {}, log = console.log } = {}) {
+async function fetchOk(fetchImpl, url, label, { retry = {}, log = console.log } = {}) {
   const { attempts, delayMs } = resolveRetryOptions(retry);
   let lastError = null;
   let lastStatus = null;
@@ -105,7 +117,7 @@ async function fetchText(fetchImpl, url, label, { retry = {}, log = console.log 
         redirect: "follow",
         headers: { "user-agent": "throughline-release-asset-guard" },
       });
-      if (res?.status === 200) return res.text();
+      if (res?.status === 200) return res;
       lastStatus = res?.status ?? "no response";
       lastError = null;
     } catch (err) {
@@ -126,6 +138,11 @@ async function fetchText(fetchImpl, url, label, { retry = {}, log = console.log 
   throw new Error(`${label} did not resolve (${lastStatus ?? "no response"}): ${url}`);
 }
 
+async function fetchText(fetchImpl, url, label, options) {
+  const res = await fetchOk(fetchImpl, url, label, options);
+  return res.text();
+}
+
 function parseManifest(raw, url) {
   try {
     return JSON.parse(raw);
@@ -142,9 +159,24 @@ function darwinEntries(manifest) {
   return Object.entries(platforms).filter(([key]) => key.startsWith("darwin"));
 }
 
+function assertR2UpdateUrl(origin, platform, url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`${platform} updater payload url is not absolute: ${url}`);
+  }
+  const expectedPrefix = `${origin}/updates/`;
+  if (`${parsed.origin}${parsed.pathname}` !== url || !url.startsWith(expectedPrefix)) {
+    throw new Error(`${platform} updater payload must use ${expectedPrefix}, got ${url}`);
+  }
+  if (parsed.pathname.endsWith("/")) {
+    throw new Error(`${platform} updater payload url must name a file, got ${url}`);
+  }
+}
+
 export async function verifyReleaseAssets({
-  repo = DEFAULT_REPO,
-  tag = null,
+  origin = DEFAULT_ORIGIN,
   expectedVersion = null,
   fetchImpl = globalThis.fetch,
   log = console.log,
@@ -152,7 +184,8 @@ export async function verifyReleaseAssets({
 } = {}) {
   if (typeof fetchImpl !== "function") throw new Error("fetch is not available");
 
-  const latestJsonUrl = manifestUrlFor(repo, tag);
+  const normalizedOrigin = normalizeOrigin(origin);
+  const latestJsonUrl = manifestUrlFor(normalizedOrigin);
   const manifestRaw = await fetchText(fetchImpl, latestJsonUrl, "latest.json", { retry, log });
   log(`✓ latest.json resolved: ${latestJsonUrl}`);
 
@@ -181,9 +214,10 @@ export async function verifyReleaseAssets({
     if (!value.signature || typeof value.signature !== "string") {
       throw new Error(`${platform} entry has no signature`);
     }
+    assertR2UpdateUrl(normalizedOrigin, platform, value.url);
 
     if (!resolvedPayloads.has(value.url)) {
-      await fetchText(fetchImpl, value.url, `${platform} updater payload`, { retry, log });
+      await fetchOk(fetchImpl, value.url, `${platform} updater payload`, { retry, log });
       resolvedPayloads.add(value.url);
       log(`✓ updater payload resolved: ${value.url}`);
     }
@@ -201,15 +235,13 @@ export async function verifyReleaseAssets({
     log(`✓ ${platform} signature matches .sig asset`);
   }
 
-  const releaseTag = tag || `v${manifestVersion}`;
-  const dmgName = `Throughline_${manifestVersion}_universal.dmg`;
-  const dmgUrl = `${releaseDownloadBase(repo, releaseTag)}/${dmgName}`;
-  await fetchText(fetchImpl, dmgUrl, "universal DMG", { retry, log });
-  log(`✓ universal DMG resolved: ${dmgUrl}`);
-  log(`✓ release assets verified for ${repo} ${manifest.version}`);
+  const dmgUrl = dmgUrlFor(normalizedOrigin);
+  await fetchOk(fetchImpl, dmgUrl, "public DMG download", { retry, log });
+  log(`✓ public DMG download resolved: ${dmgUrl}`);
+  log(`✓ release assets verified for ${normalizedOrigin} ${manifest.version}`);
 
   return {
-    repo,
+    origin: normalizedOrigin,
     version: manifest.version,
     manifestUrl: latestJsonUrl,
     platformCount: entries.length,

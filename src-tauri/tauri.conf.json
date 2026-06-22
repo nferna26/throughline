@@ -34,7 +34,7 @@
     },
     "updater": {
       "endpoints": [
-        "https://github.com/nferna26/throughline/releases/latest/download/latest.json"
+        "https://readthroughline.com/updates/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQxNkEyMERCQjI5NTA3RTQKUldUa0I1V3kyeUJxUVk1c0NRY1RmajFvTHJyanROb2dVZ3RSMW9DQ0l3Zy9QRjhNN1pNMDZXQTcK"
     }

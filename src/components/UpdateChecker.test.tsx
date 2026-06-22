@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import UpdateChecker, {
-  LATEST_RELEASE_URL,
+  FALLBACK_DOWNLOAD_URL,
   UPDATE_CHECK_INTERVAL_MS,
   resetUpdateCheckGate,
   shouldStartBackgroundUpdateCheck,
@@ -79,7 +79,7 @@ describe("UpdateChecker Today pill", () => {
     );
 
     fireEvent.click(fallback);
-    expect(window.open).toHaveBeenCalledWith(LATEST_RELEASE_URL, "_blank", "noopener,noreferrer");
+    expect(window.open).toHaveBeenCalledWith(FALLBACK_DOWNLOAD_URL, "_blank", "noopener,noreferrer");
   });
 
   it("downloads in place, exposes Updating as busy/live, then offers restart without forcing it", async () => {
@@ -118,7 +118,7 @@ describe("UpdateChecker Today pill", () => {
     expect(markerCall).toBeLessThan(mocks.relaunch.mock.invocationCallOrder[0]);
   });
 
-  it("falls back to the latest release page when download/install fails", async () => {
+  it("falls back to the public download when download/install fails", async () => {
     makeDueForBackgroundCheck();
     const downloadAndInstall = vi.fn(() => Promise.reject(new Error("signature mismatch")));
     mocks.check.mockResolvedValue({ version: "0.8.0", downloadAndInstall });

@@ -129,10 +129,11 @@ git push origin v0.1.0
 ```
 
 The `Release` workflow builds a universal `.dmg`, signs it with your Developer
-ID cert, submits it to Apple for notarization, staples the ticket, and drafts a
-GitHub Release with the `.dmg` attached. Notarization usually takes 1–5 minutes;
-the workflow waits for it. Once it succeeds, anyone can download the `.dmg` and
-open it with no Gatekeeper warning.
+ID cert, submits it to Apple for notarization, staples the ticket, and uploads
+the runtime download to Cloudflare R2 for `https://readthroughline.com/download`.
+Notarization usually takes 1–5 minutes; the workflow waits for it. Once it
+succeeds and the R2 upload completes, anyone can download the `.dmg` and open it
+with no Gatekeeper warning.
 
 ---
 

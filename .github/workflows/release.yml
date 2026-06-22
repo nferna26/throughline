@@ -10,8 +10,11 @@ on:
 jobs:
   build-dmg:
     runs-on: macos-latest
+    env:
+      DISTRIBUTION_ORIGIN: https://readthroughline.com
+      R2_BUCKET: throughline-downloads
     permissions:
-      contents: write # needed to create the GitHub Release + upload the .dmg
+      contents: write # needed to create the GitHub Release + upload release assets
     steps:
       - uses: actions/checkout@v4
 
@@ -62,9 +65,9 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Throughline ${{ github.ref_name }}"
-          # Shown on the GitHub release page (also where the website's Download
-          # button can point). The .dmg is a universal binary — one download runs
-          # on both Apple Silicon and Intel Macs.
+          # Shown on the optional GitHub release page. Runtime distribution is
+          # R2-backed through readthroughline.com below. The .dmg is a universal
+          # binary — one download runs on both Apple Silicon and Intel Macs.
           releaseBody: |
             **Install:** open the `.dmg` and drag **Throughline** into your Applications folder.
 
@@ -112,5 +115,94 @@ jobs:
           gh release upload "${{ github.ref_name }}" "$DMG" --clobber -R "${{ github.repository }}"
           echo "✓ .dmg notarized, stapled, re-uploaded"
 
-      - name: Verify published updater and download assets resolve
-        run: node scripts/verify-release-assets.mjs --repo "${{ github.repository }}" --expected-version "${{ github.ref_name }}"
+      # ── Publish distribution assets to Cloudflare R2 ──
+      # Runtime download/update traffic must not depend on public GitHub Releases:
+      # the repo can go private and readers still fetch from readthroughline.com.
+      # We keep tauri-action's build, minisign signing, notarization, and optional
+      # GitHub Release upload intact. The minisign signature covers the
+      # .app.tar.gz bytes, not the URL, so rehosting the identical payload at R2 is
+      # valid. This step rewrites only latest.json's per-platform url fields.
+      #
+      # Required Actions secrets:
+      #   CLOUDFLARE_API_TOKEN   token with R2 object edit access
+      #   CLOUDFLARE_ACCOUNT_ID  Cloudflare account that owns throughline-downloads
+      - name: Publish download and updater artifacts to Cloudflare R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::error::Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repository secrets before cutting a release."
+            exit 1
+          fi
+
+          DMG=$(find src-tauri/target/universal-apple-darwin -path '*bundle/dmg/*.dmg' -print 2>/dev/null | head -n 1 || true)
+          if [ -z "$DMG" ]; then DMG=$(find src-tauri/target -path '*bundle/dmg/*.dmg' -print | head -n 1); fi
+          if [ -z "$DMG" ]; then echo "::error::no .dmg found to upload to R2"; exit 1; fi
+
+          UPDATE_TAR=$(find src-tauri/target/universal-apple-darwin -path '*bundle/macos/*.app.tar.gz' -print 2>/dev/null | head -n 1 || true)
+          if [ -z "$UPDATE_TAR" ]; then UPDATE_TAR=$(find src-tauri/target -path '*bundle/macos/*.app.tar.gz' -print | head -n 1); fi
+          if [ -z "$UPDATE_TAR" ]; then echo "::error::no updater .app.tar.gz found to upload to R2"; exit 1; fi
+
+          mkdir -p r2-release
+          SIG="${UPDATE_TAR}.sig"
+          LATEST_JSON=$(find src-tauri/target -name latest.json -print 2>/dev/null | head -n 1 || true)
+          if [ ! -f "$SIG" ] || [ -z "$LATEST_JSON" ] || [ ! -f "$LATEST_JSON" ]; then
+            gh release download "${{ github.ref_name }}" \
+              --pattern '*.app.tar.gz.sig' \
+              --pattern 'latest.json' \
+              --dir r2-release \
+              --clobber \
+              -R "${{ github.repository }}"
+          fi
+          if [ ! -f "$SIG" ]; then SIG=$(find r2-release -name '*.app.tar.gz.sig' -print | head -n 1); fi
+          if [ -z "$LATEST_JSON" ] || [ ! -f "$LATEST_JSON" ]; then LATEST_JSON=$(find r2-release -name latest.json -print | head -n 1); fi
+          if [ -z "$SIG" ] || [ ! -f "$SIG" ]; then echo "::error::no updater .sig found to upload to R2"; exit 1; fi
+          if [ -z "$LATEST_JSON" ] || [ ! -f "$LATEST_JSON" ]; then echo "::error::no latest.json found to rewrite and upload to R2"; exit 1; fi
+
+          UPDATE_FILENAME=$(basename "$UPDATE_TAR")
+          REWRITTEN_LATEST_JSON="$PWD/r2-release/latest.json"
+          export DISTRIBUTION_ORIGIN UPDATE_FILENAME LATEST_JSON REWRITTEN_LATEST_JSON
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const manifest = JSON.parse(readFileSync(process.env.LATEST_JSON, "utf8"));
+          const platforms = manifest.platforms;
+          if (!platforms || typeof platforms !== "object") {
+            throw new Error("latest.json has no platforms object");
+          }
+          const updateUrl = `${process.env.DISTRIBUTION_ORIGIN}/updates/${process.env.UPDATE_FILENAME}`;
+          for (const value of Object.values(platforms)) {
+            if (value && typeof value === "object" && "url" in value) {
+              value.url = updateUrl;
+            }
+          }
+          writeFileSync(process.env.REWRITTEN_LATEST_JSON, `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+
+          npx wrangler@4 r2 object put "$R2_BUCKET/Throughline.dmg" \
+            --remote \
+            --file "$DMG" \
+            --content-type "application/octet-stream" \
+            --content-disposition 'attachment; filename="Throughline.dmg"' \
+            --cache-control "public, max-age=300"
+          npx wrangler@4 r2 object put "$R2_BUCKET/updates/$UPDATE_FILENAME" \
+            --remote \
+            --file "$UPDATE_TAR" \
+            --content-type "application/octet-stream" \
+            --cache-control "public, max-age=300"
+          npx wrangler@4 r2 object put "$R2_BUCKET/updates/$(basename "$SIG")" \
+            --remote \
+            --file "$SIG" \
+            --content-type "application/octet-stream" \
+            --cache-control "public, max-age=300"
+          npx wrangler@4 r2 object put "$R2_BUCKET/updates/latest.json" \
+            --remote \
+            --file "$REWRITTEN_LATEST_JSON" \
+            --content-type "application/json" \
+            --cache-control "public, max-age=300"
+
+      - name: Verify R2-hosted updater and download assets resolve
+        run: node scripts/verify-release-assets.mjs --expected-version "${{ github.ref_name }}"
