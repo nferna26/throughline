@@ -196,7 +196,7 @@ describe("Settings — 4-section redesign", () => {
     // Expand it.
     fireEvent.click(screen.getByText(/Show what was sent/i));
     // Plain lens labels — NEVER the raw id.
-    expect(screen.getByText("Section briefing")).toBeInTheDocument();
+    expect(await screen.findByText("Section briefing")).toBeInTheDocument();
     expect(screen.getByText("Explain")).toBeInTheDocument();
     const text = container.textContent ?? "";
     expect(text).not.toMatch(/section_briefing/);
@@ -297,6 +297,7 @@ describe("Settings — 4-section redesign", () => {
     await waitFor(() => expect(screen.getByText(/No setup — it just works/i)).toBeInTheDocument());
     fireEvent.click(screen.getByText(/Use your own AI instead/i));
     fireEvent.click(screen.getByText(/Show what was sent/i));
+    expect(await screen.findByText("Section briefing")).toBeInTheDocument();
     const text = container.textContent ?? "";
     expect(text).not.toMatch(/token/i);
     expect(text).not.toMatch(/endpoint/i);

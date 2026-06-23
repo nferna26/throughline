@@ -5,6 +5,26 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 6)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.8.1] - 2026-06-23
+
+### Added
+
+- **Tutor answers stay anchored to the passage.** Selecting text now keeps the
+  tutor answer visually tied to that exact spot in the reader, so explanations
+  feel attached to the sentence that raised the question instead of floating in
+  the margin.
+
+### Changed
+
+- **Long titles fit more calmly.** Today and reader chrome now handle long book
+  titles with smoother responsive typography.
+
+### Fixed
+
+- **Imports are harder to break.** Empty text files are rejected clearly,
+  non-UTF-8 text files are transcoded into reader-safe UTF-8, and failed imports
+  roll back instead of leaving half-added books behind.
+
 ## [0.8.0] - 2026-06-16
 
 The first run is a calm bookshop — open to a book you mean to finish.
