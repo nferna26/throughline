@@ -757,6 +757,36 @@ pub fn import_any(src_path: &Path) -> Result<ImportResult> {
     }
 }
 
+/// Decode arbitrary text-file bytes to a UTF-8 String for the DERIVED reader
+/// text (CORE-1156 #11). Strict UTF-8 fast path (Gutenberg + most files); else
+/// BOM-sniff (UTF-16 LE/BE, UTF-8 BOM); else Windows-1252, the most likely
+/// legacy single-byte encoding for a reader's own .txt, which maps every byte
+/// and so never fails. The immutable source.txt keeps the original bytes.
+fn decode_text_to_utf8(bytes: &[u8]) -> String {
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_owned();
+    }
+    let enc = encoding_rs::Encoding::for_bom(bytes)
+        .map(|(e, _)| e)
+        .unwrap_or(encoding_rs::WINDOWS_1252);
+    enc.decode(bytes).0.into_owned()
+}
+
+/// Best-effort removal of a partially-written book_dir (its files are 0o444, so
+/// reset perms first) when an import refuses after the dir was created.
+fn remove_book_dir_quiet(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(entries) = fs::read_dir(dir) {
+            for e in entries.flatten() {
+                let _ = fs::set_permissions(e.path(), fs::Permissions::from_mode(0o644));
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(dir);
+}
+
 pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
     paths::ensure_dirs()?;
     if !src_path.exists() {
@@ -774,10 +804,26 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
             MAX_TXT_BYTES / (1024 * 1024)
         ));
     }
-    let raw = fs::read_to_string(src_path).context("read source as utf-8")?;
+    // #11 (CORE-1156): accept non-UTF-8 .txt (Windows-1252, UTF-16) by lossy
+    // transcoding to UTF-8 for the DERIVED reader text. The immutable source.txt
+    // keeps the ORIGINAL bytes (copied verbatim below); only this in-memory
+    // `raw`, the basis for reader.txt, is transcoded.
+    let bytes = fs::read(src_path).with_context(|| format!("read {:?}", src_path))?;
+    let raw = decode_text_to_utf8(&bytes);
     let (meta_title, meta_author, body_start) = extract_gutenberg_meta(&raw);
     let body_end = body_end_offset(&raw);
     let body = &raw[body_start..body_end];
+
+    // #5 (CORE-1156): refuse an empty/whitespace-only book BEFORE any book_dir
+    // write, mirroring the EPUB importer's "no readable sections" refusal. A
+    // 0-byte, whitespace-only, or truncated .txt (e.g. Gutenberg START/END
+    // markers leaving an empty body) would otherwise create a library book that
+    // can never be opened.
+    if body.trim().is_empty() {
+        return Err(anyhow!(
+            "This file has no readable text to import. If it came from a download, it may be empty or incomplete."
+        ));
+    }
 
     let title = meta_title.unwrap_or_else(|| {
         src_path
@@ -811,6 +857,15 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
     // `reader.txt` (the raw `source.txt` stays the immutable SHA anchor).
     let cleaned = gutenberg_markup::clean_body(body);
     let body = cleaned.text.as_str();
+    // Defensive #5: if stripping the markup left nothing readable (a file that
+    // was entirely illustration/markup), refuse and remove the book_dir already
+    // written, so neither the DB nor disk strands an unopenable book.
+    if body.trim().is_empty() {
+        remove_book_dir_quiet(&book_dir);
+        return Err(anyhow!(
+            "This file has no readable text to import. If it came from a download, it may be empty or incomplete."
+        ));
+    }
     let mut marks = cleaned.marks;
 
     // Sectionize the CLEANED body (offsets index `body`). When heading detection
@@ -1270,6 +1325,78 @@ mod tests {
             msg.contains("100 MB"),
             "error must name the limit in plain language, got: {msg}"
         );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // #5 (CORE-1156): an empty / whitespace-only .txt must be refused with a
+    // clear message, NOT turned into a library book that can never be opened.
+    #[test]
+    fn import_txt_refuses_an_empty_or_whitespace_only_file() {
+        let _g = paths::lock_env_for_test();
+        let dir = std::env::temp_dir().join(format!("tl-txt-empty-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for (name, bytes) in [("zero.txt", &b""[..]), ("ws.txt", &b"   \n\t\r\n  "[..])] {
+            let p = dir.join(name);
+            fs::write(&p, bytes).unwrap();
+            let err = match import_txt(&p) {
+                Ok(_) => panic!("an empty/whitespace .txt must be refused: {name}"),
+                Err(e) => format!("{e:#}"),
+            };
+            assert!(
+                err.contains("no readable text"),
+                "error must explain there is no readable text, got: {err}"
+            );
+        }
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // #11 (CORE-1156): a reader's own .txt in Windows-1252 or UTF-16 must import,
+    // with the bytes transcoded to UTF-8 for the derived reader text.
+    #[test]
+    fn import_txt_transcodes_windows_1252_and_utf16_to_utf8() {
+        let _g = paths::lock_env_for_test();
+        let dir = std::env::temp_dir().join(format!("tl-txt-enc-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        // Windows-1252: é = 0xE9, right single quote = 0x92; invalid as UTF-8, so
+        // it exercises the 1252 fallback. Repeated so it sectionizes to a book.
+        let mut cp1252 = Vec::new();
+        for _ in 0..40 {
+            cp1252.extend_from_slice(b"Caf\xE9 r\xE9sum\xE9, the reader\x92s own file. ");
+        }
+        let p1 = dir.join("win1252.txt");
+        fs::write(&p1, &cp1252).unwrap();
+        let r1 = import_txt(&p1).expect("windows-1252 .txt should import");
+        let reader1 =
+            fs::read_to_string(paths::book_dir(&r1.book.id).unwrap().join("reader.txt")).unwrap();
+        assert!(
+            reader1.contains("Café résumé"),
+            "1252 é must decode to UTF-8"
+        );
+        assert!(
+            reader1.contains("reader\u{2019}s own file"),
+            "1252 smart quote (0x92) must decode to U+2019"
+        );
+
+        // UTF-16LE with BOM.
+        let s = "Héllo, wörld. This is a tiny UTF-16 book. ".repeat(40);
+        let mut utf16 = vec![0xFF_u8, 0xFE];
+        for u in s.encode_utf16() {
+            utf16.extend_from_slice(&u.to_le_bytes());
+        }
+        let p2 = dir.join("utf16le.txt");
+        fs::write(&p2, &utf16).unwrap();
+        let r2 = import_txt(&p2).expect("utf-16 .txt should import");
+        let reader2 =
+            fs::read_to_string(paths::book_dir(&r2.book.id).unwrap().join("reader.txt")).unwrap();
+        assert!(
+            reader2.contains("Héllo, wörld"),
+            "utf-16 must decode to UTF-8"
+        );
+
+        // Clean up the imported book dirs in the isolated test data dir.
+        remove_book_dir_quiet(&paths::book_dir(&r1.book.id).unwrap());
+        remove_book_dir_quiet(&paths::book_dir(&r2.book.id).unwrap());
         fs::remove_dir_all(&dir).ok();
     }
 

@@ -40,6 +40,47 @@ pub fn cmd_import_book(path: String, state: State<DbState>) -> Result<ImportOutc
 /// place. The DB lock is deliberately NOT held across `import::import_any`
 /// (which copies + sectionizes the whole file): we lock only for the dedup
 /// probe and again for the inserts.
+/// Insert a freshly imported book, its sections, its default plan, and the
+/// active-book bump as ONE transaction (CORE-1156 #6; mirrors
+/// [`delete_book_cascade`]). Any failure rolls the whole thing back, so a partial
+/// import can never strand a sectionless book row.
+pub(crate) fn insert_book_atomic(
+    conn: &Connection,
+    book: &Book,
+    sections: &[BookSection],
+    default_plan: &ReadingPlan,
+) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    insert_book(&tx, book)?;
+    for s in sections {
+        insert_section(&tx, s)?;
+    }
+    insert_plan(&tx, default_plan)?;
+    bump_last_opened_at(&tx, &book.id)?;
+    tx.commit()
+}
+
+/// Best-effort removal of a book_dir left on disk by a failed import (CORE-1156
+/// #6). The source/reader files are 0o444, so reset perms first; failure is
+/// logged, never fatal (the DB was already rolled back, which is what matters).
+fn cleanup_orphan_book_dir(book_id: &str) {
+    let Ok(dir) = paths::book_dir(book_id) else {
+        return;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                let _ = fs::set_permissions(e.path(), fs::Permissions::from_mode(0o644));
+            }
+        }
+    }
+    if let Err(e) = fs::remove_dir_all(&dir) {
+        tracing::warn!(category = "import", book_id = %book_id, "orphan book_dir cleanup failed: {e}");
+    }
+}
+
 pub fn import_or_dedup(
     src: &Path,
     origin: crate::book_origin::BookOrigin,
@@ -87,21 +128,25 @@ pub fn import_or_dedup(
         "import_or_dedup: imported"
     );
     let conn = state.0.lock()?;
-    insert_book(&conn, &result.book)?;
-    for s in &result.sections {
-        insert_section(&conn, s)?;
+    let default_plan = plan::build_default_plan(&result.book.id);
+    // #6 (CORE-1156): the book row, its sections, the default plan, and the
+    // active-book bump go in as ONE transaction. A crash or constraint failure
+    // mid-insert can no longer leave a sectionless book row or a half-imported
+    // book; on failure we roll back AND clean the book_dir import_any just wrote,
+    // so neither the DB nor disk strands an orphan.
+    if let Err(e) = insert_book_atomic(&conn, &result.book, &result.sections, &default_plan) {
+        drop(conn);
+        cleanup_orphan_book_dir(&result.book.id);
+        return Err(e.into());
     }
-    // Record provenance + (for imports) the reader's original path beside the
-    // book's own copy. Best-effort: a sidecar failure degrades to the
-    // conservative "imported" default at read time, never failing the import.
-    // Never log `origin` — original_path is content-adjacent (invariant 1).
+    // Record provenance beside the book's own copy. Best-effort, post-commit, and
+    // a content-adjacent FILE write (never a DB row), so it stays out of the
+    // transaction: a sidecar failure degrades to the conservative "imported"
+    // default at read time, never failing the import. Never log `origin` —
+    // original_path is content-adjacent (invariant 1).
     if let Err(_e) = crate::book_origin::write(&result.book.id, &origin) {
         tracing::warn!(category = "import", book_id = %result.book.id, "origin sidecar write failed");
     }
-    let p = plan::build_default_plan(&result.book.id);
-    insert_plan(&conn, &p)?;
-    // Make the freshly imported book the active one on the Today screen.
-    bump_last_opened_at(&conn, &result.book.id)?;
     let now_export = chrono::Utc::now().to_rfc3339();
     if let Ok(path) = export::export_book_literature_note(
         &conn,
@@ -1298,6 +1343,71 @@ pub(crate) fn delete_book_cascade(conn: &Connection, book_id: &str) -> rusqlite:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #6 (CORE-1156): import inserts the book, its sections, the default plan, and
+    // the active-book bump as ONE transaction. A failure mid-insert must roll the
+    // whole thing back, never leaving a sectionless / half-imported book row.
+    #[test]
+    fn insert_book_atomic_rolls_back_a_partial_insert() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        crate::migrations::apply_pending(&conn).unwrap();
+        let book = Book {
+            id: "b_atomic".into(),
+            title: "Atomic".into(),
+            author: None,
+            source_type: "txt".into(),
+            source_path: "/p".into(),
+            source_sha256: "h_atomic".into(),
+            created_at: "2026-01-01".into(),
+            last_opened_at: None,
+        };
+        let plan = plan::build_default_plan(&book.id);
+        let sec = |id: &str, order: i64| BookSection {
+            id: id.into(),
+            book_id: book.id.clone(),
+            label: "Chapter".into(),
+            href: None,
+            start_locator: Some("0".into()),
+            end_locator: Some("10".into()),
+            estimated_units: Some(10),
+            sort_order: order,
+            assignable: true,
+        };
+
+        // Two sections sharing a primary key: the second insert fails, so the whole
+        // transaction (book + first section + plan + bump) must roll back.
+        let dup = vec![sec("sec_dup", 0), sec("sec_dup", 1)];
+        assert!(
+            insert_book_atomic(&conn, &book, &dup, &plan).is_err(),
+            "a duplicate section id must fail the transaction"
+        );
+        let count = |t: &str| -> i64 {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(
+            (
+                count("books"),
+                count("book_sections"),
+                count("reading_plans")
+            ),
+            (0, 0, 0),
+            "a failed import must leave NO rows behind"
+        );
+
+        // A clean insert commits the book, both sections, and the plan together.
+        let ok = vec![sec("sec_a", 0), sec("sec_b", 1)];
+        insert_book_atomic(&conn, &book, &ok, &plan).expect("a clean insert commits");
+        assert_eq!(
+            (
+                count("books"),
+                count("book_sections"),
+                count("reading_plans")
+            ),
+            (1, 2, 1),
+            "a clean import commits the book, its sections, and the plan atomically"
+        );
+    }
 
     /// CORE-1004: a book whose last plan was "let go" (soft-deleted) must still
     /// reach Today. `cmd_today` returning None for an existing book strands the

@@ -43,6 +43,9 @@ anyhow = "1"
 thiserror = "1"
 epub = "2.1"
 zip = "2"
+# Lossy transcoding of non-UTF-8 .txt imports (Windows-1252, UTF-16) to UTF-8 for
+# the derived reader text (CORE-1156 #11); the immutable source keeps raw bytes.
+encoding_rs = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "sync", "time"] }
 futures-util = "0.3"
