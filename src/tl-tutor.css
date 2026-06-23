@@ -566,3 +566,242 @@
   .tl-tutor-livedot { animation: none; opacity: 1; }
   .tl-tutor-thinking i { animation: none; opacity: 1; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CORE-1158 — the anchored answer layer.
+
+   The answer comes to the reader: each card / marker sits at its selection's
+   vertical offset inside the margin rail (the rail spans the whole scrolling
+   sheet and scrolls with it, so a card stays beside its line and the reading
+   column never reflows). One active full card; the rest rest as compact markers;
+   off-screen kept answers gather into an edge bucket.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* The layer matches the inner column's box (margin-left 32px, width 340px) so
+   anchored cards/markers line up with the rail header. pointer-events pass
+   through the empty track; only the cards/markers/buckets are interactive. */
+.tl-margin-anchored {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 32px;
+  width: 340px;
+  pointer-events: none;
+  z-index: 2;
+}
+.tl-margin-anchored > * { pointer-events: auto; }
+
+/* The ONE active full card, anchored at its line (top set inline). It owns its
+   placement; the inner MarginTutorCard / MarginNoteCard keeps its existing look. */
+.tl-anchored {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* A long answer caps at the computed max-height (inline) and scrolls INSIDE the
+   card with a quiet bottom fade, never taller than the viewport, never shoving
+   the column. Short answers ignore the cap (only as tall as their content). */
+.tl-anchored.is-active {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 12px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+}
+/* The card itself fills the wrapper; the wrapper owns the scroll + fade so the
+   card's own border/shadow are not clipped by the mask edge. */
+.tl-anchored.is-active > .tl-card { margin: 0; }
+.tl-anchored.is-active::-webkit-scrollbar { width: 8px; }
+.tl-anchored.is-active::-webkit-scrollbar-thumb {
+  background: var(--tl-ink-10); border-radius: 99px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+
+/* The hairline LEADER from the active card toward its highlight: a short line in
+   the gap between the sheet and the rail (calm, never a hard connector). Paired
+   with the matched highlight tint + ring (color is never the only signal). */
+.tl-anchored.is-active::before {
+  content: "";
+  position: absolute;
+  left: -26px;
+  top: 18px;
+  width: 24px;
+  height: 1px;
+  background: linear-gradient(to left, var(--tl-accent), transparent);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* A KEPT answer rests as a compact marker beside its line: lens dot + lens label
+   + snippet, tinted to its highlight. Click to re-surface the full card in place. */
+.tl-kmark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--tl-sheet);
+  border: 1px solid var(--tl-line);
+  border-left: 2px solid var(--tl-accent);
+  border-radius: 8px;
+  font-family: var(--tl-sans);
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--tl-muted);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--tl-sheet-shadow);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.tl-kmark:hover { border-color: var(--tl-accent); background: var(--tl-sheet-hi, var(--tl-sheet)); }
+.tl-kmark-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tl-accent);
+  flex: 0 0 auto;
+}
+.tl-kmark-lens {
+  font-weight: 700;
+  color: var(--tl-ink);
+  letter-spacing: 0.03em;
+  flex: 0 0 auto;
+}
+.tl-kmark-snip {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Edge bucket: pinned to the rail's visible top / bottom (sticky to the viewport,
+   not the scrolled flow) so it can never overlap the active card. */
+.tl-bucket {
+  position: sticky;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: max-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 99px;
+  border: 1px solid var(--tl-line);
+  background: var(--tl-sheet);
+  box-shadow: var(--tl-sheet-shadow);
+  font-family: var(--tl-sans);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--tl-muted);
+  cursor: pointer;
+  z-index: 3;
+}
+.tl-bucket:hover { color: var(--tl-ink); border-color: var(--tl-accent); }
+.tl-bucket-top { top: 6px; }
+.tl-bucket-bottom { bottom: 6px; }
+
+/* ── Define: a LIGHT inline popover at the selection (state 7). Distinct from the
+   dark selection toolbar and from the margin card: paper surface, hairline, a
+   single accent on the term. Positioned like the toolbar (centered on x, above
+   the line unless there's no room, then below). ── */
+.tl-define {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 8px));
+  z-index: 31;
+  width: max-content;
+  max-width: 320px;
+  min-width: 200px;
+  padding: 11px 13px 12px;
+  background: var(--tl-card, var(--tl-sheet));
+  border: 1px solid var(--tl-line);
+  border-radius: 11px;
+  box-shadow: var(--tl-sheet-shadow), 0 10px 28px -14px rgba(0, 0, 0, 0.4);
+}
+.tl-define.below { transform: translate(-50%, 8px); }
+.tl-define-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.tl-define-term {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--tl-serif);
+  font-style: italic;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--tl-accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-define-close { flex: 0 0 auto; }
+.tl-define-body {
+  font-family: var(--tl-sans);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--tl-ink-soft);
+}
+.tl-define-body p { margin: 0; }
+.tl-define-wait { color: var(--tl-muted); }
+.tl-define-err { color: var(--tl-muted); }
+.tl-define-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: 600;
+  color: var(--tl-accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.tl-define-deeper {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  text-decoration: none;
+  font-size: 12.5px;
+}
+.tl-define-deeper:hover { text-decoration: underline; }
+
+/* Reduced motion: no caret at all (the answer reads as pre-resolved), and the
+   anchored card's internal scroll is immediate. */
+@media (prefers-reduced-motion: reduce) {
+  .tl-caret { display: none; }
+  .tl-anchored.is-active { scroll-behavior: auto; }
+}
+
+/* NARROW WINDOWS: the rail becomes an overlay drawer (see tl-theme.css). The
+   anchored layer can't span the sheet there, so the cards fall back to flowing in
+   the drawer (one component, two renders). The markers/buckets/leader collapse;
+   the active card reads as a normal in-drawer card directly reachable. */
+@container spread (max-width: 860px) {
+  .tl-margin-anchored {
+    position: static;
+    left: auto;
+    width: auto;
+  }
+  .tl-anchored,
+  .tl-kmark {
+    position: static;
+    left: auto;
+    right: auto;
+    top: auto !important;
+    margin-bottom: 12px;
+    max-height: none !important;
+  }
+  .tl-anchored.is-active {
+    overflow: visible;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .tl-anchored.is-active::before { display: none; }
+}

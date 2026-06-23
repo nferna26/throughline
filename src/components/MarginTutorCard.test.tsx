@@ -126,6 +126,44 @@ describe("MarginTutorCard — brief default + go deeper", () => {
     expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_generate_prompt_preview", expect.anything());
   });
 
+  it("the answer region is aria-live polite and toggles aria-busy across the stream (CORE-1158)", async () => {
+    const { container } = render(card());
+    await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
+    const ch = lastChannel();
+    await pushDelta(ch, "Streaming this in…");
+    const live = container.querySelector('.tl-tutor-answer[aria-live="polite"]') as HTMLElement;
+    expect(live).not.toBeNull();
+    // While streaming → busy, so a screen reader holds the announcement and reads
+    // the finished brief as ONE chunk rather than token by token.
+    expect(live.getAttribute("aria-busy")).toBe("true");
+    await pushDone(ch);
+    expect(live.getAttribute("aria-busy")).toBe("false");
+  });
+
+  it("renders NO streaming caret under reduced motion — the answer reads pre-resolved (CORE-1158)", async () => {
+    const orig = window.matchMedia;
+    window.matchMedia = ((q: string) => ({
+      matches: /reduce/.test(q),
+      media: q,
+      onchange: null,
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+      dispatchEvent() { return false; },
+    })) as typeof window.matchMedia;
+    try {
+      const { container } = render(card());
+      await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
+      await pushDelta(lastChannel(), "An answer with no caret.");
+      // The text streams in, but no caret element is ever placed in the DOM.
+      expect(screen.getByText(/no caret/)).toBeInTheDocument();
+      expect(container.querySelector(".tl-caret")).toBeNull();
+    } finally {
+      window.matchMedia = orig;
+    }
+  });
+
   it("'Go deeper' fires a DEEP call and APPENDS below the brief (gist stays)", async () => {
     render(card());
     await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));

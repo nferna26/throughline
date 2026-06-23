@@ -1,12 +1,14 @@
-import { Fragment, useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import TLIcon from "../components/TLIcon";
 import MarginNoteCard from "../components/MarginNoteCard";
 import MarginTutorCard, { type TutorDraft, type TutorMode } from "../components/MarginTutorCard";
+import DefinePopover from "../components/DefinePopover";
 import SectionBriefingCard from "../components/SectionBriefingCard";
 import { briefingTextReady, type MarginHelp } from "../sectionBriefing";
 import { segmentParagraph, blockRoleFor, blockRoleClass, isContentsItem, openerLength, type StyleRange } from "../paragraphStructure";
 import { useDialog } from "../hooks/useDialog";
+import { anchorCardTop, guardScroll } from "../tutorAnchor";
 import type { BookSection, Note, ReadingSession, TodayCard, SettingsDto } from "../types";
 import { NOTE_TYPES, errorMessage, makeCharLocator, parseLocator } from "../types";
 import { locatorHint } from "../locatorHint";
@@ -29,6 +31,20 @@ interface Props {
  * is derived from "did the reader advance past this section during this
  * sitting?" — no manual mark-complete gate.
  */
+// CORE-1158: lens labels for the compact kept-markers in the margin, so a kept
+// tutor answer reads the same collapsed as it does open. Mirrors the LENS map in
+// MarginTutorCard. Manual notes carry their own already-readable note_type.
+const DRAFT_LENS_LABEL: Record<TutorMode, string> = {
+  explain: "Explain",
+  historical: "Context",
+  vocabulary: "Define",
+  socratic: "Ask",
+};
+
+function noteLensLabel(noteType: string): string {
+  return noteType && noteType.trim() ? noteType : "Note";
+}
+
 export default function TextReader({ today, onExit }: Props) {
   const { book, section: assignedSection } = today;
   // The sitting span (global char offsets, half-open). Null on legacy cards —
@@ -156,6 +172,12 @@ export default function TextReader({ today, onExit }: Props) {
   // (which turns it into a durable TutorNote via the existing approval path).
   const [tutorDrafts, setTutorDrafts] = useState<TutorDraft[]>([]);
   const [sel, setSel] = useState<{ x: number; y: number; below: boolean; start: number; end: number; text: string } | null>(null);
+  // CORE-1158: Define renders a light inline popover at the selection (not a
+  // margin card). It holds its own captured anchor so it survives the selection
+  // being cleared, and can escalate to the full vocabulary margin card.
+  const [define, setDefine] = useState<
+    { x: number; y: number; below: boolean; start: number; end: number; text: string; chapter: string } | null
+  >(null);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   // Companion side panel: collapsible + drag-resizable, both persisted. Cards
   // render in document order inside it (no absolute positioning), so a spawned
@@ -635,7 +657,7 @@ export default function TextReader({ today, onExit }: Props) {
   }, [notes, winBase, winEnd, currentSection?.label, pendingDelete]);
 
   // Highlights to paint inline, grouped by within-section char span.
-  const highlights = useMemo(() => {
+  const noteHighlights = useMemo(() => {
     return sectionNotes
       .map((n) => {
         const p = parseLocator(n.anchor_start || n.locator);
@@ -656,9 +678,187 @@ export default function TextReader({ today, onExit }: Props) {
       .sort((a, b) => parseInt(parseLocator(a.anchorStart).value, 10) - parseInt(parseLocator(b.anchorStart).value, 10));
   }, [tutorDrafts, winBase, winEnd]);
 
-  // Cards render in document order inside the side panel (notes first by anchor,
-  // then any live tutor drafts) — no absolute positioning, so they can never be
-  // clipped or land in an invisible rail.
+  // CORE-1158: a tutor DRAFT keeps its selection highlighted while its card lives
+  // (the design's "the selected passage stays highlighted while its card is
+  // active"). Drafts join the note highlights so the active one picks up the
+  // matched tint + ring via `.tl-hl.active` (keyed by draftId === activeNoteId).
+  const highlights = useMemo(() => {
+    const fromDrafts = sectionDrafts
+      .map((d) => {
+        const start = parseInt(parseLocator(d.anchorStart).value, 10) - winBase;
+        if (!Number.isFinite(start) || start < 0 || !d.anchoredText) return null;
+        return { id: d.draftId, start, end: start + d.anchoredText.length };
+      })
+      .filter((h): h is { id: string; start: number; end: number } => h != null);
+    return [...noteHighlights, ...fromDrafts];
+  }, [noteHighlights, sectionDrafts, winBase]);
+
+  // ── CORE-1158: anchor the answer to its selection ───────────────────────
+  // Kept items rest as compact markers and the ONE active item is a full card,
+  // each positioned ABSOLUTELY in the margin rail at its selected line's vertical
+  // offset (the Google-Docs comment pattern), OUT OF the reading column's flow so
+  // the column never reflows. WKWebView has no overflow-anchor, so place-keeping
+  // is by construction (out-of-flow cards) PLUS a JS scroll guard. Offsets are
+  // measured live from the paragraph DOM relative to the rail, so they recompute
+  // on resize / font change rather than freezing to a stale pixel.
+  const railTrackRef = useRef<HTMLElement | null>(null);
+  const activeCardRef = useRef<HTMLDivElement | null>(null);
+  const [anchorTops, setAnchorTops] = useState<Record<string, number>>({});
+  const [activeCardTop, setActiveCardTop] = useState<number | null>(null);
+  const [activeCardMaxH, setActiveCardMaxH] = useState<number | null>(null);
+  // Off-screen kept answers, gathered into an edge "bucket" pill (count above /
+  // below the visible viewport) so the margin never becomes a wall of cards.
+  const [bucket, setBucket] = useState<{ above: number; below: number }>({ above: 0, below: 0 });
+  const [trackResize, setTrackResize] = useState(0);
+
+  // The top (within the margin rail) of the paragraph that contains an absolute
+  // char anchor. The paragraph and the rail scroll together, so the rect delta is
+  // scroll-independent (no per-scroll recompute needed).
+  const anchorTrackTop = useCallback((absAnchor: string | null | undefined): number | null => {
+    const track = railTrackRef.current;
+    if (!track || !absAnchor) return null;
+    const within = parseInt(parseLocator(absAnchor).value, 10) - winBase;
+    if (!Number.isFinite(within)) return null;
+    let best: HTMLElement | null = null;
+    let bestOff = -1;
+    for (const [off, el] of paragraphRefs.current.entries()) {
+      if (off <= within && off > bestOff) { bestOff = off; best = el; }
+    }
+    if (!best) return null;
+    return best.getBoundingClientRect().top - track.getBoundingClientRect().top;
+  }, [winBase]);
+
+  // Recompute the anchored tops when the anchored set or column geometry changes.
+  // A scroll guard snapshots/restores the column's scrollTop across the (out-of-
+  // flow) mutation, so the reader's place holds even on WKWebView.
+  useLayoutEffect(() => {
+    const guard = guardScroll(containerRef.current);
+    const tops: Record<string, number> = {};
+    for (const n of sectionNotes) {
+      const t = anchorTrackTop(n.anchor_start || n.locator);
+      if (t != null) tops[n.id] = t;
+    }
+    for (const d of sectionDrafts) {
+      const t = anchorTrackTop(d.anchorStart);
+      if (t != null) tops[d.draftId] = t;
+    }
+    setAnchorTops(tops);
+
+    // The active card aligns to its selection, then nudges up only as far as
+    // needed to fit the margin viewport (and pins to the nearest edge when the
+    // line is off-screen). The reading column never moves; only the card shifts.
+    const container = containerRef.current;
+    const track = railTrackRef.current;
+    const gap = 8;
+    const activeTop = activeNoteId ? tops[activeNoteId] : undefined;
+    if (container && track && activeTop != null) {
+      const viewportTop = container.getBoundingClientRect().top - track.getBoundingClientRect().top;
+      const viewportHeight = container.clientHeight;
+      const selectionInView = activeTop >= viewportTop && activeTop <= viewportTop + viewportHeight;
+      const cardHeight = activeCardRef.current?.offsetHeight ?? 220;
+      const chosenTop = anchorCardTop({ selectionTop: activeTop, selectionInView, cardHeight, viewportTop, viewportHeight, gap });
+      setActiveCardTop(chosenTop);
+      // Cap the card to the space from its chosen top down to the viewport's
+      // bottom gap; past that it scrolls internally rather than drifting off-line.
+      setActiveCardMaxH(Math.max(120, viewportTop + viewportHeight - gap - chosenTop));
+    } else {
+      setActiveCardTop(null);
+      setActiveCardMaxH(null);
+    }
+
+    // Bucket: how many KEPT (non-active) anchored answers fall above / below the
+    // visible viewport, so an edge pill can offer to jump to them.
+    if (container && track) {
+      const viewportTop = container.getBoundingClientRect().top - track.getBoundingClientRect().top;
+      const viewportBottom = viewportTop + container.clientHeight;
+      let above = 0;
+      let below = 0;
+      for (const [id, t] of Object.entries(tops)) {
+        if (id === activeNoteId) continue;
+        if (t < viewportTop) above += 1;
+        else if (t > viewportBottom) below += 1;
+      }
+      setBucket({ above, below });
+    } else {
+      setBucket({ above: 0, below: 0 });
+    }
+    guard.restore();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectionNotes, sectionDrafts, activeNoteId, trackResize, anchorTrackTop]);
+
+  // Recompute on column resize / font reflow (anchor to the live DOM, never a
+  // stale pixel) — CORE-1158 robustness.
+  useEffect(() => {
+    const col = colRef.current;
+    if (!col || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setTrackResize((n) => n + 1));
+    ro.observe(col);
+    return () => ro.disconnect();
+  }, []);
+
+  // The edge bucket's above/below counts depend on scroll position (the kept
+  // markers' rail offsets are fixed, but which fall outside the viewport changes
+  // as the reader scrolls). Recompute just the bucket on scroll, rAF-throttled,
+  // reusing the already-measured anchorTops (no paragraph re-measure, so the
+  // reading column is never touched).
+  useEffect(() => {
+    const container = containerRef.current;
+    const track = railTrackRef.current;
+    if (!container || !track) return;
+    let raf = 0;
+    const recompute = () => {
+      raf = 0;
+      const viewportTop = container.getBoundingClientRect().top - track.getBoundingClientRect().top;
+      const viewportBottom = viewportTop + container.clientHeight;
+      let above = 0;
+      let below = 0;
+      for (const [id, t] of Object.entries(anchorTops)) {
+        if (id === activeNoteId) continue;
+        if (t < viewportTop) above += 1;
+        else if (t > viewportBottom) below += 1;
+      }
+      setBucket((prev) => (prev.above === above && prev.below === below ? prev : { above, below }));
+    };
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(recompute);
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [anchorTops, activeNoteId]);
+
+  // Jump to the nearest off-screen kept answer in a direction (the edge bucket).
+  // Scrolls the reading container so the marker lands just inside the viewport;
+  // honors reduced-motion (auto vs smooth). This is a deliberate reader action, so
+  // moving the column here is correct (unlike reveal/stream, which must not move).
+  const jumpToKept = useCallback(
+    (dir: "above" | "below") => {
+      const container = containerRef.current;
+      const track = railTrackRef.current;
+      if (!container || !track) return;
+      const viewportTop = container.getBoundingClientRect().top - track.getBoundingClientRect().top;
+      const viewportBottom = viewportTop + container.clientHeight;
+      let target: number | null = null;
+      for (const [id, t] of Object.entries(anchorTops)) {
+        if (id === activeNoteId) continue;
+        if (dir === "above" && t < viewportTop) {
+          if (target == null || t > target) target = t; // closest above = largest t below viewportTop
+        } else if (dir === "below" && t > viewportBottom) {
+          if (target == null || t < target) target = t; // closest below = smallest t above viewportBottom
+        }
+      }
+      if (target == null) return;
+      const margin = 80;
+      const desiredViewportTop = dir === "above" ? target - margin : target - container.clientHeight + margin;
+      const delta = desiredViewportTop - viewportTop;
+      const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      container.scrollBy({ top: delta, behavior: reduce ? "auto" : "smooth" });
+    },
+    [anchorTops, activeNoteId],
+  );
 
   // Collapse the margin when its last item is removed (a real >0 → 0 transition),
   // re-centering the reading column — unless the reader pinned it open. Guarding on
@@ -791,6 +991,38 @@ export default function TextReader({ today, onExit }: Props) {
     dispatchMargin("capture"); // make sure the new draft card is visible
     window.getSelection?.()?.removeAllRanges();
     setSel(null);
+  }
+  // Define → the light inline popover (NOT a margin card). Capture the selection's
+  // anchor + position so the popover survives the native selection being cleared.
+  function onDefine() {
+    if (!sel || sel.text.trim().length < 1) { setSel(null); return; }
+    setDefine({
+      x: sel.x,
+      y: sel.y,
+      below: sel.below,
+      start: sel.start,
+      end: sel.end,
+      text: sel.text,
+      chapter: currentSection?.label ?? "",
+    });
+    window.getSelection?.()?.removeAllRanges();
+    setSel(null);
+  }
+  // Escalate a Define popover into the full vocabulary margin card (go-deeper, or
+  // when the popover hits a flow it shouldn't host: consent, cap, setup, error).
+  function spawnVocabFromDefine(d: NonNullable<typeof define>) {
+    const draft: TutorDraft = {
+      draftId: `draft_${Date.now()}_${Math.round(Math.random() * 1e6)}`,
+      mode: "vocabulary",
+      locator: makeCharLocator(d.start),
+      anchorStart: makeCharLocator(d.start),
+      anchorEnd: makeCharLocator(d.end),
+      anchoredText: d.text,
+      chapter: d.chapter,
+    };
+    setTutorDrafts((dr) => [...dr, draft]);
+    setActiveNoteId(draft.draftId);
+    dispatchMargin("capture");
   }
   // Deep Study v2 marker tap → a Context tutor draft about a briefing theme
   // (not a passage selection). Anchored at the section start; the "anchored text"
@@ -1015,6 +1247,7 @@ export default function TextReader({ today, onExit }: Props) {
               header label, close ×, and note cards sit directly on the desk. */}
           <aside
             className="tl-margin-rail"
+            ref={railTrackRef}
             aria-label="Margin"
             aria-hidden={!marginIsVisible}
             // inert keeps the always-mounted rail's cards (note inputs, delete
@@ -1056,29 +1289,101 @@ export default function TextReader({ today, onExit }: Props) {
                   Select a passage to highlight, add a note, or open a tutor prompt. Anything you capture collects here, beside the text.
                 </p>
               )}
-              {sectionNotes.map((n) => (
-                <MarginNoteCard
-                  key={n.id}
-                  note={n}
-                  active={activeNoteId === n.id}
-                  onActivate={() => setActiveNoteId(n.id)}
-                  onSaved={refreshNotes}
-                  onDelete={() => deleteNote(n.id)}
-                />
-              ))}
-              {sectionDrafts.map((d) => (
-                <MarginTutorCard
-                  key={d.draftId}
-                  bookId={book.id}
-                  bookTitle={book.title}
-                  author={book.author}
-                  draft={d}
-                  active={activeNoteId === d.draftId}
-                  onActivate={() => setActiveNoteId(d.draftId)}
-                  onSaved={(note) => onTutorSaved(d.draftId, note.id)}
-                  onDiscard={() => onTutorDiscard(d.draftId)}
-                />
-              ))}
+            </div>
+            {/* CORE-1158: the anchored layer. Kept items rest as compact markers
+                and the ONE active item is a full card, each positioned at its
+                selected line's vertical offset, OUT OF the column's flow so the
+                reading column never reflows. */}
+            <div className="tl-margin-anchored">
+              {sectionNotes.map((n) =>
+                anchorTops[n.id] == null ? null : activeNoteId === n.id ? (
+                  <div
+                    key={n.id}
+                    ref={activeCardRef}
+                    className="tl-anchored is-active"
+                    style={{ top: activeCardTop ?? anchorTops[n.id], maxHeight: activeCardMaxH ?? undefined }}
+                  >
+                    <MarginNoteCard
+                      note={n}
+                      active
+                      onActivate={() => setActiveNoteId(n.id)}
+                      onSaved={refreshNotes}
+                      onDelete={() => deleteNote(n.id)}
+                    />
+                  </div>
+                ) : (
+                  <button
+                    key={n.id}
+                    type="button"
+                    className="tl-kmark"
+                    style={{ top: anchorTops[n.id] }}
+                    onClick={() => setActiveNoteId(n.id)}
+                    aria-label={`${noteLensLabel(n.note_type)}: ${n.anchored_text ?? ""}`}
+                  >
+                    <span className="tl-kmark-dot" />
+                    <span className="tl-kmark-lens">{noteLensLabel(n.note_type)}</span>
+                    <span className="tl-kmark-snip">{(n.anchored_text ?? "").slice(0, 40)}</span>
+                  </button>
+                ),
+              )}
+              {sectionDrafts.map((d) =>
+                anchorTops[d.draftId] == null ? null : activeNoteId === d.draftId ? (
+                  <div
+                    key={d.draftId}
+                    ref={activeCardRef}
+                    className="tl-anchored is-active"
+                    style={{ top: activeCardTop ?? anchorTops[d.draftId], maxHeight: activeCardMaxH ?? undefined }}
+                  >
+                    <MarginTutorCard
+                      bookId={book.id}
+                      bookTitle={book.title}
+                      author={book.author}
+                      draft={d}
+                      active
+                      onActivate={() => setActiveNoteId(d.draftId)}
+                      onSaved={(note) => onTutorSaved(d.draftId, note.id)}
+                      onDiscard={() => onTutorDiscard(d.draftId)}
+                    />
+                  </div>
+                ) : (
+                  <button
+                    key={d.draftId}
+                    type="button"
+                    className="tl-kmark"
+                    style={{ top: anchorTops[d.draftId] }}
+                    onClick={() => setActiveNoteId(d.draftId)}
+                    aria-label={`${DRAFT_LENS_LABEL[d.mode]}: ${d.anchoredText.slice(0, 40)}`}
+                  >
+                    <span className="tl-kmark-dot" />
+                    <span className="tl-kmark-lens">{DRAFT_LENS_LABEL[d.mode]}</span>
+                    <span className="tl-kmark-snip">{d.anchoredText.slice(0, 40)}</span>
+                  </button>
+                ),
+              )}
+              {/* Edge buckets: off-screen kept answers gather into a small pill at
+                  the margin's top / bottom edge with a count; click jumps to the
+                  nearest. They live OUTSIDE the scrolled flow (pinned to the rail's
+                  visible edges) so they never overlap the active card. */}
+              {bucket.above > 0 && (
+                <button
+                  type="button"
+                  className="tl-bucket tl-bucket-top"
+                  onClick={() => jumpToKept("above")}
+                  aria-label={`${bucket.above} kept ${bucket.above === 1 ? "answer" : "answers"} above: jump to the nearest`}
+                >
+                  ↑ {bucket.above} above
+                </button>
+              )}
+              {bucket.below > 0 && (
+                <button
+                  type="button"
+                  className="tl-bucket tl-bucket-bottom"
+                  onClick={() => jumpToKept("below")}
+                  aria-label={`${bucket.below} kept ${bucket.below === 1 ? "answer" : "answers"} below: jump to the nearest`}
+                >
+                  ↓ {bucket.below} below
+                </button>
+              )}
             </div>
           </aside>
         </div>
@@ -1092,8 +1397,25 @@ export default function TextReader({ today, onExit }: Props) {
           <span className="tl-seltoolbar-div" />
           <button className="tl-seltoolbar-btn" onClick={() => spawnTutorDraft("explain")}><TLIcon name="sparkle" size={15} /> Explain</button>
           <button className="tl-seltoolbar-btn" onClick={() => spawnTutorDraft("historical")}>Context</button>
-          <button className="tl-seltoolbar-btn" onClick={() => spawnTutorDraft("vocabulary")}>Define</button>
+          <button className="tl-seltoolbar-btn" onClick={onDefine}>Define</button>
         </div>
+      )}
+
+      {/* CORE-1158: Define popover — light, at the selection, dismisses on next
+          click. Escalates to the full vocabulary margin card for go-deeper and the
+          heavier flows (consent / cap / setup / error). */}
+      {define && (
+        <DefinePopover
+          term={define.text}
+          bookId={book.id}
+          chapter={define.chapter || null}
+          locator={makeCharLocator(define.start)}
+          x={define.x}
+          y={define.y}
+          below={define.below}
+          onClose={() => setDefine(null)}
+          onOpenInMargin={() => spawnVocabFromDefine(define)}
+        />
       )}
 
       {showNote && (

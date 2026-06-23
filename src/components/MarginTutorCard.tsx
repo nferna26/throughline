@@ -385,6 +385,12 @@ export default function MarginTutorCard(props: {
 
   const briefStreaming = streaming && streamTierRef.current === "brief";
   const deepStreaming = streaming && streamTierRef.current === "deep";
+  // CORE-1158: under reduced motion the answer reads as pre-resolved — no blinking
+  // caret at all (the aria-busy toggle still announces the finished tier as one
+  // chunk). The CSS hides the caret too; gating the element keeps it out of the
+  // DOM entirely so nothing animates and assistive tech sees only the settled text.
+  const reduceMotion =
+    typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
 
   // Permanent privacy microline at the card's bottom — honest about WHERE the
   // answer came from. A local model never left the Mac; a cloud answer went to
@@ -566,10 +572,10 @@ export default function MarginTutorCard(props: {
       ) : (
         <>
           {!collapsed && (briefAnswer || briefStreaming) && (
-            <div className="tl-tutor-answer tl-md" aria-live="polite">
+            <div className="tl-tutor-answer tl-md" aria-live="polite" aria-busy={briefStreaming}>
               <Prose text={briefAnswer} />
-              {briefStreaming && <span className="tl-caret" />}
-              {phase === "thinking" && streamTierRef.current === "brief" && !briefAnswer && (
+              {!reduceMotion && briefStreaming && <span className="tl-caret" />}
+              {!reduceMotion && phase === "thinking" && streamTierRef.current === "brief" && !briefAnswer && (
                 <span className="tl-caret" />
               )}
               {/* Go deeper is an inline accent text link that ENDS the brief, like
@@ -592,10 +598,10 @@ export default function MarginTutorCard(props: {
           {!collapsed && deepRequested && (
             <div className="tl-tutor-deep">
               <div className="tl-tutor-deep-rule"><span>Deeper</span></div>
-              <div className="tl-tutor-answer tl-md" aria-live="polite">
+              <div className="tl-tutor-answer tl-md" aria-live="polite" aria-busy={deepStreaming}>
                 <Prose text={deepAnswer} />
-                {deepStreaming && <span className="tl-caret" />}
-                {phase === "thinking" && streamTierRef.current === "deep" && !deepAnswer && (
+                {!reduceMotion && deepStreaming && <span className="tl-caret" />}
+                {!reduceMotion && phase === "thinking" && streamTierRef.current === "deep" && !deepAnswer && (
                   <span className="tl-caret" />
                 )}
               </div>

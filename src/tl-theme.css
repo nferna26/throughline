@@ -867,6 +867,12 @@
    slide so its content never reflows (the inner stays a fixed 340px). */
 .tl-margin-rail {
   flex: 0 0 0; width: 0; opacity: 0; overflow: hidden;
+  /* CORE-1158: the rail stretches to the spread's height (flex align-items:
+     stretch), so it spans the whole scrolling sheet. position: relative makes it
+     the containing block for the anchored layer, whose cards/markers sit at each
+     selection's vertical offset. Because the rail is a separate column from the
+     sheet, placing/growing a card never reflows the reading text by construction. */
+  position: relative;
   /* The rail flows in the spread and scrolls with the desk. A tall tutor card
      grows in normal flow, so the desk scroll reaches BOTH its top (header/quote)
      and its bottom (lenses/footer) — the card has no internal scroll of its own. */
@@ -916,14 +922,19 @@
     flex-basis: auto; transform: translateX(0); pointer-events: auto;
   }
   /* As an OVERLAY drawer the rail is pinned to the viewport (top/bottom:0), out of
-     desk flow — so here (and only here) the inner scrolls internally to reach a
-     tall card's footer. In the wide in-spread layout the card grows in flow. */
-  .tl-margin-inner {
-    width: min(340px, 86vw); margin-left: 0; height: 100%; max-height: none;
+     desk flow. CORE-1158: the rail itself scrolls so BOTH the header (.tl-margin-
+     inner) AND the anchored fallback (its sibling, made static below) flow in one
+     drawer; the anchored cards drop their absolute placement here (one component,
+     two renders). In the wide in-spread layout the card stays anchored to its line. */
+  .tl-margin-rail {
+    width: min(340px, 86vw);
     overflow-y: auto;
     background: var(--tl-desk);
     box-shadow: -10px 0 28px -14px rgba(0,0,0,0.35), -1px 0 0 0 var(--tl-line);
-    padding: 18px 20px 28px;
+  }
+  .tl-margin-inner {
+    width: auto; margin-left: 0; max-height: none;
+    padding: 18px 20px 8px;
   }
   @media (prefers-reduced-motion: reduce) { .tl-margin-rail { transition: none; } }
 }

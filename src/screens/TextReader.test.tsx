@@ -88,6 +88,12 @@ describe("TextReader Companion Margin", () => {
       expect(mark).not.toBeNull();
       expect(mark!.textContent).toBe("quick");
     });
+    // CORE-1158: a kept note rests as a compact marker (lens + snippet) anchored
+    // to its line; clicking it surfaces the full editable card in place.
+    const marker = container.querySelector(".tl-kmark") as HTMLElement;
+    expect(marker).not.toBeNull();
+    expect(marker.textContent).toContain("quick");
+    fireEvent.click(marker);
     // The margin card shows the editable body and the anchored excerpt.
     expect(screen.getByDisplayValue("my thought")).toBeInTheDocument();
     expect(screen.getByText("quick", { selector: "blockquote" })).toBeInTheDocument();
@@ -96,6 +102,13 @@ describe("TextReader Companion Margin", () => {
   it("renders a saved AI card distinctly (read-only, AI label)", async () => {
     mockBackend([note({ id: "n2", note_type: "SavedAICard", body: "The author means X.", anchored_text: null })]);
     const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    // Surface the kept AI note from its marker (one active card at a time).
+    const marker = await waitFor(() => {
+      const m = container.querySelector(".tl-kmark") as HTMLElement | null;
+      expect(m).not.toBeNull();
+      return m!;
+    });
+    fireEvent.click(marker);
     await waitFor(() => expect(screen.getByText(/AI card/i)).toBeInTheDocument());
     expect(screen.getByText("The author means X.")).toBeInTheDocument();
     // AI cards are not editable text inputs.
@@ -156,7 +169,9 @@ describe("TextReader margin note delete — Undo (FT-32)", () => {
     const { container } = render(<TextReader today={card()} onExit={() => {}} />);
     await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
 
-    // Click the card's X (aria-label "Delete note") — kept the same label.
+    // Surface the kept highlight's card from its marker, then click the card's X
+    // (aria-label "Delete note") — kept the same label.
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
     fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
 
     // No backend delete yet, and a removal notice with an Undo button is shown.
@@ -178,6 +193,7 @@ describe("TextReader margin note delete — Undo (FT-32)", () => {
     const { container } = render(<TextReader today={card()} onExit={() => {}} />);
     await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
 
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
     fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
     expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(false);
 
@@ -771,21 +787,22 @@ describe("TextReader companion panel toggle", () => {
     // Default CLOSED: the rail is ALWAYS MOUNTED (its width/opacity animate to 0 in
     // CSS, never display:none — so a tutor stream survives), marked aria-hidden, the
     // inline highlight is still painted, and the toggle shows a count badge. The
-    // card's editable body is mounted even while the rail is closed.
+    // kept note rests as a compact marker, mounted even while the rail is closed.
     expect(spread().getAttribute("data-margin")).toBe("closed");
     expect(rail().getAttribute("aria-hidden")).toBe("true");
     expect(container.querySelector(".tl-panelcount")?.textContent).toBe("1");
-    expect(screen.getByDisplayValue("my thought")).toBeInTheDocument();
+    expect(container.querySelector(".tl-kmark")).not.toBeNull();
 
-    // Toggle SHOWS it → the spread re-centers (data-margin="open") and the note's
-    // editable body is visible.
+    // Toggle SHOWS it → the spread re-centers (data-margin="open"); surface the
+    // card from its marker so the note's editable body is visible.
     fireEvent.click(container.querySelector(".tl-paneltoggle")!);
     await waitFor(() => expect(spread().getAttribute("data-margin")).toBe("open"));
     expect(rail().getAttribute("aria-hidden")).toBe("false");
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
     expect(screen.getByDisplayValue("my thought")).toBeInTheDocument();
 
-    // Toggle HIDES it again — the card stays MOUNTED inside the closed rail, so a
-    // tutor card's in-flight stream/answer is never lost or re-run on reopen.
+    // Toggle HIDES it again — the ACTIVE card stays MOUNTED inside the closed rail,
+    // so a tutor card's in-flight stream/answer is never lost or re-run on reopen.
     fireEvent.click(container.querySelector(".tl-paneltoggle")!);
     expect(spread().getAttribute("data-margin")).toBe("closed");
     expect(screen.getByDisplayValue("my thought")).toBeInTheDocument();
@@ -1398,4 +1415,91 @@ describe("firstProseDropCapOffset (drop cap lands on the first prose paragraph)"
     ];
     expect(firstProseDropCapOffset(paras, [])).toBe(140);
   });
+});
+
+// CORE-1158: the answer comes to the reader. The card anchors beside its line, one
+// card is active at a time (others rest as compact markers), and revealing a card
+// never moves the reading column. (The placement math itself is unit-tested in
+// tutorAnchor.test.ts; these assert the wiring inside the reader.)
+function rect(top: number): DOMRect {
+  return { top, left: 0, right: 0, bottom: top, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+}
+
+describe("TextReader anchored tutor answer (CORE-1158)", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    localStorage.setItem("tl.panelOpen", "true");
+  });
+
+  it("keeps ONE active card at a time; kept answers rest as compact markers", async () => {
+    mockBackend([
+      note({ id: "n1", anchor_start: "char:10", anchor_end: "char:15", anchored_text: "quick", body: "first" }),
+      note({ id: "n2", anchor_start: "char:16", anchor_end: "char:21", anchored_text: "brown", body: "second" }),
+    ]);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelectorAll(".tl-kmark").length).toBe(2));
+    // Nothing active → both rest as markers; no full anchored card.
+    expect(container.querySelectorAll(".tl-anchored.is-active").length).toBe(0);
+
+    // Surface the first → exactly one active card; the other stays a marker.
+    fireEvent.click(container.querySelectorAll(".tl-kmark")[0] as HTMLElement);
+    expect(container.querySelectorAll(".tl-anchored.is-active").length).toBe(1);
+    expect(container.querySelectorAll(".tl-kmark").length).toBe(1);
+
+    // Surface the second → the first collapses back to a marker (still one active).
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    expect(container.querySelectorAll(".tl-anchored.is-active").length).toBe(1);
+    expect(container.querySelectorAll(".tl-kmark").length).toBe(1);
+  });
+
+  it("anchors the card at the selection's offset (not the column top) and never moves the reading column on reveal", async () => {
+    mockBackend([note({ id: "n1", anchor_start: "char:10", anchor_end: "char:15", anchored_text: "quick", body: "hi" })]);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-kmark")).not.toBeNull());
+
+    const scroller = container.querySelector(".tl-reader-main") as HTMLElement;
+    const track = container.querySelector(".tl-margin-rail") as HTMLElement;
+    const para = container.querySelector("p[data-offset]") as HTMLElement;
+
+    // Mock layout (jsdom has none): rail + scroller share a top of 100, a 400px
+    // viewport, and the selected paragraph sits 300px down → offset 300.
+    vi.spyOn(track, "getBoundingClientRect").mockReturnValue(rect(100));
+    vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(rect(100));
+    vi.spyOn(para, "getBoundingClientRect").mockReturnValue(rect(400));
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 400 });
+    // A real, restorable scrollTop so the place-keeping guard is observable.
+    let scrollVal = 250;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollVal,
+      set: (v: number) => { scrollVal = v; },
+    });
+
+    // Surface the card → the layout effect re-measures with the mocked rects.
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+
+    const activeCard = container.querySelector(".tl-anchored.is-active") as HTMLElement;
+    expect(activeCard).not.toBeNull();
+    // Anchored at the selection's offset (400 - 100), NOT the column top (0).
+    expect(activeCard.style.top).toBe("300px");
+    // The reader's place held: the reading column did not move on reveal.
+    expect(scroller.scrollTop).toBe(250);
+  });
+
+  it("surfacing a kept card does not steal focus from the reading surface", async () => {
+    mockBackend([note({ id: "n1", note_type: "SavedAICard", anchored_text: "quick", body: "The author means X." })]);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    const marker = await waitFor(() => {
+      const m = container.querySelector(".tl-kmark") as HTMLElement | null;
+      expect(m).not.toBeNull();
+      return m!;
+    });
+    const before = document.activeElement;
+    fireEvent.click(marker);
+    // The card surfaces in place but is NOT focus-grabbed (must-ship a11y: focus
+    // stays in the reading text; the card is reachable by keyboard, not forced).
+    expect(document.activeElement).toBe(before);
+    expect(container.querySelector(".tl-anchored.is-active")).not.toBeNull();
+  });
+
 });

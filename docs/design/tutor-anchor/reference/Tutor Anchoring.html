@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Throughline · the tutor, anchored to the selection</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --paper:#F4F1EA; --surface:#FBFAF6; --card:#FFFFFF;
+  --primary:#2E4A37; --accent:#3E7A4E; --accent-soft:rgba(62,122,78,.10);
+  --hl:rgba(62,122,78,.20); --hl-strong:rgba(62,122,78,.32);
+  --ink:#1A1A18; --ink-70:rgba(26,26,24,.70); --muted:#6B6B66; --faint:#98937F;
+  --border:#E5E1D8; --border-strong:#D8D3C6; --on-primary:#F4F1EA;
+  --serif:"Source Serif 4",Georgia,serif; --sans:Inter,-apple-system,system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  --shadow-win:0 30px 60px -18px rgba(30,28,18,.28),0 8px 20px -8px rgba(30,28,18,.16),0 0 0 1px rgba(40,36,24,.06);
+  --shadow-sm:0 1px 2px rgba(40,36,24,.05),0 0 0 1px rgba(40,36,24,.05);
+  --shadow-card:0 6px 16px -8px rgba(40,36,24,.2),0 0 0 1px rgba(40,36,24,.05);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:#E6E3DB;color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.6;}
+.page{max-width:1240px;margin:0 auto;padding:54px 32px 120px;}
+
+.doc-head{max-width:780px;margin-bottom:10px;}
+.doc-kicker{font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 14px;}
+.doc-head h1{font-family:var(--serif);font-weight:500;font-size:38px;line-height:1.08;letter-spacing:-.02em;margin:0 0 14px;}
+.doc-head p{font-size:15.5px;color:var(--ink-70);margin:0;max-width:72ch;}
+
+/* resolved-decisions strip */
+.dec{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin:26px 0 0;background:var(--paper);border:1px solid var(--border);border-radius:13px;overflow:hidden;}
+.dec div{padding:15px 18px;border-right:1px solid var(--border);}
+.dec div:last-child{border-right:none;}
+.dec h5{font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);margin:0 0 5px;}
+.dec p{font-size:11.5px;color:var(--muted);margin:0;line-height:1.5;}
+.dec p b{color:var(--ink);font-weight:600;}
+@media(max-width:900px){.dec{grid-template-columns:1fr 1fr;}.dec div:nth-child(2){border-right:none;}}
+
+.sec{margin-top:58px;}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px;}
+.sec-num{font-family:var(--serif);font-style:italic;font-size:20px;color:var(--accent);}
+.sec-head h2{font-family:var(--serif);font-weight:500;font-size:24px;letter-spacing:-.01em;margin:0;}
+.sec-tag{font-size:11.5px;font-weight:600;color:var(--faint);letter-spacing:.04em;border:1px solid var(--border-strong);border-radius:999px;padding:3px 10px;margin-left:auto;white-space:nowrap;}
+.sec-intro{font-size:14px;color:var(--muted);max-width:80ch;margin:0 0 22px;}
+.sec-intro b{color:var(--ink);font-weight:600;}
+
+.frame-label{display:flex;align-items:center;gap:10px;font-size:12px;color:#736f64;margin:0 0 11px 4px;}
+.frame-label b{color:#4a463d;font-weight:600;}
+.frame-label .dot{width:5px;height:5px;border-radius:50%;background:#a39d8d;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:24px;}
+.grid2>*{min-width:0;}
+@media(max-width:1040px){.grid2{grid-template-columns:1fr;}}
+
+/* ===== app window ===== */
+.win{border-radius:12px;overflow:hidden;box-shadow:var(--shadow-win);background:var(--paper);}
+.win.dark{--paper:#1C1914;--surface:#242018;--card:#2A251D;--ink:#ECE7DC;--ink-70:rgba(236,231,220,.72);
+  --muted:#9C968A;--faint:#7B7567;--border:#383329;--border-strong:#443E31;--primary:#A7C5B1;
+  --accent:#A7C5B1;--accent-soft:rgba(167,197,177,.13);--on-primary:#16140F;
+  --hl:rgba(167,197,177,.20);--hl-strong:rgba(167,197,177,.32);
+  --shadow-card:0 6px 16px -8px rgba(0,0,0,.5),0 0 0 1px rgba(0,0,0,.04);--shadow-sm:0 1px 2px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.04);}
+.winbar{height:38px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:13px;padding:0 14px;}
+.tl{display:flex;gap:7px;}.tl i{width:11px;height:11px;border-radius:50%;display:block;}
+.tl .r{background:#E06B5C;}.tl .y{background:#E3B24C;}.tl .g{background:#6FA85B;}
+.wt{font-size:12px;color:var(--muted);font-weight:500;}
+
+/* reader: text column + margin */
+.reader{position:relative;display:grid;grid-template-columns:1fr 250px;gap:0;height:430px;overflow:hidden;background:var(--paper);}
+.reader.broken{grid-template-columns:1fr 250px;}
+.col{padding:26px 30px;overflow:hidden;position:relative;}
+.col p{font-family:var(--serif);font-size:14px;line-height:1.75;color:var(--ink);margin:0 0 14px;max-width:52ch;}
+.col .mark{background:var(--hl);border-radius:3px;padding:1px 1px;box-decoration-break:clone;-webkit-box-decoration-break:clone;}
+.col .mark.active{background:var(--hl-strong);box-shadow:0 0 0 1px rgba(62,122,78,.25);}
+.win.dark .col .mark.active{box-shadow:0 0 0 1px rgba(167,197,177,.3);}
+.col .mark.kept{background:var(--hl);}
+
+/* margin */
+.margin{position:relative;border-left:1px solid var(--border);background:var(--surface);}
+
+/* the tutor card */
+.tcard{position:absolute;left:14px;right:12px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);
+  border-radius:11px;box-shadow:var(--shadow-card);padding:13px 14px;}
+.tcard .th{display:flex;align-items:center;gap:7px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:8px;}
+.tcard .th .gem{width:12px;height:12px;}
+.tcard .th .close{margin-left:auto;color:var(--faint);width:13px;height:13px;cursor:pointer;}
+.tcard .quote{font-family:var(--serif);font-style:italic;font-size:11.5px;line-height:1.4;color:var(--ink-70);border-left:2px solid var(--border-strong);padding-left:8px;margin-bottom:9px;}
+.tcard .ans{font-size:12px;line-height:1.55;color:var(--ink-70);}
+.tcard .ans b{color:var(--ink);font-weight:600;}
+.tcard .cursor{display:inline-block;width:6px;height:1em;background:var(--accent);vertical-align:-2px;margin-left:1px;border-radius:1px;}
+.tcard .deeper{margin-top:10px;padding-top:9px;border-top:1px solid var(--border);font-size:11px;font-weight:600;color:var(--accent);display:flex;align-items:center;gap:5px;cursor:pointer;}
+.tcard .deeper svg{width:11px;height:11px;}
+.tcard .deeptier{margin-top:9px;padding-top:9px;border-top:1px solid var(--border);font-size:12px;line-height:1.55;color:var(--ink-70);}
+.tcard.scroll{max-height:300px;overflow:hidden;}
+.tcard.scroll .scrollzone{max-height:240px;overflow-y:auto;}
+.tcard .fade{position:absolute;left:1px;right:1px;bottom:1px;height:22px;border-radius:0 0 11px 11px;background:linear-gradient(transparent,var(--card));pointer-events:none;}
+
+/* leader line connecting highlight to active card */
+.leader{position:absolute;height:1px;background:linear-gradient(90deg,transparent,var(--accent));opacity:.5;z-index:2;}
+
+/* collapsed kept marker */
+.kmark{position:absolute;left:14px;display:flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--border);
+  border-left:3px solid var(--accent);border-radius:8px;padding:6px 10px;box-shadow:var(--shadow-sm);cursor:pointer;max-width:200px;}
+.kmark .kd{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none;}
+.kmark .kt{font-size:10.5px;color:var(--ink-70);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.kmark .kl{font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:none;}
+
+/* off-screen bucket indicator */
+.bucket{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:5px;background:var(--card);
+  border:1px solid var(--border);border-radius:999px;padding:3px 9px;box-shadow:var(--shadow-sm);font-size:9.5px;color:var(--muted);cursor:pointer;z-index:3;}
+.bucket svg{width:10px;height:10px;color:var(--accent);}
+
+/* selection toolbar */
+.seltool{position:absolute;display:flex;align-items:center;gap:1px;background:var(--ink);border-radius:8px;padding:3px;box-shadow:0 8px 20px -6px rgba(0,0,0,.4);z-index:5;}
+.win.dark .seltool{background:#0E0C08;}
+.seltool button{font-family:var(--sans);font-size:10px;font-weight:500;color:var(--paper);background:none;border:none;padding:4px 7px;border-radius:5px;cursor:pointer;white-space:nowrap;}
+.seltool button.on{background:var(--accent);color:#fff;}
+.seltool .dv{width:1px;height:13px;background:rgba(255,255,255,.18);margin:0 1px;}
+
+/* define popover */
+.define{position:absolute;background:var(--card);border:1px solid var(--border);border-radius:9px;box-shadow:var(--shadow-card);padding:11px 13px;width:210px;z-index:6;}
+.define::after{content:"";position:absolute;top:-6px;left:24px;width:10px;height:10px;background:var(--card);border-left:1px solid var(--border);border-top:1px solid var(--border);transform:rotate(45deg);}
+.define .dw{font-family:var(--serif);font-size:13px;font-weight:600;color:var(--ink);}
+.define .dp{font-size:9.5px;color:var(--faint);font-style:italic;margin:1px 0 7px;}
+.define .dd{font-size:11.5px;line-height:1.5;color:var(--ink-70);}
+
+/* broken-state caption tint */
+.badtag{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:8;background:#B4663C;color:#fff;font-size:10px;font-weight:600;padding:3px 10px;border-radius:999px;}
+.goodtag{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:8;background:var(--accent);color:#fff;font-size:10px;font-weight:600;padding:3px 10px;border-radius:999px;}
+.win.dark .goodtag{color:#16140F;}
+
+/* narrow inline */
+.inlineans{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;
+  padding:12px 14px;margin:4px 0 14px;box-shadow:var(--shadow-sm);}
+.inlineans .th{display:flex;align-items:center;gap:7px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:7px;}
+.inlineans .th .close{margin-left:auto;color:var(--faint);width:13px;height:13px;}
+.inlineans .ans{font-size:12.5px;line-height:1.6;color:var(--ink-70);}
+.inlineans .ans b{color:var(--ink);font-weight:600;}
+
+.annot{display:flex;gap:9px;align-items:flex-start;font-size:12px;color:#6a665b;margin:13px 4px 0;line-height:1.45;max-width:84ch;}
+.annot::before{content:"";width:14px;height:14px;border:1.5px solid var(--accent);border-radius:50%;flex:none;margin-top:1px;background:radial-gradient(circle,var(--accent) 0 3px,transparent 3px);}
+.annot.beh::before{border-color:#B4663C;background:radial-gradient(circle,#B4663C 0 3px,transparent 3px);}
+
+.bnote{background:var(--accent-soft);border:1px solid rgba(62,122,78,.22);border-radius:12px;padding:16px 19px;margin-top:16px;}
+.bnote h4{font-size:12.5px;font-weight:600;margin:0 0 8px;display:flex;align-items:center;gap:8px;}
+.bnote h4 svg{width:15px;height:15px;color:var(--accent);}
+.bnote p{font-size:12px;color:var(--ink-70);margin:0 0 7px;line-height:1.55;}
+.bnote p:last-child{margin-bottom:0;}
+.bnote b{color:var(--ink);font-weight:600;}
+
+.foot{margin-top:56px;text-align:center;font-size:12px;color:#8a8576;}
+
+/* narrow window mock — smaller fixed width */
+.narrowwrap{display:flex;justify-content:center;}
+.narrow{width:420px;max-width:100%;}
+.narrow .reader{grid-template-columns:1fr;}
+.narrow .margin{display:none;}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="doc-head">
+    <p class="doc-kicker">Throughline · reader · CORE-1158</p>
+    <h1>The tutor, anchored to the selection</h1>
+    <p>The answer should appear in the margin <b>beside the line you selected</b>, the way a comment sits beside a paragraph, not at the top of the column where you have to scroll to find it. The reader's place is sacrosanct: the card comes to the reader, the text never moves. Same card, same brand; this pass fixes its placement and its states.</p>
+  </div>
+
+  <div class="dec">
+    <div><h5>Active vs kept</h5><p>Active = full anchored card with a hairline <b>leader to its highlight</b>. Kept = a compact margin marker, tinted to the highlight.</p></div>
+    <div><h5>Off-screen</h5><p>A small <b>stacked "bucket"</b> at the margin's top or bottom edge with a count. Click to jump.</p></div>
+    <div><h5>Define</h5><p>A <b>small inline popover</b> at the selection, not a margin card. A glance, not a lesson.</p></div>
+    <div><h5>The tie</h5><p>Matched highlight tint <b>plus a thin leader line</b>, on the active card only. Calm, not a hard connector.</p></div>
+  </div>
+
+  <!-- STATE 1 -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">1</span><h2>Mid-page Explain: the fix vs the bug</h2><span class="sec-tag">hero shot</span></div>
+    <p class="sec-intro">Left, today's bug: a mid-page selection, answer stranded at the <b>top</b> of the margin, disconnected. Right, the fix: the card sits in the margin <b>beside the selected line</b>, passage highlighted, a faint leader tying the two, and the reading column has not moved.</p>
+    <div class="grid2">
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Before</b> &middot; top-anchored, disconnected</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="wt">Meditations</span></div>
+          <div class="reader broken">
+            <span class="badtag">scroll up to find it</span>
+            <div class="col">
+              <p>Begin the morning by saying to thyself, I shall meet with the busybody, the ungrateful, arrogant, deceitful, envious, unsocial.</p>
+              <p>All these things happen to them by reason of their ignorance of what is good and evil. <span class="mark active">But I who have seen the nature of the good that it is beautiful, and of the bad that it is ugly</span>, can neither be injured by any of them.</p>
+              <p>For no one can fix on me what is ugly, nor can I be angry with my kinsman, for we are made for cooperation.</p>
+            </div>
+            <div class="margin">
+              <div class="tcard" style="top:12px;">
+                <div class="th"><svg class="gem" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5 8.4 10.1 4 8.5l4.4-1.6z"/></svg>Tutor · Explain</div>
+                <p class="ans">Aurelius reminds himself that others act badly out of ignorance, not malice, so their faults can't truly harm him.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="annot beh">The selection is three paragraphs down, but the answer is pinned to the top. The reader loses their line hunting for it.</p>
+      </div>
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>After</b> &middot; anchored beside the line</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="wt">Meditations</span></div>
+          <div class="reader">
+            <span class="goodtag">column unmoved</span>
+            <div class="col">
+              <p>Begin the morning by saying to thyself, I shall meet with the busybody, the ungrateful, arrogant, deceitful, envious, unsocial.</p>
+              <p>All these things happen to them by reason of their ignorance of what is good and evil. <span class="mark active">But I who have seen the nature of the good that it is beautiful, and of the bad that it is ugly</span>, can neither be injured by any of them.</p>
+              <p>For no one can fix on me what is ugly, nor can I be angry with my kinsman, for we are made for cooperation.</p>
+            </div>
+            <div class="margin">
+              <div class="leader" style="top:120px;left:-12px;width:26px;"></div>
+              <div class="tcard" style="top:96px;">
+                <div class="th"><svg class="gem" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5 8.4 10.1 4 8.5l4.4-1.6z"/></svg>Tutor · Explain<svg class="close" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg></div>
+                <p class="ans">Aurelius reminds himself that others act badly out of <b>ignorance, not malice</b>, so their faults can't truly harm him.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="annot">The card's top aligns to the selected line (nudged up only enough to stay fully in view). <b>Behavior:</b> if the selection is visible, reveal with no scroll at all.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATE 2 + 4 -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">2</span><h2>Short vs long, and streaming</h2><span class="sec-tag">height + stream</span></div>
+    <p class="sec-intro">A short answer is only as tall as its content, no chrome. A long answer caps at a max height and scrolls <b>inside the card</b>, never taller than the viewport, never pushing the column. While streaming, the card is fixed and the answer fills in beside the still passage.</p>
+    <div class="grid2">
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Short answer</b> &amp; <b>long answer</b> (internal scroll) &middot; light</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="wt">Walden</span></div>
+          <div class="reader">
+            <div class="col">
+              <p><span class="mark active">The mass of men lead lives of quiet desperation.</span> What is called resignation is confirmed desperation.</p>
+              <p>From the desperate city you go into the desperate country, and have to console yourself with the bravery of minks and muskrats.</p>
+              <p>A stereotyped but unconscious despair is concealed even under what are called the games and amusements of mankind.</p>
+            </div>
+            <div class="margin">
+              <div class="leader" style="top:34px;left:-12px;width:26px;"></div>
+              <div class="tcard" style="top:14px;">
+                <div class="th"><svg class="gem" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5 8.4 10.1 4 8.5l4.4-1.6z"/></svg>Tutor · Explain<svg class="close" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg></div>
+                <p class="ans">Desperation that doesn't look like crisis, just routine resignation.</p>
+              </div>
+              <div class="tcard scroll" style="top:150px;">
+                <div class="th"><svg class="gem" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5 8.4 10.1 4 8.5l4.4-1.6z"/></svg>Tutor · Context</div>
+                <div class="scrollzone">
+                  <p class="ans">Thoreau opens <b>Walden</b> with a critique of how most people live: trapped by property, debt, and routine they never chose. "Quiet desperation" names a despair without drama, hidden under ordinary busyness and amusements.</p>
+                  <p class="ans" style="margin-top:8px;">He is setting up the book's wager: that a deliberate, simplified life at the pond can reveal what living actually requires.</p>
+                </div>
+                <div class="fade"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="annot">Two cards shown for comparison; only one is active at a time in use. The long card caps height and scrolls within, with a quiet bottom fade.</p>
+      </div>
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Streaming</b> &middot; answer fills in, anchor fixed &middot; dark</p>
+        <div class="win dark">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="wt">Walden</span></div>
+          <div class="reader">
+            <span class="goodtag">nothing jumps</span>
+            <div class="col">
+              <p><span class="mark active">The mass of men lead lives of quiet desperation.</span> What is called resignation is confirmed desperation.</p>
+              <p>From the desperate city you go into the desperate country, and have to console yourself with the bravery of minks and muskrats.</p>
+              <p>A stereotyped but unconscious despair is concealed even under what are called the games and amusements of mankind.</p>
+            </div>
+            <div class="margin">
+              <div class="leader" style="top:34px;left:-12px;width:26px;"></div>
+              <div class="tcard" style="top:14px;">
+                <div class="th"><svg class="gem" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5 8.4 10.1 4 8.5l4.4-1.6z"/></svg>Tutor · Explain</div>
+                <p class="ans">Desperation that doesn't look like crisis, just routine resignation. Comfort can be a trap as<span class="cursor"></span></p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="annot"><b>Behavior:</b> the card reserves its anchor immediately and grows downward as tokens arrive. A blinking caret marks the stream. Reduced-motion shows the resolved answer with no caret.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATE 3 GO DEEPER -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">3</span><h2>Go deeper, within the same card</h2><span class="sec-tag">collapsed → expanded</span></div>
+    <p class="sec-intro">The brief tier shows by default with a quiet "Go deeper" disclosure. Expanding adds the deeper tier <b>inside the same card</b>, which then grows (and scrolls internally if it would pass the viewport). The anchor stays put.</p>
+    <div class="grid2">
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Collapsed</b> &middot; brief tier + disclosure</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="wt">Meditations</span></div>
+          <div class="reader">
+            <div class="col">
+              <p><span class="mark active">You have power over your mind, not outside events. Realize this, and you will find strength.</span></p>
+              <p>The happiness of your life depends upon the quality of your thoughts: therefore guard accordingly.</p>
+              <p>Confine yourself to the present. Receive everything as if from a friendly hand.</p>
+            </div>
+            <div class="margin">
+              <div class="leader" style="top:24px;left:-12px;width:26px;"></div>
+              <div class="tcard" style="top:14px;">
+                <div class="th"><svg class="gem" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5 8.4 10.1 4 8.5l4.4-1.6z"/></svg>Tutor · Explain<svg class="close" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg></div>
+                <p class="ans">The Stoic <b>dichotomy of control</b>: steer what is yours (your judgments), accept what isn't.</p>
+                <div class="deeper"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,8 10,12 14,8"/></svg>Go deeper</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Expanded</b> &middot; deeper tier added inline &middot; dark</p>
+        <div class="win dark">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="wt">Meditations</span></div>
+          <div class="reader">
+            <div class="col">
+              <p><span class="mark active">You have power over your mind, not outside events. Realize this, and you will find strength.</span></p>
+              <p>The happiness of your life depends upon the quality of your thoughts: therefore guard accordingly.</p>
+              <p>Confine yourself to the present. Receive everything as if from a friendly hand.</p>
+            </div>
+            <div class="margin">
+              <div class="leader" style="top:24px;left:-12px;width:26px;"></div>
+              <div class="tcard scroll" style="top:14px;">
+                <div class="th"><svg class="gem" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5 8.4 10.1 4 8.5l4.4-1.6z"/></svg>Tutor · Explain<svg class="close" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg></div>
+                <div class="scrollzone">
+                  <p class="ans">The Stoic <b>dichotomy of control</b>: steer what is yours (your judgments), accept what isn't.</p>
+                  <div class="deeptier">
+                    <p class="ans" style="font-weight:600;color:var(--ink);margin-bottom:6px;">Deeper</p>
+                    <p class="ans">It is the hinge of the whole work. Aurelius returns to it whenever he meets frustration: the fault, the insult, the loss are "outside," and only his response is "his." Strength is the calm that follows giving up the rest.</p>
+                  </div>
+                </div>
+                <div class="fade"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="annot">The disclosure becomes a quiet "Deeper" divider. <b>Behavior:</b> the card grows from its anchored top; if growth would pass the viewport, it switches to internal scroll rather than moving up off its line.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATE 5 + 6 collision / kept -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">5</span><h2>A margin full of answers stays calm</h2><span class="sec-tag">collision · kept · off-screen</span></div>
+    <p class="sec-intro">Only one answer is <b>active</b> (full card). Other kept answers on screen collapse to a <b>compact marker</b> tinted to their highlight, so cards never overlap. Kept answers above or below the viewport gather into a <b>bucket</b> at the margin edge. Click any highlight, marker, or bucket to re-surface its card in place.</p>
+    <div class="grid2">
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Two on screen</b> &middot; one active, one collapsed</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="wt">Meditations</span></div>
+          <div class="reader">
+            <div class="col">
+              <p><span class="mark kept">Begin the morning by saying to thyself</span>, I shall meet with the busybody and the ungrateful.</p>
+              <p>All these things happen by reason of their ignorance of what is good and evil.</p>
+              <p><span class="mark active">But I who have seen the nature of the good</span> can neither be injured by any of them, nor be angry.</p>
+            </div>
+            <div class="margin">
+              <div class="bucket" style="bottom:10px;"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l5 5 5-5"/></svg>2 more below</div>
+              <div class="kmark" style="top:14px;"><span class="kd"></span><span class="kl">Note</span><span class="kt">Begin the morning…</span></div>
+              <div class="leader" style="top:150px;left:-12px;width:26px;"></div>
+              <div class="tcard" style="top:128px;">
+                <div class="th"><svg class="gem" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5 8.4 10.1 4 8.5l4.4-1.6z"/></svg>Tutor · Explain<svg class="close" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg></div>
+                <p class="ans">He has trained himself to see others' faults as ignorance, so they <b>cannot reach his judgment</b>.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="annot">The collapsed marker shows its lens (Note / Explain) and a snippet, aligned to its own line. <b>Behavior:</b> opening a marker collapses the previously active card to a marker, one active at a time.</p>
+      </div>
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Kept, none active</b> &middot; the quiet resting margin &middot; dark</p>
+        <div class="win dark">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="wt">Meditations</span></div>
+          <div class="reader">
+            <div class="col">
+              <p><span class="mark kept">Begin the morning by saying to thyself</span>, I shall meet with the busybody and the ungrateful.</p>
+              <p>All these things happen by reason of their ignorance of what is good and evil.</p>
+              <p><span class="mark kept">But I who have seen the nature of the good</span> can neither be injured by any of them, nor be angry.</p>
+            </div>
+            <div class="margin">
+              <div class="bucket" style="top:10px;"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 12l-5-5-5 5"/></svg>1 above</div>
+              <div class="kmark" style="top:30px;"><span class="kd"></span><span class="kl">Note</span><span class="kt">Begin the morning…</span></div>
+              <div class="kmark" style="top:150px;"><span class="kd"></span><span class="kl">Explain</span><span class="kt">But I who have seen…</span></div>
+            </div>
+          </div>
+        </div>
+        <p class="annot">With nothing active, kept answers rest as quiet markers beside their highlights, the highlight tint still visible in the text. The margin reads as a column of small bookmarks, never a wall of cards.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATE 7 DEFINE -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">7</span><h2>Define: a light inline popover</h2><span class="sec-tag">glance, not a lesson</span></div>
+    <p class="sec-intro">A one-word or short selection asking <b>Define</b> gets a small popover right at the selection, not a margin card. It's distinct, lighter, and dismisses on the next click. Explain and Context still open the fuller margin card.</p>
+    <div class="grid2">
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>Define</b> &middot; inline popover at the word &middot; light</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="wt">Walden</span></div>
+          <div class="reader">
+            <div class="col">
+              <p>I went to the woods because I wished to live deliberately, to front only the <span class="mark active">essential</span> facts of life.</p>
+              <p>And see if I could not learn what it had to teach, and not, when I came to die, discover that I had not lived.</p>
+              <div class="define" style="top:54px;left:150px;">
+                <div class="dw">essential</div>
+                <div class="dp">adjective</div>
+                <div class="dd">Absolutely necessary; the irreducible core of a thing, without which it would not be itself.</div>
+              </div>
+            </div>
+            <div class="margin"></div>
+          </div>
+        </div>
+        <p class="annot">The popover points at the word with a small arrow. The margin stays empty, no card. <b>Behavior:</b> a Define is ephemeral by default; "keep" promotes it to a margin marker like the others.</p>
+      </div>
+      <div>
+        <p class="frame-label"><span class="dot"></span><b>The toolbar</b> &middot; lens choice at the selection &middot; dark</p>
+        <div class="win dark">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="wt">Walden</span></div>
+          <div class="reader">
+            <div class="col">
+              <p>I went to the woods because I wished to live deliberately, to front only the <span class="mark active">essential facts of life</span>.</p>
+              <p>And see if I could not learn what it had to teach, and not, when I came to die, discover that I had not lived.</p>
+              <div class="seltool" style="top:48px;left:120px;">
+                <button>Highlight</button><button>Note</button><button>Question</button><span class="dv"></span><button class="on">Explain</button><button>Context</button><button>Define</button>
+              </div>
+            </div>
+            <div class="margin"></div>
+          </div>
+        </div>
+        <p class="annot">Unchanged from today: the toolbar pops at the selection. The lens you pick decides the treatment, Define → popover, Explain/Context → the anchored margin card.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATE 8 RESPONSIVE -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">8</span><h2>Narrow window: inline, below the paragraph</h2><span class="sec-tag">one component, two renders</span></div>
+    <p class="sec-intro">When the window is too narrow for a readable margin card, the same component renders <b>inline, directly below the selected paragraph</b>. Everything above stays put, so the reader's place holds; the text below simply flows down. Truly tiny windows could fall back to a bottom sheet, but the inline expansion covers the calm common case.</p>
+    <div class="narrowwrap">
+      <div class="narrow">
+        <p class="frame-label"><span class="dot"></span><b>Narrow</b> &middot; inline answer below the line &middot; light</p>
+        <div class="win">
+          <div class="winbar"><span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="wt">Meditations</span></div>
+          <div class="reader">
+            <div class="col">
+              <p>Begin the morning by saying to thyself, I shall meet with the busybody, the ungrateful, the arrogant.</p>
+              <p><span class="mark active">All these things happen to them by reason of their ignorance of what is good and evil.</span></p>
+              <div class="inlineans">
+                <div class="th"><svg class="gem" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" style="width:12px;height:12px;"><path d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5 8.4 10.1 4 8.5l4.4-1.6z"/></svg>Tutor · Explain<svg class="close" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg></div>
+                <p class="ans">Aurelius excuses others in advance: they wrong him only out of <b>ignorance of good and evil</b>, so the fault is theirs to carry, not his to resent.</p>
+              </div>
+              <p>For I have seen the nature of the good that it is beautiful, and of the bad that it is ugly.</p>
+            </div>
+          </div>
+        </div>
+        <p class="annot"><b>Behavior:</b> the inline card opens between the selected paragraph and the next, pushing only content <b>below</b> it. Content above the selection never shifts, so the line you're reading stays exactly where it was.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- BUILD NOTES -->
+  <div class="sec">
+    <div class="sec-head"><span class="sec-num">b</span><h2>Behavior notes for the build</h2><span class="sec-tag">scroll · stream · focus</span></div>
+    <div class="bnote">
+      <h4><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6.5L8.5 14.5 4 10"/></svg>The reader's place is sacrosanct</h4>
+      <p><b>Reveal:</b> if the selected line is in view, the card appears with <b>no scroll</b>. The card aligns its top to the selection's top, then nudges up only as far as needed to fit fully in the margin viewport (never enough to feel like a jump). If the selection is partly off-screen, the card pins to the nearest edge rather than forcing a scroll.</p>
+      <p><b>Stream:</b> the card reserves its anchored position before the first token, then grows downward in place. No reflow of the column, no upward drift of the card. Past max-height it scrolls internally.</p>
+      <p><b>Collision:</b> one active card; others collapse to markers. The layout never stacks two full cards, and a marker never overlaps the active card (push markers to their line, clamp within the margin, gather the overflow into the bucket).</p>
+      <p><b>Focus &amp; a11y:</b> focus <b>stays in the reading text</b> on reveal, the card is reachable by keyboard but not focus-grabbed. The answer region is <code style="font-family:var(--mono);font-size:11px;">aria-live="polite"</code>. Honor reduced-motion: no stream animation, the answer renders pre-resolved. The highlight-to-card tie is conveyed by tint and the leader, never by color alone (the active highlight also carries a ring).</p>
+    </div>
+  </div>
+
+  <p class="foot">Throughline · the tutor anchored to the selection · CORE-1158 · states 1–8, light and dark</p>
+
+</div>
+</body>
+</html>
