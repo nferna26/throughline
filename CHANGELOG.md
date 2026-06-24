@@ -5,6 +5,14 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 6)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.8.2] - 2026-06-23
+
+### Changed
+
+- **Update checks happen when they should.** Throughline now checks on launch,
+  focus, wake, and a quiet backstop cadence, with debouncing so the update pill
+  appears quickly without polling constantly.
+
 ## [0.8.1] - 2026-06-23
 
 ### Added
