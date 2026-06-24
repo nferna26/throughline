@@ -17,6 +17,12 @@ jobs:
       contents: write # needed to create the GitHub Release + upload release assets
     steps:
       - uses: actions/checkout@v4
+        with:
+          # CORE-1160: fetch full history + all tags so the ANNOTATED TAG MESSAGE
+          # is readable below (git for-each-ref %(contents)) to derive update
+          # severity. A shallow tag checkout would not carry the tag object's body.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Install Node
         uses: actions/setup-node@v4
@@ -164,7 +170,20 @@ jobs:
 
           UPDATE_FILENAME=$(basename "$UPDATE_TAR")
           REWRITTEN_LATEST_JSON="$PWD/r2-release/latest.json"
-          export DISTRIBUTION_ORIGIN UPDATE_FILENAME LATEST_JSON REWRITTEN_LATEST_JSON
+
+          # CORE-1160 — derive update severity from the ANNOTATED TAG MESSAGE. A
+          # release is critical iff its message has a line matching
+          # /^severity:\s*critical\s*$/i (cut with: git tag -a vX -m "severity: critical").
+          # Lightweight tags, or any tag without that line, stay routine (empty SEVERITY).
+          TAG_MESSAGE=$(git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)' 2>/dev/null || true)
+          SEVERITY=""
+          if printf '%s\n' "$TAG_MESSAGE" | grep -qiE '^severity:[[:space:]]*critical[[:space:]]*$'; then
+            SEVERITY="critical"
+          fi
+          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          echo "Release ${GITHUB_REF_NAME} severity: ${SEVERITY:-routine}"
+
+          export DISTRIBUTION_ORIGIN UPDATE_FILENAME LATEST_JSON REWRITTEN_LATEST_JSON SEVERITY RELEASE_VERSION
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from "node:fs";
 
@@ -178,6 +197,16 @@ jobs:
             if (value && typeof value === "object" && "url" in value) {
               value.url = updateUrl;
             }
+          }
+          // CORE-1160: tag the manifest critical (security) when the annotated tag
+          // marked it so. Routine releases leave both fields unset, so latest.json
+          // stays byte-compatible. The Tauri updater ignores unknown top-level
+          // fields; the app reads severity/criticalBelow via Update.rawJson. The
+          // minisign signature covers the .app.tar.gz bytes, not latest.json, so
+          // this needs no re-sign and cannot invalidate the update.
+          if (process.env.SEVERITY === "critical") {
+            manifest.severity = "critical";
+            manifest.criticalBelow = process.env.RELEASE_VERSION;
           }
           writeFileSync(process.env.REWRITTEN_LATEST_JSON, `${JSON.stringify(manifest, null, 2)}\n`);
           NODE

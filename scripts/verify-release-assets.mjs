@@ -6,14 +6,22 @@ const DEFAULT_RETRIES = 5;
 const DEFAULT_RETRY_DELAY_MS = 2_000;
 
 function usage() {
-  return `Usage: node scripts/verify-release-assets.mjs [--origin https://readthroughline.com] [--expected-version vX.Y.Z]
+  return `Usage: node scripts/verify-release-assets.mjs [--origin https://readthroughline.com] [--expected-version vX.Y.Z] [--expect-severity critical]
 
 Verifies the public R2-backed assets used by Throughline's updater and download links:
   - /updates/latest.json resolves from the site
   - every darwin platform payload URL resolves from /updates/
   - each darwin manifest signature matches the matching .sig asset
   - /download resolves for the public DMG
+  - (optional) severity tiering: with --expect-severity critical, latest.json must
+    carry severity "critical" + a valid semver criticalBelow (== the expected
+    version when given). Absent severity passes as routine, unchanged.
 `;
+}
+
+// CORE-1160: a strict 3-part semver shape (release versions are always x.y.z).
+function isSemver(v) {
+  return typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v);
 }
 
 export function parseArgs(argv) {
@@ -24,6 +32,10 @@ export function parseArgs(argv) {
       opts.origin = argv[++i];
     } else if (arg === "--expected-version") {
       opts.expectedVersion = argv[++i];
+    } else if (arg === "--expect-severity") {
+      // Set only when passed (kept off the default opts so routine callers are
+      // byte-identical to before).
+      opts.expectSeverity = argv[++i];
     } else if (arg === "--help" || arg === "-h") {
       opts.help = true;
     } else {
@@ -31,6 +43,9 @@ export function parseArgs(argv) {
     }
   }
   if (opts.help) return opts;
+  if (opts.expectSeverity != null && opts.expectSeverity !== "critical") {
+    throw new Error(`--expect-severity only supports "critical", got ${JSON.stringify(opts.expectSeverity)}`);
+  }
   opts.origin = normalizeOrigin(opts.origin);
   return opts;
 }
@@ -178,6 +193,7 @@ function assertR2UpdateUrl(origin, platform, url) {
 export async function verifyReleaseAssets({
   origin = DEFAULT_ORIGIN,
   expectedVersion = null,
+  expectSeverity = null,
   fetchImpl = globalThis.fetch,
   log = console.log,
   retry = {},
@@ -198,6 +214,34 @@ export async function verifyReleaseAssets({
     );
   }
   log(`✓ latest.json version: ${manifest.version}`);
+
+  // CORE-1160 — optional severity tier. A routine release omits `severity`
+  // entirely and passes exactly as before. When the caller expects critical (or a
+  // severity is present at all), it must be well-formed: severity "critical" and a
+  // valid semver criticalBelow (matching the expected version when one is given).
+  const { severity, criticalBelow } = manifest;
+  if (expectSeverity) {
+    if (severity !== expectSeverity) {
+      throw new Error(
+        `expected latest.json severity ${JSON.stringify(expectSeverity)}, got ${JSON.stringify(severity ?? null)}`,
+      );
+    }
+    if (!isSemver(criticalBelow)) {
+      throw new Error(`latest.json criticalBelow is not valid semver: ${JSON.stringify(criticalBelow ?? null)}`);
+    }
+    if (expectedVersion && versionWithoutV(criticalBelow) !== versionWithoutV(expectedVersion)) {
+      throw new Error(`latest.json criticalBelow ${criticalBelow} did not match expected ${expectedVersion}`);
+    }
+    log(`✓ latest.json severity: ${severity} (criticalBelow ${criticalBelow})`);
+  } else if (severity !== undefined && severity !== null) {
+    if (severity !== "critical") {
+      throw new Error(`latest.json severity must be "critical" when present, got ${JSON.stringify(severity)}`);
+    }
+    if (!isSemver(criticalBelow)) {
+      throw new Error(`latest.json criticalBelow is not valid semver: ${JSON.stringify(criticalBelow ?? null)}`);
+    }
+    log(`✓ latest.json severity: ${severity} (criticalBelow ${criticalBelow})`);
+  }
 
   const entries = darwinEntries(manifest);
   if (entries.length === 0) throw new Error("latest.json has no darwin platform entries");
