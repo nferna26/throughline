@@ -1343,6 +1343,23 @@
   color: color-mix(in oklab, var(--tl-accent) 78%, #9d5d38);
   border-color: color-mix(in oklab, var(--tl-accent) 42%, var(--tl-line));
 }
+/* CORE-1160 — a critical (security) update reads as a calm, filled accent pill:
+   distinction by weight + the brand green, never alarm red. The accent is pinned to
+   a fixed value (not var(--tl-accent), which flips light/dark) so paper text always
+   contrasts. It is persistent (no dismiss x), so it stays present until acted on. */
+.tl-update-pill.critical {
+  background: #3e7a4e;
+  color: #f4f1ea;
+  border-color: color-mix(in oklab, #3e7a4e 60%, #000);
+  font-weight: 700;
+}
+.tl-update-pill.critical:hover {
+  background: color-mix(in oklab, #3e7a4e 88%, #000);
+  border-color: color-mix(in oklab, #3e7a4e 50%, #000);
+}
+/* Keep the download progress legible on the filled critical pill. */
+.tl-update-pill.critical .tl-update-progress { background: color-mix(in oklab, #f4f1ea 28%, transparent); }
+.tl-update-pill.critical .tl-update-progress span { background: #f4f1ea; }
 .tl-update-pill-main { display: inline-flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap; }
 .tl-update-progress {
   display: block; height: 2px; margin-top: 7px; overflow: hidden;

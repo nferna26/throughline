@@ -8,6 +8,8 @@ import UpdateChecker, {
   UPDATE_HEARTBEAT_MS,
   UPDATE_WAKE_GAP_MS,
   backstopDue,
+  isCriticalUpdate,
+  semverLt,
   updateCheckAllowed,
   updatePillView,
   wakeDetected,
@@ -345,5 +347,117 @@ describe("UpdateChecker action flow (unchanged download/install/restart)", () =>
       expect.stringContaining("download failed"),
       expect.any(Error),
     );
+  });
+});
+
+// CORE-1160 — critical (security) updates. The app reads severity straight from the
+// manifest (Update.rawJson) and surfaces a calm-but-persistent "Security update"
+// pill that cannot be waved off. Everything parses defensively to routine.
+function criticalUpdate(rawOver: Record<string, unknown> = {}, currentVersion = "0.8.3") {
+  return {
+    version: "0.9.0",
+    currentVersion,
+    rawJson: { severity: "critical", ...rawOver },
+    downloadAndInstall: vi.fn(),
+  };
+}
+
+describe("semverLt (tiny numeric x.y.z compare)", () => {
+  it("compares numerically, ignoring pre-release, missing segments as 0", () => {
+    expect(semverLt("0.8.3", "0.8.4")).toBe(true);
+    expect(semverLt("0.8.4", "0.8.4")).toBe(false);
+    expect(semverLt("0.10.0", "0.9.0")).toBe(false); // 10 > 9
+    expect(semverLt("0.9.0", "0.10.0")).toBe(true);
+    expect(semverLt("0.8.3-beta.1", "0.8.3")).toBe(false); // pre-release ignored
+    expect(semverLt("1.0", "1.0.1")).toBe(true); // missing patch => 0
+  });
+});
+
+describe("isCriticalUpdate (defensive manifest read)", () => {
+  it("is critical when severity=critical and no criticalBelow", () => {
+    expect(isCriticalUpdate({ severity: "critical" }, "0.8.3")).toBe(true);
+  });
+  it("respects criticalBelow as a version floor", () => {
+    expect(isCriticalUpdate({ severity: "critical", criticalBelow: "0.9.0" }, "0.8.3")).toBe(true);
+    expect(isCriticalUpdate({ severity: "critical", criticalBelow: "0.9.0" }, "0.9.0")).toBe(false);
+    expect(isCriticalUpdate({ severity: "critical", criticalBelow: "0.8.3" }, "0.8.3")).toBe(false);
+  });
+  it("fails safe to routine on any malformed/missing field", () => {
+    expect(isCriticalUpdate(undefined, "0.8.3")).toBe(false);
+    expect(isCriticalUpdate(null, "0.8.3")).toBe(false);
+    expect(isCriticalUpdate({}, "0.8.3")).toBe(false); // no severity
+    expect(isCriticalUpdate({ severity: "high" }, "0.8.3")).toBe(false); // other severity
+    expect(isCriticalUpdate({ severity: 1 }, "0.8.3")).toBe(false); // non-string severity
+    expect(isCriticalUpdate({ severity: "critical", criticalBelow: "not-a-version" }, "0.8.3")).toBe(false);
+    expect(isCriticalUpdate({ severity: "critical", criticalBelow: {} }, "0.8.3")).toBe(false);
+    expect(isCriticalUpdate({ severity: "critical", criticalBelow: "0.9.0" }, "garbage")).toBe(false);
+  });
+});
+
+describe("UpdateChecker critical pill", () => {
+  it("renders a persistent Security update pill (no dismiss) for a critical update", async () => {
+    mocks.check.mockResolvedValue(criticalUpdate());
+    render(<UpdateChecker now={() => 0} />);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    const pill = await screen.findByRole("button", { name: "Security update" });
+    expect(pill.closest(".tl-update-pill")?.className).toContain("critical");
+    // Persistent: no dismiss control at all.
+    expect(screen.queryByRole("button", { name: "Dismiss update" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update ready" })).toBeNull();
+  });
+
+  it("treats criticalBelow as a floor: above the current version is critical, at/below is routine", async () => {
+    // criticalBelow above the installed version → critical.
+    mocks.check.mockResolvedValue(criticalUpdate({ criticalBelow: "0.9.0" })); // currentVersion 0.8.3
+    const { unmount } = render(<UpdateChecker now={() => 0} />);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(await screen.findByRole("button", { name: "Security update" })).toBeInTheDocument();
+    unmount();
+
+    // criticalBelow at/below the installed version → routine "Update ready" with a dismiss.
+    mocks.check.mockResolvedValue(criticalUpdate({ criticalBelow: "0.9.0" }, "0.9.0"));
+    render(<UpdateChecker now={() => 0} />);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(await screen.findByRole("button", { name: "Update ready" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Security update" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Dismiss update" })).toBeInTheDocument();
+  });
+
+  it("falls safe to a routine pill when the severity is malformed", async () => {
+    mocks.check.mockResolvedValue(criticalUpdate({ severity: "scary" }));
+    render(<UpdateChecker now={() => 0} />);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(await screen.findByRole("button", { name: "Update ready" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Security update" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Dismiss update" })).toBeInTheDocument();
+  });
+
+  it("a critical update is NOT suppressible by a prior routine dismissal of the same version", async () => {
+    const { clock } = makeClock(0);
+    // First the version appears routine and is dismissed.
+    mocks.check.mockResolvedValue({ version: "0.9.0", currentVersion: "0.8.3", downloadAndInstall: vi.fn() });
+    render(<UpdateChecker now={() => clock.value} />);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Dismiss update" }));
+    expect(screen.queryByRole("button", { name: "Update ready" })).toBeNull();
+
+    // Later the manifest marks that same version critical → it surfaces anyway.
+    mocks.check.mockResolvedValue(criticalUpdate({ severity: "critical", criticalBelow: undefined }));
+    clock.value = UPDATE_CHECK_COOLDOWN_MS;
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(await screen.findByRole("button", { name: "Security update" })).toBeInTheDocument();
   });
 });

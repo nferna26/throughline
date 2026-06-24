@@ -66,6 +66,54 @@ export function backstopDue(
   return lastCheckAt !== null && now - lastCheckAt >= intervalMs;
 }
 
+// CORE-1160 — read severity straight from the manifest (Update.rawJson is the full
+// parsed latest.json). Critical (security) updates get a calm-but-persistent
+// "Security update" pill that can't be waved off. Everything parses defensively:
+// any malformed or missing field falls safe to routine.
+
+/**
+ * A tiny semver "x.y.z" less-than: numeric segment compare, pre-release / build
+ * metadata ignored, missing segments treated as 0. No new deps.
+ */
+export function semverLt(a: string, b: string): boolean {
+  const parse = (s: string) =>
+    String(s)
+      .split("+")[0] // drop +build metadata
+      .split("-")[0] // drop -prerelease
+      .split(".")
+      .map((n) => parseInt(n, 10));
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < 3; i++) {
+    const x = Number.isFinite(pa[i]) ? pa[i] : 0;
+    const y = Number.isFinite(pb[i]) ? pb[i] : 0;
+    if (x !== y) return x < y;
+  }
+  return false;
+}
+
+const SEMVER_SHAPE = /^\d+\.\d+(\.\d+)?$/;
+
+/**
+ * Is this found update critical? True only when the manifest marks
+ * `severity: "critical"` AND (no `criticalBelow`, or the installed version is below
+ * it). Defensive by construction: a missing/malformed severity or criticalBelow,
+ * or an unreadable current version, all resolve to NOT critical (fail safe to calm).
+ */
+export function isCriticalUpdate(rawJson: unknown, currentVersion: string): boolean {
+  if (!rawJson || typeof rawJson !== "object") return false;
+  const manifest = rawJson as Record<string, unknown>;
+  if (manifest.severity !== "critical") return false;
+
+  const below = manifest.criticalBelow;
+  if (below === undefined || below === null) return true; // critical with no version floor
+  if (typeof below !== "string" && typeof below !== "number") return false; // malformed => routine
+  const belowStr = String(below);
+  if (!SEMVER_SHAPE.test(belowStr)) return false; // malformed => routine
+  if (typeof currentVersion !== "string" || !SEMVER_SHAPE.test(currentVersion)) return false;
+  return semverLt(currentVersion, belowStr);
+}
+
 export function updatePillView(phase: Exclude<UpdatePillPhase, "hidden">): PillView {
   switch (phase) {
     case "ready":
@@ -94,6 +142,10 @@ export default function UpdateChecker({ visible = true, now = defaultNow }: Prop
   const [phase, setPhase] = useState<UpdatePillPhase>("hidden");
   const [update, setUpdate] = useState<Update | null>(null);
   const [pct, setPct] = useState(0);
+  // CORE-1160: whether the surfaced update is a critical (security) one. State for
+  // render, ref so the async funnel + dismiss logic read it synchronously.
+  const [isCritical, setIsCritical] = useState(false);
+  const isCriticalRef = useRef(false);
 
   // Single-flight + the one cadence timestamp + the heartbeat's last tick. The
   // pendingVersion / dismissedVersion refs keep the pill from re-nagging: it
@@ -131,7 +183,12 @@ export default function UpdateChecker({ visible = true, now = defaultNow }: Prop
   const onUpdateFound = useCallback(
     (u: Update) => {
       if (phaseRef.current !== "hidden") return;
-      if (dismissedVersionRef.current === u.version) return;
+      const critical = isCriticalUpdate(u.rawJson, u.currentVersion);
+      // A routine dismissal suppresses re-show of that version — but a CRITICAL
+      // update overrides it (a security fix can never be waved off this session).
+      if (!critical && dismissedVersionRef.current === u.version) return;
+      isCriticalRef.current = critical;
+      setIsCritical(critical);
       pendingVersionRef.current = u.version;
       setUpdate(u);
       setPct(0);
@@ -202,6 +259,9 @@ export default function UpdateChecker({ visible = true, now = defaultNow }: Prop
   }, [visible, maybeCheck, now]);
 
   const dismissUpdate = useCallback(() => {
+    // A critical (security) update is persistent: it has no dismiss control, and is
+    // never written to dismissedVersion, so it can never be waved off this session.
+    if (isCriticalRef.current) return;
     if (pendingVersionRef.current) dismissedVersionRef.current = pendingVersionRef.current;
     setUpdate(null);
     setPct(0);
@@ -251,7 +311,9 @@ export default function UpdateChecker({ visible = true, now = defaultNow }: Prop
   if (!visible || phase === "hidden") return null;
 
   const view = updatePillView(phase);
-  const className = `tl-update-pill${view.fallback ? " fallback" : ""}${view.busy ? " updating" : ""}`;
+  const className = `tl-update-pill${view.fallback ? " fallback" : ""}${view.busy ? " updating" : ""}${
+    isCritical ? " critical" : ""
+  }`;
   const progress = Math.max(4, Math.min(100, pct));
 
   // A reset for the inner action button so the wrapping pill keeps its chrome.
@@ -292,7 +354,11 @@ export default function UpdateChecker({ visible = true, now = defaultNow }: Prop
   }
 
   // "ready" + "fallback": the primary action plus a quiet dismiss so a version the
-  // reader waves off is not re-shown this session.
+  // reader waves off is not re-shown this session. A CRITICAL "ready" is the
+  // exception: it reads "Security update", carries the `critical` accent, and is
+  // PERSISTENT (no dismiss control). It still only downloads on the reader's click
+  // and never auto-installs or auto-relaunches.
+  const label = phase === "ready" && isCritical ? "Security update" : view.label;
   return (
     <div className={className} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
       <button
@@ -302,16 +368,18 @@ export default function UpdateChecker({ visible = true, now = defaultNow }: Prop
         onClick={phase === "ready" ? startUpdate : openFallbackDownload}
       >
         <TLIcon name={view.icon} size={15} />
-        <span>{view.label}</span>
+        <span>{label}</span>
       </button>
-      <button
-        type="button"
-        aria-label="Dismiss update"
-        style={{ ...bareButton, padding: 2, lineHeight: 0, opacity: 0.55 }}
-        onClick={dismissUpdate}
-      >
-        <TLIcon name="x" size={12} />
-      </button>
+      {!isCritical && (
+        <button
+          type="button"
+          aria-label="Dismiss update"
+          style={{ ...bareButton, padding: 2, lineHeight: 0, opacity: 0.55 }}
+          onClick={dismissUpdate}
+        >
+          <TLIcon name="x" size={12} />
+        </button>
+      )}
     </div>
   );
 }
