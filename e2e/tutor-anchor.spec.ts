@@ -75,6 +75,15 @@ test("anchors the card beside its line and never moves the reading column", asyn
   await page.waitForTimeout(2000);
   const afterStream = await page.locator(".tl-reader-main").evaluate((el) => el.scrollTop);
   expect(afterStream).toBe(scrollTopBefore);
+
+  // (4) CORE-1163 ONE growth model: the active card has NO maxHeight and is NOT an
+  //     internal scroll container (the rail is the single scroll container).
+  const box = await card.evaluate((el) => {
+    const cs = getComputedStyle(el as HTMLElement);
+    return { maxHeight: cs.maxHeight, overflowY: cs.overflowY };
+  });
+  expect(box.maxHeight).toBe("none");
+  expect(["visible", "clip"]).toContain(box.overflowY);
 });
 
 // ── Screenshots of the states (light + dark) ────────────────────────────────

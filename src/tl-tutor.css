@@ -232,7 +232,8 @@
   vertical-align: -2px;
   border-radius: 1px;
   background: var(--tl-accent);
-  animation: tl-caret-blink 1s step-end infinite;
+  /* CORE-1163 motion token: caret blinks on 1s steps(2) (a clean on/off, no fade). */
+  animation: tl-caret-blink 1s steps(2) infinite;
 }
 @keyframes tl-caret-blink { 50% { opacity: 0; } }
 
@@ -600,23 +601,27 @@
   display: flex;
   flex-direction: column;
 }
-/* A long answer caps at the computed max-height (inline) and scrolls INSIDE the
-   card with a quiet bottom fade, never taller than the viewport, never shoving
-   the column. Short answers ignore the cap (only as tall as their content). */
+/* CORE-1163: ONE growth model. The active card grows DOWNWARD in normal flow with
+   its content; the RAIL is the single scroll container, so the card has NO
+   max-height, NO internal scroll, and NO fade-mask. A pathologically tall card
+   scrolls the rail (the thin fading scrollbar in tl-theme.css), never the card. */
 .tl-anchored.is-active {
-  overflow-y: auto;
-  overscroll-behavior: contain;
   border-radius: 12px;
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+  /* CORE-1163 motion token: open on 200ms cubic-bezier(0.32,0.72,0,1). Native feel
+     comes from the easing + hairline restraint, never translucency. */
+  animation: tl-tutor-open 200ms cubic-bezier(0.32, 0.72, 0, 1);
 }
-/* The card itself fills the wrapper; the wrapper owns the scroll + fade so the
-   card's own border/shadow are not clipped by the mask edge. */
 .tl-anchored.is-active > .tl-card { margin: 0; }
-.tl-anchored.is-active::-webkit-scrollbar { width: 8px; }
-.tl-anchored.is-active::-webkit-scrollbar-thumb {
-  background: var(--tl-ink-10); border-radius: 99px;
-  border: 2px solid transparent; background-clip: padding-box;
+@keyframes tl-tutor-open {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+/* The deep tier eases down in place on Go deeper (same token); the card grows
+   downward in flow, so the anchor + brief above it never move. */
+.tl-tutor-deep { animation: tl-tutor-expand 200ms cubic-bezier(0.32, 0.72, 0, 1); }
+@keyframes tl-tutor-expand {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
 }
 
 /* The hairline LEADER from the active card toward its highlight: a short line in
@@ -772,11 +777,19 @@
 }
 .tl-define-deeper:hover { text-decoration: underline; }
 
-/* Reduced motion: no caret at all (the answer reads as pre-resolved), and the
-   anchored card's internal scroll is immediate. */
+/* CORE-1163 reduced motion: no caret at all (answers read as pre-resolved), and
+   every open/collapse/expand transition collapses to 0ms (no animation). */
 @media (prefers-reduced-motion: reduce) {
   .tl-caret { display: none; }
-  .tl-anchored.is-active { scroll-behavior: auto; }
+  .tl-anchored,
+  .tl-anchored.is-active,
+  .tl-tutor,
+  .tl-tutor-deep,
+  .tl-tutor-collapsed-peek,
+  .tl-kmark {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
 }
 
 /* NARROW WINDOWS: the rail becomes an overlay drawer (see tl-theme.css). The
@@ -796,12 +809,6 @@
     right: auto;
     top: auto !important;
     margin-bottom: 12px;
-    max-height: none !important;
-  }
-  .tl-anchored.is-active {
-    overflow: visible;
-    -webkit-mask-image: none;
-    mask-image: none;
   }
   .tl-anchored.is-active::before { display: none; }
 }

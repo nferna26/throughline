@@ -11,60 +11,24 @@
 export interface AnchorInput {
   /** Selection's top, in margin-track coordinates (px from the track's top). */
   selectionTop: number;
-  /** Is the selected line currently within the visible margin viewport? */
-  selectionInView: boolean;
-  /** Measured (or estimated) card height in px. */
-  cardHeight: number;
   /** Top of the visible margin viewport, in track coordinates. */
   viewportTop: number;
-  /** Height of the visible margin viewport in px. */
-  viewportHeight: number;
-  /** Minimum gap to keep from the viewport edges. */
+  /** Minimum gap to keep from the rail's top edge. */
   gap?: number;
 }
 
 /**
- * The card's `top` within the margin track.
+ * The card's `top` within the margin rail: aligned to the selection line, clamped
+ * only so it never renders above the rail's top gap.
  *
- * In view: align the card top to the selection top, then nudge UP only as far as
- * needed to fit fully in the margin viewport (never enough to feel like a jump),
- * and never above the viewport top.
- *
- * Off-screen: pin to the nearest viewport edge rather than forcing a scroll.
+ * CORE-1163: ONE growth model. The card grows DOWNWARD in normal flow and the
+ * RAIL scrolls for a pathologically tall card, so there is no cap-to-viewport nudge:
+ * the top stays pinned to the selection line and the anchor + first words never move
+ * while the answer streams.
  */
 export function anchorCardTop(i: AnchorInput): number {
   const gap = i.gap ?? 8;
-  const vTop = i.viewportTop + gap;
-  const vBottom = i.viewportTop + i.viewportHeight - gap;
-
-  if (!i.selectionInView) {
-    // Pin to the nearest edge: top edge if the selection is above the viewport,
-    // bottom edge if below.
-    if (i.selectionTop < i.viewportTop) return vTop;
-    return Math.max(vTop, vBottom - i.cardHeight);
-  }
-
-  let top = i.selectionTop;
-  // Nudge up only as far as needed to keep the whole card in view.
-  const overflowBottom = top + i.cardHeight - vBottom;
-  if (overflowBottom > 0) top -= overflowBottom;
-  // But never push above the viewport top.
-  if (top < vTop) top = vTop;
-  return top;
-}
-
-/**
- * Does the card need an internal scroll? Only when its full height would exceed
- * the available margin viewport (minus gaps). Past this, the card caps at
- * max-height and scrolls inside rather than drifting off its line.
- */
-export function cardNeedsInternalScroll(cardHeight: number, viewportHeight: number, gap = 8): boolean {
-  return cardHeight > viewportHeight - gap * 2;
-}
-
-/** The card's capped max-height when it would otherwise pass the viewport. */
-export function cardMaxHeight(viewportHeight: number, gap = 8): number {
-  return Math.max(0, viewportHeight - gap * 2);
+  return Math.max(i.viewportTop + gap, i.selectionTop);
 }
 
 export interface ScrollGuard {

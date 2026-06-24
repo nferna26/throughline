@@ -31,6 +31,20 @@ export type TutorMode = "explain" | "historical" | "vocabulary" | "socratic";
 type Depth = "brief" | "deep";
 type Phase = "consent" | "thinking" | "streaming" | "done" | "error" | "blocked";
 
+/**
+ * CORE-1163: a draft's completed answer, persisted at the parent so reopening a
+ * collapsed card REPLAYS instantly without re-calling the model (no re-spend, no
+ * lost deep tier). Captures everything needed to render the "done" state.
+ */
+export interface TutorCache {
+  lens: TutorMode;
+  brief: string;
+  deep: string;
+  deepRequested: boolean;
+  aiRequestId: string | null;
+  collapsed: boolean;
+}
+
 export interface TutorDraft {
   draftId: string;
   mode: TutorMode;
@@ -40,6 +54,8 @@ export interface TutorDraft {
   anchorEnd: string;
   anchoredText: string;
   chapter: string;
+  /** Set once the answer has streamed; presence => replay, never re-call. */
+  cache?: TutorCache;
 }
 
 /** Lens metadata: the visible chip + header label for each mode. */
@@ -112,6 +128,8 @@ export default function MarginTutorCard(props: {
   /** Persisted as a durable TutorNote — caller refreshes the margin from it. */
   onSaved: (note: Note) => void;
   onDiscard: () => void;
+  /** CORE-1163: persist the completed answer at the parent for instant replay. */
+  onCached?: (draftId: string, cache: TutorCache) => void;
   /** Book title + author, threaded into the cold-start setup sheet's fallback
    *  prompt so a reader who copies it gets a fully-attributed prompt. Optional:
    *  the sheet degrades calmly to "Explain this passage." without them. */
@@ -119,12 +137,15 @@ export default function MarginTutorCard(props: {
   author?: string | null;
 }) {
   const { draft } = props;
+  // CORE-1163: a cached answer means REPLAY (render at "done", restore sub-state)
+  // and never call the model on mount.
+  const cached = draft.cache;
 
-  const [lens, setLens] = useState<TutorMode>(draft.mode);
-  const [phase, setPhase] = useState<Phase>(isTutorEnabled() ? "thinking" : "consent");
-  const [briefAnswer, setBriefAnswer] = useState("");
-  const [deepAnswer, setDeepAnswer] = useState("");
-  const [deepRequested, setDeepRequested] = useState(false);
+  const [lens, setLens] = useState<TutorMode>(cached?.lens ?? draft.mode);
+  const [phase, setPhase] = useState<Phase>(cached ? "done" : isTutorEnabled() ? "thinking" : "consent");
+  const [briefAnswer, setBriefAnswer] = useState(cached?.brief ?? "");
+  const [deepAnswer, setDeepAnswer] = useState(cached?.deep ?? "");
+  const [deepRequested, setDeepRequested] = useState(cached?.deepRequested ?? false);
   const [errorMsg, setErrorMsg] = useState("");
   // First-cloud-call consent (C2): set when cmd_ai_ask returns NeedsCloudConsent.
   const [cloudConsent, setCloudConsent] = useState<{ host: string; which: TutorMode; tier: Depth } | null>(null);
@@ -138,16 +159,16 @@ export default function MarginTutorCard(props: {
   // not yet known.
   const [provider, setProvider] = useState<string | null>(null);
   const [quoteOpen, setQuoteOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(cached?.collapsed ?? false);
   const [showSave, setShowSave] = useState(false);
   const [takeaway, setTakeaway] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   const channelRef = useRef<Channel<StreamEvent> | null>(null);
-  const aiReqRef = useRef<string>("");
-  const briefRef = useRef<string>("");
-  const deepRef = useRef<string>("");
+  const aiReqRef = useRef<string>(cached?.aiRequestId ?? "");
+  const briefRef = useRef<string>(cached?.brief ?? "");
+  const deepRef = useRef<string>(cached?.deep ?? "");
   const streamTierRef = useRef<Depth>("brief");
   const cardRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef<boolean>(true);
@@ -278,13 +299,31 @@ export default function MarginTutorCard(props: {
     }
   }, [ensureModel, props.bookId, draft.anchoredText, draft.chapter, draft.locator]);
 
-  // Auto-start once (when already enabled). New cards default to brief.
+  // Auto-start once on a GENUINE first open. A cached answer replays from initial
+  // state (phase "done"), so the model is NOT called on reopen; only on first open,
+  // explicit Regenerate, a new lens (pickLens), or Go deeper.
   useEffect(() => {
-    if (isTutorEnabled()) startStream(draft.mode, "brief");
+    if (!cached && isTutorEnabled()) startStream(draft.mode, "brief");
     // Dropping the channel ref on unmount soft-cancels any in-flight stream.
     return () => { channelRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // CORE-1163: persist the completed answer + sub-state to the parent so a later
+  // reopen replays it. Fires when the stream settles (phase "done") and whenever a
+  // persisted sub-state (collapsed / lens / deep) changes. Idempotent on replay.
+  useEffect(() => {
+    if (phase !== "done" || !briefAnswer) return;
+    props.onCached?.(draft.draftId, {
+      lens,
+      brief: briefAnswer,
+      deep: deepAnswer,
+      deepRequested,
+      aiRequestId: aiReqRef.current || null,
+      collapsed,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, briefAnswer, deepAnswer, deepRequested, lens, collapsed]);
 
   // Keep the newest streamed text in view (unless the reader scrolled up) — but
   // ONLY when an ancestor is its own bounded scroll region (the narrow overlay

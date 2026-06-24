@@ -532,3 +532,52 @@ describe("MarginTutorCard — provider gate", () => {
     expect(screen.queryByText(/^On this Mac$/)).toBeNull();
   });
 });
+
+describe("MarginTutorCard: instant cached reopen (CORE-1163)", () => {
+  beforeEach(() => localStorage.setItem("tl.tutorEnabled", "true"));
+
+  it("replays a cached brief and issues NO cmd_ai_ask on reopen", async () => {
+    render(
+      card({
+        cache: {
+          lens: "explain",
+          brief: "Aurelius braces himself for the day.",
+          deep: "",
+          deepRequested: false,
+          aiRequestId: "ai_prev",
+          collapsed: false,
+        },
+      }),
+    );
+    // The cached answer renders immediately (phase "done", replayed)...
+    expect(await screen.findByText(/Aurelius braces himself/)).toBeInTheDocument();
+    // ...and the model was never called (no re-spend), even though the tutor is enabled.
+    expect(mocks.invoke.mock.calls.some((c) => c[0] === "cmd_ai_ask")).toBe(false);
+    // A done brief with no deep still offers Go deeper.
+    expect(screen.getByText(/Go deeper/i)).toBeInTheDocument();
+  });
+
+  it("restores the deep tier from cache without re-calling (the deep is not lost)", async () => {
+    render(
+      card({
+        mode: "explain",
+        cache: {
+          lens: "historical",
+          brief: "The brief gist.",
+          deep: "The deeper reasoning beneath it.",
+          deepRequested: true,
+          aiRequestId: "ai_prev",
+          collapsed: false,
+        },
+      }),
+    );
+    expect(await screen.findByText(/The deeper reasoning beneath it/)).toBeInTheDocument();
+    expect(screen.getByText(/The brief gist/)).toBeInTheDocument();
+    expect(mocks.invoke.mock.calls.some((c) => c[0] === "cmd_ai_ask")).toBe(false);
+  });
+
+  it("still calls the model on a genuine first open (no cache)", async () => {
+    render(card()); // no cache
+    await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
+  });
+});

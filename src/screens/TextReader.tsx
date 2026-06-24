@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useReducer,
 import { invoke } from "@tauri-apps/api/core";
 import TLIcon from "../components/TLIcon";
 import MarginNoteCard from "../components/MarginNoteCard";
-import MarginTutorCard, { type TutorDraft, type TutorMode } from "../components/MarginTutorCard";
+import MarginTutorCard, { type TutorDraft, type TutorMode, type TutorCache } from "../components/MarginTutorCard";
 import DefinePopover from "../components/DefinePopover";
 import SectionBriefingCard from "../components/SectionBriefingCard";
 import { briefingTextReady, type MarginHelp } from "../sectionBriefing";
@@ -702,10 +702,8 @@ export default function TextReader({ today, onExit }: Props) {
   // measured live from the paragraph DOM relative to the rail, so they recompute
   // on resize / font change rather than freezing to a stale pixel.
   const railTrackRef = useRef<HTMLElement | null>(null);
-  const activeCardRef = useRef<HTMLDivElement | null>(null);
   const [anchorTops, setAnchorTops] = useState<Record<string, number>>({});
   const [activeCardTop, setActiveCardTop] = useState<number | null>(null);
-  const [activeCardMaxH, setActiveCardMaxH] = useState<number | null>(null);
   // Off-screen kept answers, gathered into an edge "bucket" pill (count above /
   // below the visible viewport) so the margin never becomes a wall of cards.
   const [bucket, setBucket] = useState<{ above: number; below: number }>({ above: 0, below: 0 });
@@ -744,26 +742,19 @@ export default function TextReader({ today, onExit }: Props) {
     }
     setAnchorTops(tops);
 
-    // The active card aligns to its selection, then nudges up only as far as
-    // needed to fit the margin viewport (and pins to the nearest edge when the
-    // line is off-screen). The reading column never moves; only the card shifts.
+    // CORE-1163: the active card's top is pinned to the selection line (no cap, no
+    // nudge). It grows DOWNWARD in normal flow; a pathologically tall card makes the
+    // RAIL scroll, never the card. The reading column is never programmatically
+    // moved; the top never shifts while the answer streams.
     const container = containerRef.current;
     const track = railTrackRef.current;
     const gap = 8;
     const activeTop = activeNoteId ? tops[activeNoteId] : undefined;
     if (container && track && activeTop != null) {
       const viewportTop = container.getBoundingClientRect().top - track.getBoundingClientRect().top;
-      const viewportHeight = container.clientHeight;
-      const selectionInView = activeTop >= viewportTop && activeTop <= viewportTop + viewportHeight;
-      const cardHeight = activeCardRef.current?.offsetHeight ?? 220;
-      const chosenTop = anchorCardTop({ selectionTop: activeTop, selectionInView, cardHeight, viewportTop, viewportHeight, gap });
-      setActiveCardTop(chosenTop);
-      // Cap the card to the space from its chosen top down to the viewport's
-      // bottom gap; past that it scrolls internally rather than drifting off-line.
-      setActiveCardMaxH(Math.max(120, viewportTop + viewportHeight - gap - chosenTop));
+      setActiveCardTop(anchorCardTop({ selectionTop: activeTop, viewportTop, gap }));
     } else {
       setActiveCardTop(null);
-      setActiveCardMaxH(null);
     }
 
     // Bucket: how many KEPT (non-active) anchored answers fall above / below the
@@ -1052,6 +1043,12 @@ export default function TextReader({ today, onExit }: Props) {
     setTutorDrafts((d) => d.filter((x) => x.draftId !== draftId));
     if (activeNoteId === draftId) setActiveNoteId(null);
   }
+  // CORE-1163: persist a draft's completed answer at the PARENT so reopening a
+  // collapsed card REPLAYS it instantly and never re-calls the model (no re-spend,
+  // no lost deep tier). Updated as the stream completes / sub-state changes.
+  const onTutorCached = useCallback((draftId: string, cache: TutorCache) => {
+    setTutorDrafts((d) => d.map((x) => (x.draftId === draftId ? { ...x, cache } : x)));
+  }, []);
   // The X on a margin card is a DISMISS-then-commit, never a one-click destroy
   // (FT-32). The card hides at once, a 6s Undo toast appears, and the real
   // cmd_delete_note runs only after the timer lapses — matching every other X in
@@ -1299,9 +1296,8 @@ export default function TextReader({ today, onExit }: Props) {
                 anchorTops[n.id] == null ? null : activeNoteId === n.id ? (
                   <div
                     key={n.id}
-                    ref={activeCardRef}
                     className="tl-anchored is-active"
-                    style={{ top: activeCardTop ?? anchorTops[n.id], maxHeight: activeCardMaxH ?? undefined }}
+                    style={{ top: activeCardTop ?? anchorTops[n.id] }}
                   >
                     <MarginNoteCard
                       note={n}
@@ -1330,9 +1326,8 @@ export default function TextReader({ today, onExit }: Props) {
                 anchorTops[d.draftId] == null ? null : activeNoteId === d.draftId ? (
                   <div
                     key={d.draftId}
-                    ref={activeCardRef}
                     className="tl-anchored is-active"
-                    style={{ top: activeCardTop ?? anchorTops[d.draftId], maxHeight: activeCardMaxH ?? undefined }}
+                    style={{ top: activeCardTop ?? anchorTops[d.draftId] }}
                   >
                     <MarginTutorCard
                       bookId={book.id}
@@ -1343,6 +1338,7 @@ export default function TextReader({ today, onExit }: Props) {
                       onActivate={() => setActiveNoteId(d.draftId)}
                       onSaved={(note) => onTutorSaved(d.draftId, note.id)}
                       onDiscard={() => onTutorDiscard(d.draftId)}
+                      onCached={onTutorCached}
                     />
                   </div>
                 ) : (

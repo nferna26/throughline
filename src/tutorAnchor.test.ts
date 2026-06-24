@@ -1,64 +1,22 @@
 import { describe, it, expect } from "vitest";
-import {
-  anchorCardTop,
-  cardNeedsInternalScroll,
-  cardMaxHeight,
-  guardScroll,
-} from "./tutorAnchor";
+import { anchorCardTop, guardScroll } from "./tutorAnchor";
 
-const base = { viewportTop: 0, viewportHeight: 400, gap: 8 };
-
-describe("anchorCardTop (CORE-1158 placement)", () => {
-  it("aligns the card top to the selection when it fits in view", () => {
-    expect(
-      anchorCardTop({ ...base, selectionTop: 120, selectionInView: true, cardHeight: 100 }),
-    ).toBe(120);
+describe("anchorCardTop (CORE-1163 grow-in-flow placement)", () => {
+  it("aligns the card top to the selection line", () => {
+    expect(anchorCardTop({ selectionTop: 120, viewportTop: 0 })).toBe(120);
+    expect(anchorCardTop({ selectionTop: 900, viewportTop: 0 })).toBe(900); // tall card: the RAIL scrolls, no cap
   });
 
-  it("nudges UP only as far as needed when the card would overflow the bottom", () => {
-    // selectionTop 360 + cardHeight 100 = 460; viewport bottom (minus gap) = 392.
-    // Nudge up by exactly the overflow (68) so the card bottom lands on 392.
-    const top = anchorCardTop({ ...base, selectionTop: 360, selectionInView: true, cardHeight: 100 });
-    expect(top).toBe(292);
-    expect(top + 100).toBe(base.viewportHeight - base.gap); // bottom exactly at the edge
+  it("never renders above the rail's top gap", () => {
+    expect(anchorCardTop({ selectionTop: 4, viewportTop: 0, gap: 8 })).toBe(8);
+    // When the line has scrolled above the viewport, clamp to the viewport top gap.
+    expect(anchorCardTop({ selectionTop: 50, viewportTop: 200, gap: 8 })).toBe(208);
   });
 
-  it("never nudges above the viewport top (clamps to the top gap)", () => {
-    const top = anchorCardTop({ ...base, selectionTop: 4, selectionInView: true, cardHeight: 600 });
-    expect(top).toBe(base.gap); // 8
-  });
-
-  it("pins to the TOP edge when the selection is above the viewport", () => {
-    const top = anchorCardTop({
-      viewportTop: 200,
-      viewportHeight: 400,
-      gap: 8,
-      selectionTop: 50, // above viewportTop (200)
-      selectionInView: false,
-      cardHeight: 120,
-    });
-    expect(top).toBe(208); // viewportTop + gap
-  });
-
-  it("pins to the BOTTOM edge when the selection is below the viewport", () => {
-    const top = anchorCardTop({
-      viewportTop: 0,
-      viewportHeight: 400,
-      gap: 8,
-      selectionTop: 900, // below the viewport bottom
-      selectionInView: false,
-      cardHeight: 120,
-    });
-    // bottom edge (392) minus card height (120) = 272
-    expect(top).toBe(272);
-  });
-});
-
-describe("internal-scroll thresholds", () => {
-  it("needs internal scroll only when the card is taller than the viewport (minus gaps)", () => {
-    expect(cardNeedsInternalScroll(300, 400)).toBe(false);
-    expect(cardNeedsInternalScroll(390, 400)).toBe(true); // 390 > 384
-    expect(cardMaxHeight(400)).toBe(384);
+  it("does NOT nudge up to fit a tall card (anchor stays on the line; the rail scrolls)", () => {
+    // selectionTop 360 in a 400px viewport: the OLD model nudged up to 292; the new
+    // model leaves the top on the line and lets the rail scroll.
+    expect(anchorCardTop({ selectionTop: 360, viewportTop: 0 })).toBe(360);
   });
 });
 

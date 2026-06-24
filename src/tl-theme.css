@@ -891,6 +891,13 @@
 @media (prefers-reduced-motion: reduce) {
   .tl-margin-rail { transition: none; }
 }
+/* CORE-1163: a pathologically tall active card scrolls the RAIL (the desk), never
+   the card itself. The rail's scrollbar is thin and FADING: invisible at rest, a
+   faint hairline only on hover / focus. Quiet by default; no translucency. */
+.tl-margin-rail::-webkit-scrollbar { width: 6px; }
+.tl-margin-rail::-webkit-scrollbar-thumb { background: transparent; border-radius: 99px; }
+.tl-margin-rail:hover::-webkit-scrollbar-thumb,
+.tl-margin-rail:focus-within::-webkit-scrollbar-thumb { background: var(--tl-ink-10); }
 /* Chromeless header: an uppercase faint "Margin" label + a quiet close ×. */
 .tl-margin-head {
   display: flex; align-items: center; justify-content: space-between;

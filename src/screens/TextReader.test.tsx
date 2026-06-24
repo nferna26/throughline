@@ -1482,6 +1482,10 @@ describe("TextReader anchored tutor answer (CORE-1158)", () => {
     expect(activeCard).not.toBeNull();
     // Anchored at the selection's offset (400 - 100), NOT the column top (0).
     expect(activeCard.style.top).toBe("300px");
+    // CORE-1163: ONE growth model. The card grows downward in flow; it never gets a
+    // maxHeight or an internal scroller (the rail is the scroll container).
+    expect(activeCard.style.maxHeight).toBe("");
+    expect(activeCard.style.overflowY).toBe("");
     // The reader's place held: the reading column did not move on reveal.
     expect(scroller.scrollTop).toBe(250);
   });
