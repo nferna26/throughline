@@ -13,13 +13,20 @@
   flex-direction: column;
   gap: var(--tl-2);
 }
-/* Card shell (handoff "Continue the thought"): radius 12, padding 13/16/12. The
-   2px --accent left edge (the tutor's signature) + the sheet bg/border come from
-   the rail overrides in tl-theme.css. No internal scroll — the card grows in the
-   rail's flow and the desk scrolls to it. */
+/* Card shell (handoff grow-in-flow tokens): radius 12, padding 16/18, a white card
+   surface, and the layered card shadow (a soft drop + a hairline ring). The 3px
+   --accent left edge + 1px hairline border come from the rail overrides in
+   tl-theme.css. No internal scroll: the card grows in the rail's flow and the rail
+   scrolls to it. */
 .tl-margin-rail .tl-tutor.tl-tutor {
   border-radius: 12px;
-  padding: 13px 16px 12px;
+  padding: 16px 18px;
+  background: #fff;
+  box-shadow: 0 6px 16px -8px rgba(40, 36, 24, 0.18), 0 0 0 1px rgba(40, 36, 24, 0.05);
+}
+[data-theme="dark"] .tl-margin-rail .tl-tutor.tl-tutor {
+  background: #2a251d;
+  box-shadow: 0 6px 16px -8px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.04);
 }
 
 /* ── header: ✦ Tutor · {lens} — spacer — [thinking | ↻] · collapse · × ── */
@@ -27,6 +34,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
+  margin-bottom: 11px;
 }
 .tl-tutor-badge {
   display: inline-flex;
@@ -35,9 +43,9 @@
   flex: 0 0 auto;
   white-space: nowrap;
   font-family: var(--tl-sans);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--tl-accent);
 }
@@ -47,9 +55,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--tl-sans);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--tl-faint);
 }
@@ -151,15 +159,15 @@
   background: transparent;
   border-left: 2px solid var(--tl-line-strong);
   padding: 0 0 0 10px;
-  margin: 8px 0 10px;
+  margin: 0 0 12px;
   cursor: pointer;
   color: inherit;
 }
 .tl-quotechip-text {
   font-family: var(--tl-serif);
   font-style: italic;
-  font-size: 13.5px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.45;
   color: var(--tl-ink-soft);
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -195,11 +203,13 @@
 .tl-tutor-consent-btns .tl-btn,
 .tl-tutor-consent-btns .tl-tutor-ghost { white-space: nowrap; flex: 0 0 auto; }
 
-/* ── streaming answer: sans 13.5/1.6 ink-soft; bold lead phrase in ink ── */
+/* ── streaming answer: Inter 15/1.58, tracking -0.003em, ink-soft; bold lead
+   phrase in ink (handoff .tc-ans type tokens) ── */
 .tl-tutor-answer {
   font-family: var(--tl-sans);
-  font-size: 13.5px;
-  line-height: 1.6;
+  font-size: 15px;
+  line-height: 1.58;
+  letter-spacing: -0.003em;
   color: var(--tl-ink-soft);
 }
 .tl-tutor-answer p { margin: 0 0 var(--tl-2); }
@@ -207,21 +217,24 @@
 .tl-tutor-answer strong { color: var(--tl-ink); font-weight: 600; }
 .tl-tutor-answer-wait { min-height: 18px; }
 
-/* ── Go deeper: inline accent text link that ENDS the answer (chevron-down) ── */
+/* ── Go deeper: accent text affordance above a hairline divider (handoff .tc-deeper) ── */
 .tl-tutor-deeper-link {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  margin-top: var(--tl-2);
-  padding: 0;
+  gap: 6px;
+  margin-top: 13px;
+  padding: 11px 0 0;
   border: 0;
+  border-top: 1px solid var(--tl-line);
+  width: 100%;
   background: transparent;
   font-family: var(--tl-sans);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--tl-accent);
   cursor: pointer;
 }
+.tl-tutor-deeper-link svg { width: 12px; height: 12px; }
 .tl-tutor-deeper-link:hover { text-decoration: underline; }
 
 .tl-caret {
@@ -235,7 +248,7 @@
   /* CORE-1163 motion token: caret blinks on 1s steps(2) (a clean on/off, no fade). */
   animation: tl-caret-blink 1s steps(2) infinite;
 }
-@keyframes tl-caret-blink { 50% { opacity: 0; } }
+@keyframes tl-caret-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 
 .tl-tutor-collapsed-peek {
   margin: 0;
@@ -308,26 +321,21 @@
   color: var(--tl-muted) !important;
 }
 
-/* ── deep tier: appended below the brief behind a quiet "Deeper" divider ── */
-.tl-tutor-deep { display: flex; flex-direction: column; }
-.tl-tutor-deep-rule {
+/* ── deep tier: appended below the brief, under a top hairline + a left "Deeper"
+   label (handoff .tc-deep / .dlabel) ── */
+.tl-tutor-deep {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 12px 0 10px;
+  flex-direction: column;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--tl-line);
 }
-.tl-tutor-deep-rule::before,
-.tl-tutor-deep-rule::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--tl-line);
-}
+.tl-tutor-deep-rule { margin: 0 0 7px; }
 .tl-tutor-deep-rule span {
   font-family: var(--tl-sans);
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--tl-faint);
 }
@@ -348,13 +356,21 @@
   color: var(--tl-ink-soft);
 }
 
-/* ── lens row: label "ASK ANOTHER WAY" + 4 outline chips in one row ── */
-.tl-tutor-asks { display: flex; flex-direction: column; gap: 7px; margin-top: 12px; }
+/* ── lens row: "ASK ANOTHER WAY" label + chips, under a top hairline (handoff
+   .tc-lenses / .ll / .lens) ── */
+.tl-tutor-asks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 13px;
+  padding-top: 12px;
+  border-top: 1px solid var(--tl-line);
+}
 .tl-tutor-askslabel {
   font-family: var(--tl-sans);
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--tl-faint);
 }
@@ -366,43 +382,45 @@
   font-family: var(--tl-sans);
   font-size: 11.5px;
   font-weight: 500;
-  padding: 4px 11px;
+  padding: 5px 11px;
   border-radius: var(--tl-r-pill, 999px);
-  border: 1px solid var(--tl-line-strong);
-  background: transparent;
+  border: 1px solid var(--tl-line);
+  background: var(--tl-surface);
   color: var(--tl-muted);
   cursor: pointer;
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 .tl-lenschip:hover { color: var(--tl-ink); border-color: var(--tl-ink); }
-/* Active lens = outline + accent text + 5px dot — NEVER a fill (Save is the card's
-   only filled control). */
+/* Active lens = the accent-filled pill (handoff .lens.on): the lens row is the
+   card's primary affordance; on-accent text via --tl-accent-ink reads in both
+   themes (#fff light / warm-dark in dark). */
 .tl-lenschip.is-active {
-  border-color: var(--tl-accent);
-  color: var(--tl-accent);
-  font-weight: 600;
-}
-.tl-lenschip.is-active::before {
-  content: "";
-  width: 5px; height: 5px; border-radius: 50%;
   background: var(--tl-accent);
+  border-color: var(--tl-accent);
+  color: var(--tl-accent-ink);
 }
 
-/* ── footer: one full-bleed hairline; the card's one fill + privacy microline ── */
+/* ── footer: a full-bleed hairline; the quiet Save text button + privacy microline
+   (handoff .tc-save / .sbtn / .priv: the fill lives on the active lens, Save is a
+   borderless accent text button) ── */
 .tl-tutor-foot {
   margin: 12px -16px 0;
-  padding: 10px 16px 0;
+  padding: 12px 16px 0;
   border-top: 1px solid var(--tl-line);
 }
-.tl-tutor-foot-row { display: flex; align-items: center; gap: var(--tl-2); }
+.tl-tutor-foot-row { display: flex; align-items: center; gap: 9px; }
 .tl-tutor-foot-sp { flex: 1 1 auto; }
 .tl-tutor-foot-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-family: var(--tl-sans);
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--tl-faint);
   white-space: nowrap;
 }
-/* Save as note / Save — the ONLY accent-filled control in the card. */
+.tl-tutor-foot-note svg { width: 11px; height: 11px; }
+/* Save as note: a borderless accent TEXT button (no fill). */
 .tl-tutor-save {
   display: inline-flex;
   align-items: center;
@@ -410,26 +428,30 @@
   flex: 0 0 auto;
   white-space: nowrap;
   font-family: var(--tl-sans);
-  font-size: 12.5px;
+  font-size: 11.5px;
   font-weight: 600;
-  color: var(--tl-accent-ink);
-  background: var(--tl-accent);
+  color: var(--tl-accent);
+  background: none;
   border: 0;
-  border-radius: 7px;
-  padding: 7px 14px;
+  padding: 0;
   cursor: pointer;
   transition: opacity 0.12s;
 }
-.tl-tutor-save:hover { opacity: 0.92; }
-.tl-tutor-save:disabled { opacity: 0.5; cursor: not-allowed; }
-/* Privacy microline: permanent, faint, at the card's very bottom. */
+.tl-tutor-save svg { width: 13px; height: 13px; }
+.tl-tutor-save:hover { text-decoration: underline; }
+.tl-tutor-save:disabled { opacity: 0.5; cursor: not-allowed; text-decoration: none; }
+/* Privacy microline: permanent, faint, with a small lock glyph. */
 .tl-tutor-privacy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   margin: 8px 0 0;
   font-family: var(--tl-sans);
-  font-size: 10.5px;
+  font-size: 10px;
   line-height: 1.5;
   color: var(--tl-faint);
 }
+.tl-tutor-privacy svg { width: 11px; height: 11px; flex: 0 0 auto; }
 
 /* ── save form: replaces the lens row + footer (never two action areas) ── */
 .tl-tutor-saveform { display: flex; flex-direction: column; }
@@ -612,16 +634,18 @@
   animation: tl-tutor-open 200ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .tl-anchored.is-active > .tl-card { margin: 0; }
+/* Handoff motion: open is height + opacity only. No scale, no spring, no overshoot,
+   no slide/translate (the downward growth is the in-flow layout itself). */
 @keyframes tl-tutor-open {
-  from { opacity: 0; transform: translateY(-2px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
-/* The deep tier eases down in place on Go deeper (same token); the card grows
-   downward in flow, so the anchor + brief above it never move. */
+/* The deep tier eases in on Go deeper (same token); the card grows downward in
+   flow, so the anchor + brief above it never move. */
 .tl-tutor-deep { animation: tl-tutor-expand 200ms cubic-bezier(0.32, 0.72, 0, 1); }
 @keyframes tl-tutor-expand {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* The hairline LEADER from the active card toward its highlight: a short line in
@@ -647,19 +671,19 @@
   right: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 9px;
+  padding: 9px 12px;
   background: var(--tl-sheet);
   border: 1px solid var(--tl-line);
-  border-left: 2px solid var(--tl-accent);
-  border-radius: 8px;
+  border-left: 3px solid var(--tl-accent);
+  border-radius: 9px;
   font-family: var(--tl-sans);
   font-size: 12px;
   line-height: 1.3;
   color: var(--tl-muted);
   text-align: left;
   cursor: pointer;
-  box-shadow: var(--tl-sheet-shadow);
+  box-shadow: var(--tl-shadow-sm);
   transition: border-color 140ms ease, background 140ms ease;
 }
 .tl-kmark:hover { border-color: var(--tl-accent); background: var(--tl-sheet-hi, var(--tl-sheet)); }
@@ -670,15 +694,22 @@
   background: var(--tl-accent);
   flex: 0 0 auto;
 }
+/* Lens label: accent, uppercase, tight (handoff .marker .ml). */
 .tl-kmark-lens {
+  font-size: 9.5px;
   font-weight: 700;
-  color: var(--tl-ink);
-  letter-spacing: 0.03em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tl-accent);
   flex: 0 0 auto;
 }
+/* Snippet: the book's serif voice, italic, dim ink (handoff .marker .mq). */
 .tl-kmark-snip {
   flex: 1 1 auto;
   min-width: 0;
+  font-family: var(--tl-serif);
+  font-style: italic;
+  color: var(--tl-ink-soft);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

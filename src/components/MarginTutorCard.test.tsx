@@ -228,7 +228,7 @@ describe("MarginTutorCard — brief default + go deeper", () => {
   });
 });
 
-describe("MarginTutorCard — one accent moment + header repair (handoff)", () => {
+describe("MarginTutorCard: lens-row affordance + header repair (grow-in-flow handoff)", () => {
   beforeEach(() => localStorage.setItem("tl.tutorEnabled", "true"));
 
   async function toDone() {
@@ -240,23 +240,24 @@ describe("MarginTutorCard — one accent moment + header repair (handoff)", () =
     return container;
   }
 
-  it("the done state has EXACTLY one accent-filled control — the Save-as-note button", async () => {
-    const container = await toDone();
-    // The card's only fill is the Save button (.tl-tutor-save).
-    const fills = container.querySelectorAll(".tl-tutor-save");
-    expect(fills.length).toBe(1);
-    expect(fills[0].textContent).toMatch(/Save as note/);
-  });
-
-  it("the active lens chip is outline-only — NOT the accent fill", async () => {
+  it("the active lens is the accent-filled pill (handoff: the lens row is the primary affordance)", async () => {
     const container = await toDone();
     const active = container.querySelector(".tl-lenschip.is-active") as HTMLElement;
     expect(active).not.toBeNull();
     expect(active.textContent).toBe("Explain"); // the draft's lens
-    // The active chip must not carry the card's fill class…
-    expect(active.classList.contains("tl-tutor-save")).toBe(false);
-    // …and is exposed as the checked radio (one lens active).
     expect(active.getAttribute("aria-checked")).toBe("true");
+    // Exactly one lens is active (filled) at a time.
+    expect(container.querySelectorAll(".tl-lenschip.is-active").length).toBe(1);
+  });
+
+  it("Save is a quiet text button, not the card's fill (handoff .sbtn)", async () => {
+    const container = await toDone();
+    const save = container.querySelector(".tl-tutor-save") as HTMLElement;
+    expect(save).not.toBeNull();
+    expect(save.textContent).toMatch(/Save as note/);
+    // The fill lives on the active lens chip, never on Save.
+    expect(save.classList.contains("is-active")).toBe(false);
+    expect(save.classList.contains("tl-lenschip")).toBe(false);
   });
 
   it("Regenerate is a header icon button (absent while streaming, present when done)", async () => {

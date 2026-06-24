@@ -892,12 +892,18 @@
   .tl-margin-rail { transition: none; }
 }
 /* CORE-1163: a pathologically tall active card scrolls the RAIL (the desk), never
-   the card itself. The rail's scrollbar is thin and FADING: invisible at rest, a
-   faint hairline only on hover / focus. Quiet by default; no translucency. */
-.tl-margin-rail::-webkit-scrollbar { width: 6px; }
-.tl-margin-rail::-webkit-scrollbar-thumb { background: transparent; border-radius: 99px; }
-.tl-margin-rail:hover::-webkit-scrollbar-thumb,
-.tl-margin-rail:focus-within::-webkit-scrollbar-thumb { background: var(--tl-ink-10); }
+   the card itself. The thin fading Mac scrollbar, on the rail only (handoff §5
+   move 2): 8px, a translucent thumb inset via a transparent border + content-box
+   clip, transparent track. No translucency on the card or rail surfaces. */
+.tl-margin-rail::-webkit-scrollbar { width: 8px; }
+.tl-margin-rail::-webkit-scrollbar-thumb {
+  background: rgba(40, 36, 24, 0.22);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+[data-theme="dark"] .tl-margin-rail::-webkit-scrollbar-thumb { background: rgba(236, 231, 220, 0.22); }
+.tl-margin-rail::-webkit-scrollbar-track { background: transparent; }
 /* Chromeless header: an uppercase faint "Margin" label + a quiet close ×. */
 .tl-margin-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -1102,12 +1108,16 @@
    reads as a deliberate mark; box-decoration-break:clone keeps multi-line wraps
    clean. Never alarming. */
 .tl-hl {
-  background: var(--tl-accent-soft);
-  box-shadow: 0 0 0 2px var(--tl-accent-soft);
-  border-radius: 2px; cursor: pointer;
+  background: color-mix(in oklab, var(--tl-accent) 20%, transparent);
+  border-radius: 3px; cursor: pointer;
+  /* CORE-1163: the tint fades in 150ms ease on select (handoff motion table). */
+  transition: background 150ms ease, box-shadow 150ms ease;
   -webkit-box-decoration-break: clone; box-decoration-break: clone;
 }
-.tl-hl.active { background: color-mix(in oklab, var(--tl-accent) 30%, transparent); box-shadow: 0 0 0 2px color-mix(in oklab, var(--tl-accent) 30%, transparent); }
+.tl-hl.active {
+  background: color-mix(in oklab, var(--tl-accent) 32%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--tl-accent) 30%, transparent);
+}
 
 /* ── Chromeless margin cards (PART 2): inside the rail the cards (.mnote idiom)
    sit directly on the desk — sheet bg, 1px hairline, radius 10, the same hairline
@@ -1125,7 +1135,7 @@
 .tl-margin-rail .tl-card.active,
 .tl-margin-rail .tl-tutor.active { box-shadow: var(--tl-sheet-shadow), 0 0 0 1px var(--tl-accent); border-color: var(--tl-accent); }
 .tl-margin-rail .tl-card.tutor,
-.tl-margin-rail .tl-tutor { border-left: 2px solid var(--tl-accent); }
+.tl-margin-rail .tl-tutor { border-left: 3px solid var(--tl-accent); }
 
 .tl-card {
   width: 100%; box-sizing: border-box;

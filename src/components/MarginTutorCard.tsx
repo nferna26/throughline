@@ -685,8 +685,8 @@ export default function MarginTutorCard(props: {
               </div>
             ) : (
               <>
-                {/* Lens row — outline chips in one row; the active chip is outline +
-                    dot, NEVER filled (Save is the card's only fill). */}
+                {/* Lens row: pills in one row; the active chip is the accent-FILLED
+                    pill (handoff: the lens row is the card's primary affordance). */}
                 <div className="tl-tutor-asks" role="radiogroup" aria-label="Ask another way">
                   <span className="tl-tutor-askslabel">Ask another way</span>
                   <div className="tl-tutor-lensrow">
@@ -703,8 +703,8 @@ export default function MarginTutorCard(props: {
                     ))}
                   </div>
                 </div>
-                {/* Footer: the card's one accent control (Save as note) + where the
-                    NOTE is kept, then the permanent privacy microline (honest about
+                {/* Footer: a quiet Save text button + where the NOTE is kept (with a
+                    lock glyph), then the permanent privacy microline (honest about
                     where the ANSWER came from). */}
                 <div className="tl-tutor-foot">
                   <div className="tl-tutor-foot-row">
@@ -712,12 +712,12 @@ export default function MarginTutorCard(props: {
                       <TLIcon name="pencil" size={13} /> Save as note
                     </button>
                     <span className="tl-tutor-foot-sp" />
-                    <span className="tl-tutor-foot-note">On this Mac only</span>
+                    <span className="tl-tutor-foot-note"><TLIcon name="shield" size={11} /> On this Mac only</span>
                   </div>
                   {/* Low-allowance strip (company mode, only when low) — the card's
                       one legitimate warning, sitting just above the privacy line. */}
                   {!capExhausted && <TutorFuel provider={provider} />}
-                  <p className="tl-tutor-privacy">{privacyLine}</p>
+                  <p className="tl-tutor-privacy"><TLIcon name="shield" size={11} /> {privacyLine}</p>
                 </div>
               </>
             )
