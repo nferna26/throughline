@@ -48,7 +48,6 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import App, { handleDroppedPaths, importErrorText } from "./App";
-import { resetUpdateCheckGate } from "./components/UpdateChecker";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { errorMessage } from "./types";
 import type { TodayCard, LibraryEntry } from "./types";
@@ -75,7 +74,6 @@ function libEntry(book: typeof BOOK, over: Partial<LibraryEntry> = {}): LibraryE
 beforeEach(() => {
   cleanup();
   localStorage.clear();
-  resetUpdateCheckGate();
   mocks.invoke.mockReset();
   mocks.invoke.mockResolvedValue(null);
   mocks.dragHandlers.length = 0;
