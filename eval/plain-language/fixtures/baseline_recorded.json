@@ -1,0 +1,32 @@
+{
+  "_about": "Recorded explanations from the CURRENT (unchanged) tutor prompt, for the offline baseline. The current prompt asks for 'plain flowing prose' but lacks the relative-difficulty constraint, so it mostly produces plain explanations yet FAILS on the hard-vocabulary / irony / dense-philosophy class (reaching for academic jargon harder than the source). The communistic case is the documented failure. Keys: 'passage_id|lens|tier|model'. A live baseline is reproduced with --models anthropic/local once a model is configured; this curated subset is enough to lock the gate and prove it flags the known failure.",
+  "prompt_version": "core-1156-baseline",
+  "explanations": {
+    "vict-12|explain|brief|sonnet": "This mimics the dry, pompous language of a Victorian social theorist, with mock-academic solemnity, evoking the era's utopian socialist tracts.",
+    "vict-12|explain|brief|local": "The author employs an ironic, mock-academic register to satirize a utopian collectivist ideology with affected solemnity and pseudo-scholarly diction.",
+
+    "phil-01|explain|brief|sonnet": "Kant articulates the transcendental synthesis whereby disparate sensory intuitions are subsumed under a unifying conceptual apperception that constitutes objective cognition.",
+    "phil-02|explain|brief|local": "Hegel posits a dialectical totality wherein essence actualizes itself through immanent self-mediation toward absolute self-consciousness.",
+
+    "iron-03|explain|brief|sonnet": "This deploys ironic litotes: the ostensibly genteel characterization ironically undercuts the protagonist's homicidal brutality for satirical effect.",
+    "tech-03|explain|brief|local": "The cosmic process, being fundamentally amoral, stands in antithetical relation to the deontological foundations underpinning normative ethics.",
+
+    "arch-01|explain|brief|sonnet": "The narrator says he was walking through a wild, empty place, lay down in a cave to sleep, and had a dream. The whole story is told as something he saw in that dream.",
+    "iron-02|explain|brief|sonnet": "It states as if it were an obvious fact that a rich single man must want a wife, when really it is the families around him who want him to marry their daughters. The joke is the gap between the two.",
+    "tech-01|explain|brief|sonnet": "Darwin asks us to look at a crowded riverbank full of plants and birds and realize that all these complicated living things were shaped over time by natural laws working around us, not made on purpose.",
+    "vict-06|explain|brief|sonnet": "Dickens piles up pairs of opposites to say the time was full of extremes at once: great and terrible, wise and foolish, hopeful and full of doubt.",
+    "phil-04|explain|brief|sonnet": "Mill says the only freedom worth the name is being allowed to live your own life your own way, as long as you do not stop other people from living theirs.",
+    "arch-02|explain|brief|sonnet": "The speaker says everything feels empty and pointless, and asks what a person really gains from all their hard work in this life.",
+    "vict-01|explain|brief|sonnet": "Dickens keeps repeating the word fog to show it covers the whole city, the river and the streets alike, blurring everything in a dirty grey haze.",
+    "vict-02|explain|brief|sonnet": "Eliot says if we could fully feel every ordinary person's hidden pain, it would overwhelm us, like hearing a roar from the other side of silence, so we are partly numb on purpose.",
+
+    "tech-12|explain|brief|sonnet": "It describes a panopticon, which means a round prison built so that one watcher in the middle can see into every cell while the prisoners can never tell whether they are being watched.",
+    "phil-11|explain|brief|sonnet": "The bourgeoisie, meaning the property-owning middle class, has stripped the old respect from honored jobs and turned a person's worth into nothing but money.",
+
+    "arch-09|historical|brief|sonnet": "This is from Milton's argument against government licensing of books; he is defending the freedom to print, treating a book as a living thing that carries human reason itself.",
+    "tech-02|vocabulary|brief|sonnet": "**refrangibility** how much a ray of light bends when it passes into a new material",
+
+    "iron-02|explain|deep|sonnet": "The trick is that the sentence pretends to report a neutral law of nature while really voicing the local mothers' point of view. By dressing a piece of village gossip in the calm clothes of a universal truth, the line quietly mocks both the certainty and the marriage-hunting it describes, so the reader laughs before any character has even spoken.",
+    "vict-12|explain|deep|local": "The passage performs a kind of pseudo-scholarly mimicry, adopting the solemn, doctrinaire cadence of nineteenth-century socialist theorizing to lend its utopian premise an air of institutional gravitas."
+  }
+}

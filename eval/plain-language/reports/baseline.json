@@ -1,0 +1,268 @@
+{
+  "prompt_version": "core-1156-baseline",
+  "passed": false,
+  "n_items": 20,
+  "n_harder": 10,
+  "median_delta": 0.07995000000000001,
+  "n_undefined_hard": 23,
+  "per_category_harder": {
+    "archaic": 1,
+    "philosophy": 2,
+    "irony": 2,
+    "victorian": 4,
+    "technical": 1
+  },
+  "rows": [
+    {
+      "passage_id": "arch-01",
+      "category": "archaic",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": -0.1096,
+      "harder_than_source": false,
+      "n_jargon": 0,
+      "jargon_lemmas": [],
+      "judge_score": null
+    },
+    {
+      "passage_id": "arch-02",
+      "category": "archaic",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": -1.6672,
+      "harder_than_source": false,
+      "n_jargon": 0,
+      "jargon_lemmas": [],
+      "judge_score": null
+    },
+    {
+      "passage_id": "arch-09",
+      "category": "archaic",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": 0.5379,
+      "harder_than_source": true,
+      "n_jargon": 0,
+      "jargon_lemmas": [],
+      "judge_score": null
+    },
+    {
+      "passage_id": "phil-01",
+      "category": "philosophy",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": 0.7868,
+      "harder_than_source": true,
+      "n_jargon": 1,
+      "jargon_lemmas": [
+        "subsume"
+      ],
+      "judge_score": null
+    },
+    {
+      "passage_id": "phil-02",
+      "category": "philosophy",
+      "tier": "brief",
+      "model": "local",
+      "delta": 1.9255,
+      "harder_than_source": true,
+      "n_jargon": 5,
+      "jargon_lemmas": [
+        "posit",
+        "dialectical",
+        "totality",
+        "actualize",
+        "immanent"
+      ],
+      "judge_score": null
+    },
+    {
+      "passage_id": "phil-04",
+      "category": "philosophy",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": -0.676,
+      "harder_than_source": false,
+      "n_jargon": 0,
+      "jargon_lemmas": [],
+      "judge_score": null
+    },
+    {
+      "passage_id": "phil-11",
+      "category": "philosophy",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": -2.7062,
+      "harder_than_source": false,
+      "n_jargon": 0,
+      "jargon_lemmas": [],
+      "judge_score": null
+    },
+    {
+      "passage_id": "iron-02",
+      "category": "irony",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": -1.8465,
+      "harder_than_source": false,
+      "n_jargon": 0,
+      "jargon_lemmas": [],
+      "judge_score": null
+    },
+    {
+      "passage_id": "iron-02",
+      "category": "irony",
+      "tier": "deep",
+      "model": "sonnet",
+      "delta": 0.4451,
+      "harder_than_source": true,
+      "n_jargon": 0,
+      "jargon_lemmas": [],
+      "judge_score": null
+    },
+    {
+      "passage_id": "iron-03",
+      "category": "irony",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": 1.8336,
+      "harder_than_source": true,
+      "n_jargon": 3,
+      "jargon_lemmas": [
+        "litotes",
+        "genteel",
+        "homicidal"
+      ],
+      "judge_score": null
+    },
+    {
+      "passage_id": "vict-01",
+      "category": "victorian",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": -0.2673,
+      "harder_than_source": false,
+      "n_jargon": 0,
+      "jargon_lemmas": [],
+      "judge_score": null
+    },
+    {
+      "passage_id": "vict-02",
+      "category": "victorian",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": 0.2695,
+      "harder_than_source": true,
+      "n_jargon": 0,
+      "jargon_lemmas": [],
+      "judge_score": null
+    },
+    {
+      "passage_id": "vict-06",
+      "category": "victorian",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": -0.3266,
+      "harder_than_source": false,
+      "n_jargon": 0,
+      "jargon_lemmas": [],
+      "judge_score": null
+    },
+    {
+      "passage_id": "vict-12",
+      "category": "victorian",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": 1.1497,
+      "harder_than_source": true,
+      "n_jargon": 1,
+      "jargon_lemmas": [
+        "solemnity"
+      ],
+      "judge_score": null
+    },
+    {
+      "passage_id": "vict-12",
+      "category": "victorian",
+      "tier": "brief",
+      "model": "local",
+      "delta": 1.478,
+      "harder_than_source": true,
+      "n_jargon": 4,
+      "jargon_lemmas": [
+        "satirize",
+        "collectivist",
+        "solemnity",
+        "diction"
+      ],
+      "judge_score": null
+    },
+    {
+      "passage_id": "vict-12",
+      "category": "victorian",
+      "tier": "deep",
+      "model": "local",
+      "delta": 1.283,
+      "harder_than_source": true,
+      "n_jargon": 4,
+      "jargon_lemmas": [
+        "mimicry",
+        "doctrinaire",
+        "theorize",
+        "gravitas"
+      ],
+      "judge_score": null
+    },
+    {
+      "passage_id": "tech-01",
+      "category": "technical",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": -0.4527,
+      "harder_than_source": false,
+      "n_jargon": 1,
+      "jargon_lemmas": [
+        "riverbank"
+      ],
+      "judge_score": null
+    },
+    {
+      "passage_id": "tech-02",
+      "category": "technical",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": -1.8565,
+      "harder_than_source": false,
+      "n_jargon": 0,
+      "jargon_lemmas": [],
+      "judge_score": null
+    },
+    {
+      "passage_id": "tech-03",
+      "category": "technical",
+      "tier": "brief",
+      "model": "local",
+      "delta": 1.2288,
+      "harder_than_source": true,
+      "n_jargon": 4,
+      "jargon_lemmas": [
+        "amoral",
+        "antithetical",
+        "deontological",
+        "underpin"
+      ],
+      "judge_score": null
+    },
+    {
+      "passage_id": "tech-12",
+      "category": "technical",
+      "tier": "brief",
+      "model": "sonnet",
+      "delta": -2.3252,
+      "harder_than_source": false,
+      "n_jargon": 0,
+      "jargon_lemmas": [],
+      "judge_score": null
+    }
+  ]
+}

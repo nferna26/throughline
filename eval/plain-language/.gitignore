@@ -1,0 +1,13 @@
+# Virtualenv + caches (machine-specific; recreate from requirements.txt)
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Optional fetched lexicon (large, license-bound; download_lexicons.py recreates it)
+vendor/aoa_kuperman.csv
+vendor/aoa_try
+vendor/*.zip
+
+# Live-run outputs (the committed reports/baseline.json is the recorded baseline)
+reports/run.json

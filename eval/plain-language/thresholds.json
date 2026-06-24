@@ -1,0 +1,20 @@
+{
+  "_about": "Locked gate thresholds (CORE-1169 part 1). The lexical gate is deterministic and independent of any model/judge. Tuned on the baseline run; do not loosen without recording why.",
+  "prompt_version": "core-1156-baseline",
+  "gate": {
+    "max_harder_than_source": 0,
+    "median_delta_max": -0.5,
+    "max_undefined_hard_words": 0,
+    "per_category_max_harder": 1
+  },
+  "judge": {
+    "min_score": 4,
+    "min_pass_rate": 0.9,
+    "_note": "secondary / flag-only: never auto-fails the headline unless the lexical gate also fails"
+  },
+  "jargon": {
+    "_note": "the BINARY jargon gate uses the sharp rarity/AoA cutoff (precision-critical); Dale-Chall is a graded signal in the difficulty score, not a binary trigger, to avoid over-flagging ordinary off-list words",
+    "hard_zipf": 3.0,
+    "hard_aoa": 10.0
+  }
+}
