@@ -122,7 +122,7 @@ pub fn truncate_selection_to(s: &str, cap: usize) -> String {
 fn attribution(ctx: &PromptContext) -> String {
     let mut s = format!("Source: \"{}\"", ctx.book_title);
     if let Some(a) = &ctx.author {
-        s.push_str(&format!(" — {}", a));
+        s.push_str(&format!(" by {}", a));
     }
     if let Some(c) = &ctx.chapter {
         s.push_str(&format!(", {}", c));
@@ -190,6 +190,50 @@ pub fn safety_preamble() -> String {
     )
 }
 
+/// CORE-1169: relative-difficulty directive for the four reading lenses. An
+/// explanation must read EASIER than the passage it explains; the deterministic
+/// lexical gate at `eval/plain-language/` is the regression referee. This text is
+/// static, so it rides in the stable cache prefix (before the fence) and never
+/// weakens the untrusted-content boundary. No em dashes (banned across the prompt).
+const PLAIN_DIRECTIVE: &str = "Plain-language rule (this governs HOW you write the answer): \
+Your explanation must be easier to read than the passage you are explaining. Use everyday words a \
+curious adult already knows. If you must use a hard or technical word, even one taken from the passage, \
+explain what it means in the same sentence, in plain words. Never introduce a word harder than the \
+hardest word in the passage without defining it. Capture the real difficulty of the line (the irony, an \
+unclear who or what, an old meaning of a word, or a hidden comparison) but say it in ordinary language. \
+Do not use academic or literary-critical jargon (for example: mock-academic, solemnity, diction, \
+register). Aim for the reading level of a clear newspaper or a good children's encyclopedia, roughly US \
+grade 7 to 8, and never harder than the source. The explanation should not itself need an explanation. \
+Do not use em dashes.";
+
+/// CORE-1169: the self-check / revise pass, appended after the lens instruction.
+/// The weaker local model in particular complies far better with an explicit
+/// re-read step than with the directive alone.
+const PLAIN_SELFCHECK: &str = "Before you finish, silently re-read your answer as the reader who found \
+this passage hard. Is every word as easy as or easier than the passage? Did you use any word a \
+non-specialist would need to look up? If so, swap it for a simpler word or define it in the same \
+sentence. Is there any literary or academic jargon? If so, rewrite it in plain words. Would the answer \
+itself need explaining? If so, simplify. Output only the final, revised answer.";
+
+/// CORE-1169: contrastive good/bad examples. Mandatory for the quantized local
+/// model, which follows concrete examples far more reliably than abstract rules.
+/// They teach the failure mode (writing words harder than the source) and the
+/// plain target at once, including the documented `communistic` case.
+const PLAIN_FEWSHOT: &str = "Two examples. Each shows the too-hard failure to avoid, then the plain \
+target to match:\n\n\
+Passage: \"erected on a strictly communistic basis.\"\n\
+Too hard, do NOT write like this: \"This mimics the dry, pompous language of a Victorian social \
+theorist, with mock-academic solemnity.\" It piles on words harder than the source (mimics, pompous, \
+mock-academic, solemnity) and never says what the line means.\n\
+Plain, write like this: \"It means the place was built so everything is owned in common, with no \
+private property. The stiff, official wording is on purpose, the way a serious old textbook would put \
+it.\"\n\n\
+Passage: \"He was, I take it, the mildest mannered man / That ever scuttled ship or cut a throat.\"\n\
+Too hard, do NOT write like this: \"A juxtaposition deploying ironic litotes to undercut the ostensibly \
+genteel characterization.\"\n\
+Plain, write like this: \"This is a joke that means the opposite of what it says. Calling a pirate who \
+sinks ships and kills people 'mild mannered' is meant to be funny and shocking at once.\"";
+
 /// Split a built prompt at the untrusted-content fence into
 /// `(stable_prefix, volatile_passage)` for Anthropic prompt caching: the role +
 /// safety preamble + instructions before the fence are identical across calls in
@@ -251,6 +295,10 @@ pub fn build_prompt_with_depth(mode: StubMode, depth: Depth, ctx: &PromptContext
     let fenced = fenced_passage(&selection);
     let attr = attribution(ctx);
     let preamble = safety_preamble();
+    // CORE-1169: the plain-language block rides the stable cache prefix (before the
+    // fence) for all four reading lenses, brief and deep, cloud and local alike.
+    let plain = format!("{PLAIN_DIRECTIVE}\n\n{PLAIN_FEWSHOT}");
+    let selfcheck = PLAIN_SELFCHECK;
 
     match (mode, depth) {
         (StubMode::Explain, Depth::Brief) => format!(
@@ -260,13 +308,17 @@ pub fn build_prompt_with_depth(mode: StubMode, depth: Depth, ctx: &PromptContext
 
 Explain ONLY the selected lines. In 2-3 sentences (about 55 words, never more), \
 in plain flowing prose, give the single main point this passage makes and decode \
-the one thing that makes it hard right here — the irony, the ambiguous referent, \
-the archaic word, or the buried metaphor — not a surface paraphrase. Never \
+the one thing that makes it hard right here (the irony, the ambiguous referent, \
+the archaic word, or the buried metaphor), not a surface paraphrase. Never \
 mention or imply anything beyond the selection: no later events, outcomes, or \
 characters' fates, and never say it \"foreshadows,\" \"sets up,\" or \"leads to\" \
-what follows. Don't open with a wind-up like \"This passage\" — start with the \
+what follows. Don't open with a wind-up like \"This passage\"; start with the \
 substance. No headers, no lists, no closing question. At most one **bold** term \
 for the key idea. Stop the instant the point is made.
+
+{plain}
+
+{selfcheck}
 
 {fenced}
 "
@@ -278,14 +330,18 @@ for the key idea. Stop the instant the point is made.
 
 I've already read a 2-3 sentence gist of this passage and asked to go deeper, \
 so do NOT restate it. In at most ~130 words (one or two short paragraphs of \
-plain prose), go down one altitude: unpack the author's reasoning move — the \
+plain prose), go down one altitude: unpack the author's reasoning move, the \
 hidden assumption the claim rests on, or the tension or counter-position it \
-answers — working only from what these lines themselves show. Stay strictly \
+answers, working only from what these lines themselves show. Stay strictly \
 inside the selection: never mention or imply later events, outcomes, or \
 characters' fates, and never say it \"foreshadows,\" \"sets up,\" or \"leads \
 to\" what follows. At most one **bold** named distinction. No headers, no \
 numbered or multi-level lists, no closing question. Build past the gist; don't \
 summarize it.
+
+{plain}
+
+{selfcheck}
 
 {fenced}
 "
@@ -296,11 +352,15 @@ summarize it.
 {preamble}
 
 In 1-2 sentences (about 50 words, never more), give ONLY the one piece of \
-background a modern reader is missing to make sense of this passage — the \
+background a modern reader is missing to make sense of this passage: the \
 person, work, debate, or assumption it takes for granted. No biography, no \
 period overview, no date-dumps unless the date IS the point. If no special \
 context is needed, say so in one sentence. No headers, no lists, no closing \
 question.
+
+{plain}
+
+{selfcheck}
 
 {fenced}
 "
@@ -313,10 +373,14 @@ question.
 I've already seen the one anchoring fact and asked to go deeper, so don't \
 repeat it. In at most ~130 words (one or two short paragraphs of plain prose), \
 widen the frame: the intellectual tradition or historical situation this \
-passage responds to, who or what it argues against, and why that mattered then \
-— but only what changes how I read these specific lines. Tie it to a phrase \
+passage responds to, who or what it argues against, and why that mattered then, \
+but only what changes how I read these specific lines. Tie it to a phrase \
 from the passage. No timeline dumps, no encyclopedia tone, no headers, no \
 lists, no closing question.
+
+{plain}
+
+{selfcheck}
 
 {fenced}
 "
@@ -327,10 +391,14 @@ lists, no closing question.
 {preamble}
 
 Gloss ONLY the 1-3 genuinely hard or archaic words or phrases in the passage \
-below, in the sense used here. One per line as \"**term** — gloss\" with the \
+below, in the sense used here. One per line as \"**term**: gloss\" with the \
 gloss at most ~12 words, hardest first. No intro line, no usage notes, no \
 etymology, no closing remark. If nothing is truly hard, say so in one short \
 sentence.
+
+{plain}
+
+{selfcheck}
 
 {fenced}
 "
@@ -344,8 +412,12 @@ I've already seen short glosses for this passage and asked to go deeper, so \
 don't just re-list. Take the 1-2 most load-bearing terms and unfold each (about \
 130 words total): the sense the author intends versus the modern default, the \
 connotation or period-specific use, and how that meaning shapes the passage's \
-argument. Prose preferred; a 2-item \"**term** — gloss\" list only if two terms \
+argument. Prose preferred; a 2-item \"**term**: gloss\" list only if two terms \
 each need real unpacking. No headers, no intro paragraph.
+
+{plain}
+
+{selfcheck}
 
 {fenced}
 "
@@ -358,7 +430,11 @@ each need real unpacking. No headers, no intro paragraph.
 Pose exactly ONE short guiding question (about 30 words, a single sentence \
 ending in '?') that points me back into the passage below to work out the \
 meaning myself. The question must be answerable from the passage itself. Don't \
-answer it, don't hint, don't preface — give only the question.
+answer it, don't hint, don't preface; give only the question.
+
+{plain}
+
+{selfcheck}
 
 {fenced}
 "
@@ -375,6 +451,10 @@ broader implication. Number them 1-3 (the only place a list is allowed). No \
 answers, no hints, no commentary between them; let the last question open \
 outward.
 
+{plain}
+
+{selfcheck}
+
 {fenced}
 "
         ),
@@ -382,7 +462,7 @@ outward.
         // single form regardless of the Brief/Deep flag.
         (StubMode::DurableNote, _) => format!(
             "Help me write a single durable note (under 80 words) capturing what's worth \
-remembering from this passage. Paraphrase only — no quotations. Lead with the \
+remembering from this passage. Paraphrase only, no quotations. Lead with the \
 claim, not the source.
 
 {attr}
@@ -393,7 +473,7 @@ Passage I just read:
 
 {fenced}
 
-My initial reaction (may be blank — this part is from me, not from the book):
+My initial reaction (may be blank; this part is from me, not from the book):
 {}
 ",
             ctx.user_note.clone().unwrap_or_default()
@@ -405,7 +485,7 @@ I'm reading {attr}.
 {preamble}
 
 Prepare a SHORT briefing using EXACTLY these five labels, each on its own line, \
-in this order. Keep the whole thing tight — a glance before reading, not a \
+in this order. Keep the whole thing tight, a glance before reading, not a \
 summary that replaces it. Be spoiler-safe: orient me, don't reveal where the \
 section ends up or its conclusions.
 
@@ -415,11 +495,11 @@ BEFORE YOU READ
 WATCH FOR
 3-5 short bullets (begin each line with \"- \") naming claims, turns, terms, or \
 tensions to notice as I read. Each should stand alone as a theme I could ask \
-about — concrete and specific, not vague.
+about, concrete and specific, not vague.
 
 
 KEY TERMS
-1-4 names, words, or ideas I'll need, each as \"term — short spoiler-safe gloss\" \
+1-4 names, words, or ideas I'll need, each as \"term: short spoiler-safe gloss\" \
 on its own line. If none are needed, write \"None needed.\"
 
 THE MOVE
@@ -428,7 +508,7 @@ THE MOVE
 READING QUESTION
 One question to carry while I read. End it with a question mark.
 
-Use plain prose and the simple bullet/term lines described above — no markdown \
+Use plain prose and the simple bullet/term lines described above, no markdown \
 headers (#), no bold. The section to prepare me for:
 
 {fenced}
@@ -440,7 +520,7 @@ headers (#), no bold. The section to prepare me for:
 {preamble}
 
 Based on what I just read (below), what should I be ready to look out for \
-next? 3–5 bullets. Be specific to the passage, not generic reading advice.
+next? 3-5 bullets. Be specific to the passage, not generic reading advice.
 
 {fenced}
 "
@@ -737,6 +817,135 @@ mod tests {
     }
 
     #[test]
+    fn plain_language_block_in_every_reading_lens_both_depths() {
+        // CORE-1169: every reading lens, brief and deep, carries the
+        // relative-difficulty directive + the self-check + the contrastive
+        // (incl. communistic) few-shots. This is the one prompt path the cloud
+        // (Sonnet) and the local model both run, so "consistently across cloud +
+        // local" is satisfied by presence in this builder.
+        for mode in [
+            StubMode::Explain,
+            StubMode::Historical,
+            StubMode::Vocabulary,
+            StubMode::Socratic,
+        ] {
+            for depth in [Depth::Brief, Depth::Deep] {
+                let p = build_prompt_with_depth(mode, depth, &ctx("Sample passage."));
+                assert!(
+                    p.contains("must be easier to read than the passage"),
+                    "mode {mode:?}/{depth:?}: missing relative-difficulty directive:\n{p}"
+                );
+                assert!(
+                    p.contains(
+                        "Never introduce a word harder than the hardest word in the passage"
+                    ),
+                    "mode {mode:?}/{depth:?}: missing the harder-than-source rule:\n{p}"
+                );
+                assert!(
+                    p.contains("re-read your answer as the reader who found"),
+                    "mode {mode:?}/{depth:?}: missing the self-check / revise pass:\n{p}"
+                );
+                // The documented failure case must be taught as a contrastive pair:
+                // the jargon failure AND the plain target both appear.
+                assert!(
+                    p.contains("strictly communistic basis"),
+                    "mode {mode:?}/{depth:?}: missing the communistic few-shot:\n{p}"
+                );
+                assert!(
+                    p.contains("mock-academic solemnity")
+                        && p.contains("owned in common, with no private property"),
+                    "mode {mode:?}/{depth:?}: few-shot must show both the jargon failure and the plain target:\n{p}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_em_or_en_dash_anywhere_in_any_built_tutor_prompt() {
+        // CORE-1169: "no em dashes anywhere." Covers every mode + depth, so the
+        // attribution, the lens instructions, and the plain-language block are all
+        // clear of em (—) and en (–) dashes.
+        for mode in [
+            StubMode::Explain,
+            StubMode::Historical,
+            StubMode::Vocabulary,
+            StubMode::Socratic,
+            StubMode::DurableNote,
+            StubMode::SectionBriefing,
+            StubMode::PrepareNext,
+        ] {
+            for depth in [Depth::Brief, Depth::Deep] {
+                let p = build_prompt_with_depth(mode, depth, &ctx("A sample passage to fence."));
+                assert!(
+                    !p.contains('\u{2014}'),
+                    "mode {mode:?}/{depth:?}: em dash leaked into the prompt:\n{p}"
+                );
+                assert!(
+                    !p.contains('\u{2013}'),
+                    "mode {mode:?}/{depth:?}: en dash leaked into the prompt:\n{p}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn plain_block_is_static_instruction_text_before_the_fenced_passage() {
+        // The directive + few-shots are STATIC instruction text: selection-
+        // independent, and placed BEFORE the untrusted passage is fenced. That
+        // preserves the fence boundary (the plain block can never be read as
+        // passage content) and keeps the instruction region cacheable. cache_split
+        // still finds the same boundary it always has (its split marker is the
+        // preamble's first fence mention); the plain block does not move it.
+        for depth in [Depth::Brief, Depth::Deep] {
+            let a = build_prompt_with_depth(StubMode::Explain, depth, &ctx("First selection."));
+            let b =
+                build_prompt_with_depth(StubMode::Explain, depth, &ctx("A wholly different one."));
+            assert!(
+                cache_split(&a).is_some(),
+                "{depth:?}: the fence boundary must remain"
+            );
+            // The plain block precedes the actual passage fence (the LAST opener,
+            // which wraps the selection): it is instruction, not untrusted content.
+            let passage_fence = a.rfind(FENCE_OPEN).expect("passage is fenced");
+            let directive_at = a
+                .find("must be easier to read than the passage")
+                .expect("directive present");
+            let fewshot_at = a
+                .find("strictly communistic basis")
+                .expect("few-shots present");
+            assert!(
+                directive_at < passage_fence && fewshot_at < passage_fence,
+                "{depth:?}: the plain block must sit before the passage fence"
+            );
+            // Selection-independent: everything up to the passage fence is identical
+            // across two different selections, so the plain block is cacheable.
+            assert_eq!(
+                &a[..a.rfind(FENCE_OPEN).unwrap()],
+                &b[..b.rfind(FENCE_OPEN).unwrap()],
+                "{depth:?}: the instruction region (incl. the plain block) must not vary with the selection"
+            );
+        }
+    }
+
+    #[test]
+    fn utility_modes_stay_lean_and_skip_the_reading_lens_plain_block() {
+        // The plain-language block is for the four reading lenses. The utility
+        // modes (durable note / section briefing / prepare-next) keep their own
+        // shape and must not inherit the reading-lens few-shots.
+        for mode in [
+            StubMode::DurableNote,
+            StubMode::SectionBriefing,
+            StubMode::PrepareNext,
+        ] {
+            let p = build_prompt_with_depth(mode, Depth::Brief, &ctx("Sample."));
+            assert!(
+                !p.contains("strictly communistic basis"),
+                "mode {mode:?}: utility mode must not carry the reading-lens few-shots:\n{p}"
+            );
+        }
+    }
+
+    #[test]
     fn depth_split_preserves_fence_and_safety_preamble() {
         // The Brief/Deep split must never weaken the prompt-injection invariant.
         for mode in [
@@ -843,10 +1052,17 @@ mod tests {
             p.contains("[… truncated]"),
             "long selections must be visibly truncated"
         );
-        // Truncated body length: cap + ellipsis marker + (preamble + role + attribution + fence
-        // overhead, ~1500 chars). Anything close to the original 500-char overrun means we
-        // leaked bulk text into the prompt.
-        assert!(p.chars().count() < MAX_SELECTION_CHARS + 2000);
+        // The selection is capped, so the prompt is bounded by the (fixed)
+        // instruction scaffolding plus the cap, never the original overrun. Measure
+        // the scaffolding directly (build with an empty selection) so this stays
+        // honest as the instruction text changes; a small margin covers the fence,
+        // quote prefixes, and the ellipsis marker. A leaked bulk selection would
+        // blow past this.
+        let scaffolding = build_prompt(StubMode::Explain, &ctx("")).chars().count();
+        assert!(
+            p.chars().count() < scaffolding + MAX_SELECTION_CHARS + 128,
+            "prompt grew past scaffolding + cap; bulk selection text may have leaked"
+        );
     }
 
     #[test]
