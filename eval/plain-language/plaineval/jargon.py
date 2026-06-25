@@ -9,6 +9,8 @@ feeds the named-term exclusion in the difficulty delta.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass
 
@@ -20,8 +22,32 @@ from . import lexicons as lx
 # trigger here, because the ~3000-word list leaves ordinary words ("overwhelm" 3.15,
 # "complicate" 3.26) off it and would over-flag; Dale-Chall does its work in the
 # GRADED difficulty score (difficulty.py), not in this binary gate.
-HARD_ZIPF = 3.0  # rarer than ~1 per million -> hard
-HARD_AOA = 10.0  # acquired after ~age 10
+#
+# CORE-1169 part 1b re-audit: thresholds.json is now the single source of truth so
+# the gate and its documentation cannot drift (the constants below are the fallback).
+# HARD_ZIPF was lowered 3.0 -> 2.6: the 2.6-3.0 band is mid-frequency vocabulary a
+# fluent adult knows (murmur 2.92, predictability 2.85, passivity 2.60, argumentation
+# 2.65, ephemeral 2.99), and flagging it produced most of the binary-jargon noise in
+# the live run. The canonical academic-register failures from the handoff stay flagged
+# (solemnity 2.54, litotes 1.23, deontological 1.88, apperception 1.77). The mid band
+# (~2.3-2.9) is inherently register-dependent: rarity alone cannot separate "solemnity"
+# (jargon) from "passivity" (plain), which is precisely what the human calibration
+# step measures. AoA is unavailable in this environment (Kuperman norms absent), so the
+# rarity cutoff is the sole active binary signal; HARD_AOA stays documented for when
+# vendor/aoa_kuperman.csv is present.
+_THRESHOLDS_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "thresholds.json"))
+
+
+def _load_jargon_cutoffs() -> tuple[float, float]:
+    try:
+        with open(_THRESHOLDS_PATH, encoding="utf-8") as fh:
+            jt = json.load(fh).get("jargon", {})
+        return float(jt.get("hard_zipf", 2.6)), float(jt.get("hard_aoa", 10.0))
+    except (OSError, ValueError, KeyError):
+        return 2.6, 10.0
+
+
+HARD_ZIPF, HARD_AOA = _load_jargon_cutoffs()
 # A token is treated as a proper noun (and exempt from the jargon gate, because an
 # author's or place's name is not a "hard word a reader must look up") if it appears
 # Title-cased away from a sentence start in the original explanation.
@@ -63,7 +89,11 @@ def proper_noun_lemmas(text: str) -> frozenset[str]:
     for sent in _sentences(text):
         toks = sent.split()
         for i, raw in enumerate(toks):
-            word = raw.strip(".,;:!?\"'()[]").split("'")[0]
+            # Fold accents first so an accented capital is still recognized as a
+            # proper noun ("Übermensch" -> "Ubermensch", "Brontë" -> "Bronte");
+            # otherwise the leading non-ASCII letter fails the [A-Z] check and the
+            # name leaks into the jargon set.
+            word = lx.fold_accents(raw).strip(".,;:!?\"'()[]").split("'")[0]
             if not _PROPER_RE.fullmatch(word):
                 continue
             low = word.lower()
@@ -110,12 +140,16 @@ def find_introduced_hard_words(source: str, explanation: str) -> list[JargonHit]
     src_lemmas = set(lx.content_lemmas(source))
     glossed = inline_glossed_lemmas(explanation)
     proper = proper_noun_lemmas(explanation) | proper_noun_lemmas(source)
-    exempt = src_lemmas | glossed | proper
+    # Match exemption on the archaic-folded key so a word quoted from the source is
+    # exempt even when its spelling varies ("talke"/"thinke" in an old passage quoted
+    # in the explanation map to "talk"/"think"). Proper nouns and in-line glosses are
+    # folded the same way.
+    exempt_keys = {lx.archaic_key(x) for x in (src_lemmas | glossed | proper)}
     hits: list[JargonHit] = []
     seen: set[str] = set()
     for sent in _sentences(explanation):
         for lm in lx.content_lemmas(sent):
-            if lm in seen or lm in exempt:
+            if lm in seen or lx.archaic_key(lm) in exempt_keys:
                 continue
             if is_hard(lm):
                 hits.append(JargonHit(lemma=lm, sentence=sent, zipf=lx.zipf(lm), aoa=lx.aoa(lm)))
@@ -124,6 +158,18 @@ def find_introduced_hard_words(source: str, explanation: str) -> list[JargonHit]
 
 
 def exempt_lemmas_for_explanation(source: str, explanation: str) -> frozenset[str]:
-    """The named-term exclusion set for scoring the explanation's difficulty:
-    lemmas that appear in the source OR are glossed in-line in the explanation."""
-    return frozenset(set(lx.content_lemmas(source)) | set(inline_glossed_lemmas(explanation)))
+    """The named-term exclusion set (as archaic-folded keys) for scoring the
+    explanation's difficulty.
+
+    Exempt: lemmas that appear in the source, are glossed in-line, OR are proper
+    nouns (a name the explanation introduces is not a difficulty the reader faces
+    versus the source). Returned as `archaic_key` forms; `difficulty.score` folds each
+    candidate lemma the same way before testing membership, so a quoted archaic source
+    word and an introduced name are both excluded from the delta, not just from the
+    binary jargon gate. This keeps the bug-1/bug-2 fixes consistent across both halves
+    of the headline (delta and jargon).
+    """
+    src_lemmas = set(lx.content_lemmas(source))
+    glossed = set(inline_glossed_lemmas(explanation))
+    proper = set(proper_noun_lemmas(explanation)) | set(proper_noun_lemmas(source))
+    return frozenset(lx.archaic_key(x) for x in (src_lemmas | glossed | proper))

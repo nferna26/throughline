@@ -17,6 +17,7 @@ import csv
 import functools
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 import simplemma
@@ -41,17 +42,54 @@ _STOPWORDS = frozenset(
 
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'-]*")
 _POSSESSIVE_RE = re.compile(r"['’]s$")
+_COMBINING_RE = re.compile("[̀-ͯ]")  # Unicode combining diacritical marks
+_DOUBLED_CONSONANT_RE = re.compile(r"([bcdfghjklmnpqrstvwxz])\1+")
+
+
+def fold_accents(text: str) -> str:
+    """NFKD-normalize and strip combining marks so accented/compatibility forms keep
+    their base letters intact for the ASCII tokenizer.
+
+    Without this, the ASCII-only token regex silently mangles accented words by
+    dropping or splitting at the non-ASCII codepoint: "Brontë" -> "bront",
+    "Übermensch" -> "bermensch" (the leading "Ü" is lost). Those mangled fragments
+    are unseen by wordfreq and get flagged as introduced jargon. Folding first keeps
+    the whole word ("Bronte", "Ubermensch"), so the proper-noun and rarity checks see
+    the real token. Ligatures (ﬁ -> fi) and other compatibility forms fold too.
+    """
+    return _COMBINING_RE.sub("", unicodedata.normalize("NFKD", text))
 
 
 def tokenize(text: str) -> list[str]:
     """Lowercase word tokens; strip the possessive 's so "era's" scores as "era"
-    (otherwise the apostrophe form is unseen by wordfreq and reads as rare/hard)."""
+    (otherwise the apostrophe form is unseen by wordfreq and reads as rare/hard).
+
+    Accents are folded first (`fold_accents`) so an accented word survives the
+    ASCII token regex as one whole token instead of being mangled into a rare
+    fragment.
+    """
     out = []
-    for m in _TOKEN_RE.finditer(text):
+    for m in _TOKEN_RE.finditer(fold_accents(text)):
         w = _POSSESSIVE_RE.sub("", m.group(0).lower()).strip("'")
         if w:
             out.append(w)
     return out
+
+
+def archaic_key(word: str) -> str:
+    """A normalized matching key that folds light archaic/variant spelling, used ONLY
+    to decide whether a word in the explanation is "the same word" as one quoted from
+    the source (the named-term exclusion). Folds: accents, a trailing silent/archaic
+    -e ("talke" -> "talk", "olde" -> "old"), the i/y interchange ("memorie"/"memory"),
+    and doubled consonants ("shoppe" -> "shop"). This is a deliberately generous,
+    exclusion-only key: a looser match can only EXEMPT a quoted source word, never
+    invent a new jargon flag, so it errs on the safe (under-flagging) side.
+    """
+    w = fold_accents(word).lower()
+    w = _DOUBLED_CONSONANT_RE.sub(r"\1", w)
+    if len(w) > 3 and w.endswith("e"):
+        w = w[:-1]
+    return w.replace("y", "i")
 
 
 @functools.lru_cache(maxsize=200_000)

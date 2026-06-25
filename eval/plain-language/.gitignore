@@ -1,4 +1,5 @@
 # Virtualenv + caches (machine-specific; recreate from requirements.txt)
+.env
 .venv/
 __pycache__/
 *.pyc

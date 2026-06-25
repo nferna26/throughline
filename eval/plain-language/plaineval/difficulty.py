@@ -199,13 +199,16 @@ def _blend(sig: RawSignals) -> float:
 def score(text: str, exempt_lemmas: frozenset[str] = frozenset()) -> Difficulty:
     """Score a text's difficulty, excluding the given exempt lemmas (named terms).
 
-    exempt_lemmas: content lemmas to drop from the lexical aggregation because they
-    appear in the source or are glossed in-line (the named-term exclusion). The
-    formula bundle is computed on the FULL text (formulas have no notion of
-    exemption); only the lexical signals honor the exemption.
+    exempt_lemmas: the named-term exclusion set as `archaic_key` forms (see
+    `jargon.exempt_lemmas_for_explanation`) -- lemmas dropped from the lexical
+    aggregation because they appear in the source, are glossed in-line, or are proper
+    nouns. Each candidate lemma is folded with the same `archaic_key` before the
+    membership test, so a quoted archaic source word ("talke") is excluded even though
+    its raw lemma differs. The formula bundle is computed on the FULL text (formulas
+    have no notion of exemption); only the lexical signals honor the exemption.
     """
     all_lemmas = lx.content_lemmas(text)
-    scored = [lm for lm in all_lemmas if lm not in exempt_lemmas]
+    scored = [lm for lm in all_lemmas if lx.archaic_key(lm) not in exempt_lemmas]
 
     cov = lx.Coverage(n_content=len(all_lemmas))
     for lm in all_lemmas:

@@ -26,6 +26,25 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+
+def load_env_file(path: str = os.path.join(HERE, ".env")) -> None:
+    """Load KEY=VALUE pairs from a local .env without overriding the shell."""
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip("'\"")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+load_env_file()
+
 from plaineval import backends as be  # noqa: E402
 from plaineval import gate as G  # noqa: E402
 from plaineval import judge as JU  # noqa: E402
@@ -61,14 +80,25 @@ def run(args: argparse.Namespace) -> int:
     tiers = args.tiers
 
     rows: list[G.Row] = []
+    items: list[dict] = []
     coverage_flags = 0
     n_missing = 0
+    show_progress = os.environ.get("PLAINEVAL_PROGRESS", "").lower() in {"1", "true", "yes"}
+    total = len(passages) * len(tiers) * len(backends) * len(lenses)
+    completed = 0
 
     for p in passages:
         source = p["text"]
         for tier in tiers:
             for backend, mlabel in zip(backends, model_labels):
                 for lens in lenses:
+                    completed += 1
+                    if show_progress:
+                        print(
+                            f"[{completed}/{total}] {p['id']} {tier} {mlabel} {lens}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
                     expl = backend.explain(
                         passage_id=p["id"],
                         lens=lens,
@@ -97,6 +127,23 @@ def run(args: argparse.Namespace) -> int:
                             judge_score=(j.score if j else None),
                         )
                     )
+                    # Persist the per-item TEXT (source + explanation), keyed the same
+                    # way as the recorded fixtures, so a run is re-scorable offline (no
+                    # model calls) after a scorer change, and so the calibration
+                    # worksheet can be sampled from real outputs. The first live run
+                    # lacked this, which is why its outputs could not be re-scored.
+                    items.append(
+                        {
+                            "key": f"{p['id']}|{lens}|{tier}|{mlabel}",
+                            "passage_id": p["id"],
+                            "category": p["type"],
+                            "lens": lens,
+                            "tier": tier,
+                            "model": mlabel,
+                            "source": source,
+                            "explanation": expl,
+                        }
+                    )
 
     thresholds = G.load_thresholds()
     result = G.evaluate_gate(rows, thresholds)
@@ -117,6 +164,7 @@ def run(args: argparse.Namespace) -> int:
                     "n_undefined_hard": result.n_undefined_hard,
                     "per_category_harder": result.per_category_harder,
                     "rows": [vars(r) for r in rows],
+                    "items": items,
                 },
                 fh,
                 indent=2,

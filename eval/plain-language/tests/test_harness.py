@@ -1,18 +1,26 @@
 """Deterministic tests for the plain-language eval harness (no network, no models)."""
 
 import os
+import socket
+import ssl
 import sys
+import urllib.error
+from io import BytesIO
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
+from plaineval import backends as be  # noqa: E402
 from plaineval import difficulty as dif  # noqa: E402
 from plaineval import gate as G  # noqa: E402
 from plaineval import jargon as jg  # noqa: E402
 from plaineval import judge as JU  # noqa: E402
+from plaineval import lexicons as lx  # noqa: E402
 from plaineval import metrics  # noqa: E402
+from plaineval import metrics as M  # noqa: E402
 from plaineval import tutor_prompt as tp  # noqa: E402
+import run_eval  # noqa: E402
 
 COMMUNISTIC_SRC = "The whole community was at that time erected on a strictly communistic basis."
 BAD = "This mimics the dry, pompous language of a Victorian social theorist, with mock-academic solemnity."
@@ -107,6 +115,88 @@ def test_real_jargon_is_flagged():
     assert "litotes" in hits and "solemnity" in hits
 
 
+# ── CORE-1169 part 1b: scorer bug fixes (calibration prerequisites) ──────────
+
+
+def test_accented_names_are_not_mangled_into_jargon():
+    # BUG 1: the ASCII tokenizer turned "Brontë" -> "bront" and "Übermensch" ->
+    # "bermensch" (leading "Ü" dropped), unseen fragments that were flagged as
+    # introduced jargon. Folding accents keeps the whole word, and the (now
+    # accent-aware) proper-noun check exempts the name.
+    src = "He admired the novelist and the philosopher."
+    expl = "This echoes Brontë and the idea of the Übermensch, said plainly."
+    hits = {h.lemma for h in jg.find_introduced_hard_words(src, expl)}
+    assert not (hits & {"bront", "bermensch", "bronte", "ubermensch"}), hits
+
+
+def test_accent_fold_keeps_whole_token_for_difficulty():
+    # The folded token is the whole word, not a rare fragment.
+    assert lx.tokenize("Brontë") == ["bronte"]
+    assert lx.tokenize("Übermensch") == ["ubermensch"]
+    assert lx.tokenize("naïve café") == ["naive", "cafe"]
+
+
+def test_quoted_archaic_source_word_is_exempt():
+    # BUG 2: a word quoted from an archaic source ("talke"/"thinke"/"olde") must be
+    # exempt from the jargon gate even though its spelling is non-standard, because
+    # it is present in the source. The archaic key folds the variant to match.
+    src = "Under all speech lies a silence; he loved to talke and to thinke on olde things."
+    expl = "It means he liked to talke and thinke about olde matters, nothing more."
+    hits = {h.lemma for h in jg.find_introduced_hard_words(src, expl)}
+    assert not (hits & {"talke", "thinke", "olde", "talk", "think", "old"}), hits
+
+
+def test_archaic_key_folds_light_variants():
+    assert lx.archaic_key("talke") == lx.archaic_key("talk")
+    assert lx.archaic_key("thinke") == lx.archaic_key("think")
+    assert lx.archaic_key("memorie") == lx.archaic_key("memory")
+    assert lx.archaic_key("shoppe") == lx.archaic_key("shop")
+    # but distinct words do not collide
+    assert lx.archaic_key("litotes") != lx.archaic_key("light")
+
+
+def test_midfrequency_words_are_not_flagged():
+    # BUG 3: mid-frequency words a fluent adult knows were over-flagged at the old
+    # 3.0 cutoff. At 2.6 they are clean.
+    src = "The passage is plain."
+    expl = "There is a soft murmur, a sense of passivity, and real predictability here."
+    hits = {h.lemma for h in jg.find_introduced_hard_words(src, expl)}
+    assert not (hits & {"murmur", "passivity", "predictability"}), hits
+
+
+def test_genuinely_arcane_words_still_flagged_after_retune():
+    # The canonical academic-register failures must survive the retune.
+    src = "He said it plainly."
+    expl = "The narrator deploys litotes with deontological solemnity and apperception."
+    hits = {h.lemma for h in jg.find_introduced_hard_words(src, expl)}
+    assert {"litotes", "deontological", "solemnity", "apperception"} <= hits, hits
+
+
+def test_jargon_cutoffs_come_from_thresholds_json():
+    # thresholds.json is the single source of truth (no drift between the documented
+    # value and the code).
+    import json
+    import os
+
+    path = os.path.join(os.path.dirname(jg.__file__), "..", "thresholds.json")
+    with open(path, encoding="utf-8") as fh:
+        jt = json.load(fh)["jargon"]
+    assert jg.HARD_ZIPF == jt["hard_zipf"] == 2.6
+    assert jg.HARD_AOA == jt["hard_aoa"]
+
+
+def test_introduced_proper_noun_is_exempt_from_delta_and_jargon():
+    # A name the explanation introduces is exempt from the difficulty delta too, not
+    # just the jargon gate: it enters the named-term exclusion set, so the name itself
+    # cannot push the explanation's score up. (This isolates the proper-noun fix; the
+    # overall delta can still move for unrelated lexical reasons.)
+    src = "The fog covers the whole city, blurring the streets."
+    expl = "Dickens repeats the word fog so the whole city feels lost in grey haze."
+    exempt = jg.exempt_lemmas_for_explanation(src, expl)
+    assert lx.archaic_key("dickens") in exempt
+    assert "dickens" not in {h.lemma for h in jg.find_introduced_hard_words(src, expl)}
+
+
 # ── Gate logic ───────────────────────────────────────────────────────────────
 
 
@@ -170,3 +260,128 @@ def test_judge_parse_extracts_score():
 
 def test_make_judge_none_returns_none():
     assert JU.make_judge("none") is None
+
+
+# ── Live backend request shaping (offline; fake HTTP) ────────────────────────
+
+
+class _FakeResponse(BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+def test_local_backend_uses_ollama_native_chat_with_thinking_disabled(monkeypatch):
+    seen = {}
+
+    def fake_urlopen(req, timeout):
+        seen["url"] = req.full_url
+        seen["timeout"] = timeout
+        seen["body"] = req.data.decode()
+        return _FakeResponse(b'{"message":{"content":" Plain answer. "}}')
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    backend = be.LocalBackend("qwen3.5:latest", "http://localhost:11434/v1")
+    out = backend.explain(
+        passage_id="p",
+        lens="explain",
+        tier="brief",
+        selection="A hard line.",
+        book_title="Book",
+        author=None,
+    )
+
+    payload = __import__("json").loads(seen["body"])
+    assert out == "Plain answer."
+    assert seen["url"] == "http://localhost:11434/api/chat"
+    assert seen["timeout"] == 180
+    assert payload["stream"] is False
+    assert payload["think"] is False
+    assert payload["options"] == {"temperature": 0, "num_predict": 220}
+    assert payload["model"] == "qwen3.5:latest"
+
+
+def test_local_backend_keeps_openai_compatible_path_for_lm_studio(monkeypatch):
+    seen = {}
+
+    def fake_urlopen(req, timeout):
+        seen["url"] = req.full_url
+        seen["body"] = req.data.decode()
+        return _FakeResponse(b'{"choices":[{"message":{"content":" Plain answer. "}}]}')
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    backend = be.LocalBackend("local-model", "http://localhost:1234/v1")
+    out = backend.explain(
+        passage_id="p",
+        lens="explain",
+        tier="deep",
+        selection="A hard line.",
+        book_title="Book",
+        author=None,
+    )
+
+    payload = __import__("json").loads(seen["body"])
+    assert out == "Plain answer."
+    assert seen["url"] == "http://localhost:1234/v1/chat/completions"
+    assert payload["max_tokens"] == 420
+    assert "think" not in payload
+
+
+def test_env_file_loader_sets_missing_values_without_overriding_shell(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text(
+        "# local live eval secrets\n"
+        "ANTHROPIC_API_KEY=from-file\n"
+        "LOCAL_AI_BASE_URL='http://localhost:11434/v1'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "from-shell")
+    monkeypatch.delenv("LOCAL_AI_BASE_URL", raising=False)
+
+    run_eval.load_env_file(str(env))
+
+    assert os.environ["ANTHROPIC_API_KEY"] == "from-shell"
+    assert os.environ["LOCAL_AI_BASE_URL"] == "http://localhost:11434/v1"
+
+
+def test_open_json_retries_transient_ssl_eof(monkeypatch):
+    calls = {"n": 0, "sleeps": []}
+
+    def fake_urlopen(_req, timeout):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.URLError(ssl.SSLEOFError("eof"))
+        assert timeout == 7
+        return _FakeResponse(b'{"ok": true}')
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(be.time, "sleep", lambda delay: calls["sleeps"].append(delay))
+
+    assert be._open_json("request", timeout=7, attempts=2) == {"ok": True}
+    assert calls == {"n": 2, "sleeps": [1]}
+
+
+def test_open_json_retries_transient_dns_failure(monkeypatch):
+    calls = {"n": 0, "sleeps": []}
+
+    def fake_urlopen(_req, timeout):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.URLError(socket.gaierror(8, "temporary dns failure"))
+        return _FakeResponse(b'{"ok": true}')
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(be.time, "sleep", lambda delay: calls["sleeps"].append(delay))
+
+    assert be._open_json("request", attempts=2) == {"ok": True}
+    assert calls == {"n": 2, "sleeps": [1]}
