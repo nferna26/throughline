@@ -116,14 +116,69 @@ class OpenAICompatJudge(Judge):
 
 
 def make_judge(spec: str) -> Judge | None:
-    spec = (spec or "none").strip().lower()
-    if spec in ("none", "off", ""):
+    """spec: 'none' | 'gemini[:model]' | 'gpt[:model]' | 'local[:model]'.
+
+    The local judge is configurable via env: JUDGE_BASE_URL (default the Ollama
+    OpenAI-compatible endpoint) and JUDGE_MODEL (default a cross-family open model).
+    It must NOT be the tutor family (Sonnet) nor the local tutor (qwen3.5), to avoid
+    self-preference bias; gpt-oss / gemma are good offline cross-family choices.
+    """
+    spec = (spec or "none").strip()
+    low = spec.lower()
+    if low in ("none", "off", ""):
         return None
-    if spec.startswith("gemini"):
-        return GeminiJudge()
-    if spec.startswith("openai") or spec.startswith("gpt"):
-        return OpenAICompatJudge("openai", "gpt-4o", "https://api.openai.com/v1", "OPENAI_API_KEY")
-    if spec.startswith("local"):
-        base = os.environ.get("LOCAL_AI_BASE_URL", "http://localhost:1234/v1")
-        return OpenAICompatJudge("local-llama", "llama-3.1-8b-instruct", base, None)
+    model_override = spec.split(":", 1)[1] if ":" in spec else None
+    if low.startswith("gemini"):
+        return GeminiJudge(model_override or "gemini-2.5-pro")
+    if low.startswith("openai") or low.startswith("gpt"):
+        return OpenAICompatJudge("openai", model_override or "gpt-4o", "https://api.openai.com/v1", "OPENAI_API_KEY")
+    if low.startswith("local"):
+        base = os.environ.get("JUDGE_BASE_URL") or os.environ.get("LOCAL_AI_BASE_URL") or "http://localhost:11434/v1"
+        model = model_override or os.environ.get("JUDGE_MODEL") or "gpt-oss:20b"
+        return OpenAICompatJudge(f"local:{model}", model, base, None)
     raise ValueError(f"unknown judge spec: {spec}")
+
+
+# ── Offline-reproducible scoring: cache judge verdicts keyed by (model, item) ────
+
+
+def score_items_cached(judge: Judge, items: list[dict], cache_path: str, *, model_label: str | None = None) -> dict:
+    """Score items with the judge, persisting each verdict so re-runs need no model.
+
+    items: dicts with 'id', 'source', 'explanation'. Returns {id: verdict-dict} where
+    verdict-dict is {score, q1..q4, reasoning}. The cache (a JSON file) is keyed by
+    "<model>|<id>", so the same worksheet calibrates offline forever once scored, and a
+    different judge model gets its own cache entries. Only missing items hit the model.
+    """
+    import json
+    import os
+
+    label = model_label or getattr(judge, "name", "judge")
+    cache: dict = {}
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, encoding="utf-8") as fh:
+                cache = json.load(fh)
+        except (OSError, ValueError):
+            cache = {}
+    changed = False
+    out: dict = {}
+    for it in items:
+        key = f"{label}|{it['id']}"
+        if key not in cache:
+            res = judge.score(it["source"], it["explanation"])
+            cache[key] = {
+                "score": res.score,
+                "q1": res.raw.get("q1"),
+                "q2": res.raw.get("q2"),
+                "q3": res.raw.get("q3"),
+                "q4": res.raw.get("q4"),
+                "reasoning": res.reasoning,
+            }
+            changed = True
+        out[it["id"]] = cache[key]
+    if changed:
+        os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as fh:
+            json.dump(cache, fh, indent=2)
+    return out

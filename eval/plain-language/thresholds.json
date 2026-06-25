@@ -15,8 +15,8 @@
   "jargon": {
     "_note": "the BINARY jargon gate uses the sharp rarity/AoA cutoff (precision-critical); Dale-Chall is a graded signal in the difficulty score, not a binary trigger, to avoid over-flagging ordinary off-list words. jargon.py reads these values (single source of truth).",
     "_audit_core_1169_part1b": "hard_zipf lowered 3.0 -> 2.6 after a live run over-flagged mid-frequency words a fluent adult knows (murmur 2.92, predictability 2.85, passivity 2.60, argumentation 2.65, ephemeral 2.99). At 2.6 the canonical academic-register failures still flag (solemnity 2.54, litotes 1.23, deontological 1.88, apperception 1.77, professionalization 2.03, iconographic 2.16). The ~2.3-2.9 band is register-dependent (rarity alone cannot separate 'solemnity' jargon from 'passivity' plain) -- the human calibration step (calibrate.py + the worksheet) measures kappa there before this referees any prompt.",
-    "_aoa_note": "hard_aoa is inactive while vendor/aoa_kuperman.csv is absent (aoa() returns None); it stays documented for when the Kuperman norms are present.",
+    "_aoa_note_part1c": "AoA ACTIVATED (CORE-1169 part 1c): vendor/aoa_kuperman.csv fetched via download_lexicons.py (Kuperman 2012, 30,121 words; license-bound so gitignored, not committed). hard_aoa raised 10.0 -> 14.0: a word acquired after ~age 14 reads as genuinely academic register that rarity (Zipf) misses. On Nick's 20 labels this lifts the jargon-axis kappa 0.375 -> 0.519 with ZERO new false positives (cut 10 added 4 FPs; 14 is the clean optimum); it catches late-learned words like 'posit' (14.8). Tuned on n=20 so treat as provisional. AoA is kept OUT of the difficulty/delta blend (see difficulty._USE_AOA_IN_BLEND) -- in the blend it inflated archaic-source difficulty and lowered the harder-axis kappa. The register words AoA still misses (dispassionate 13.4, reframe 10.3) are the judge's job.",
     "hard_zipf": 2.6,
-    "hard_aoa": 10.0
+    "hard_aoa": 14.0
   }
 }

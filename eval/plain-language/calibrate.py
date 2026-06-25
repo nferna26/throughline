@@ -27,6 +27,7 @@ sys.path.insert(0, HERE)
 
 from plaineval import judge as JU  # noqa: E402
 from plaineval import metrics  # noqa: E402
+from plaineval import referee  # noqa: E402
 
 CAL_DIR = os.path.join(HERE, "calibration")
 DEFAULT_RATINGS = os.path.join(CAL_DIR, "handrated.csv")
@@ -193,7 +194,27 @@ def _disagreements(rows: list[dict], human: list[int], gate: list[int], axis: st
         print(f"    [{r.get('id', '?')}] {(r['explanation'] or '')[:90]!r}")
 
 
-def run(ratings: str, judge_spec: str) -> int:
+def _agreement(human: list[int], gate: list[int]) -> tuple[float, float, float]:
+    """kappa, raw agreement, and PABAK (prevalence-adjusted bias-adjusted kappa).
+
+    PABAK = 2*p_observed - 1. Reported alongside kappa because the base rate here is
+    skewed (most items are 'harder'), which depresses kappa even at high raw agreement
+    -- the kappa paradox. PABAK shows agreement net of that prevalence effect.
+    """
+    k = cohens_kappa(human, gate)
+    raw = sum(1 for a, b in zip(human, gate) if a == b) / len(human)
+    return k, raw, 2 * raw - 1
+
+
+def _report_axis(title: str, rows: list[dict], human: list[int], gate: list[int], axis: str) -> float:
+    k, raw, pabak = _agreement(human, gate)
+    print(f"\n{title}:  kappa={k:.3f} ({landis_koch(k)})  raw-agreement={raw:.2f}  PABAK={pabak:.3f}")
+    _disagreements(rows, human, gate, axis)
+    return k
+
+
+def run(ratings: str, judge_spec: str, judge_bar: int = referee.DEFAULT_JUDGE_BAR,
+        cache_path: str | None = None) -> int:
     if not os.path.exists(ratings):
         print(f"no ratings file at {ratings}; run --make-worksheet --from reports/run.json first, then hand-label.")
         return 2
@@ -201,55 +222,60 @@ def run(ratings: str, judge_spec: str) -> int:
     if len(rows) < 5:
         print(f"only {len(rows)} labelled rows; label ~20+ for a stable kappa.")
         return 2
+    have_jargon = any((r.get("human_has_undefined_hard_word") or "").strip() != "" for r in rows)
 
-    human_harder, gate_harder = [], []
-    human_jargon, gate_jargon = [], []
-    have_jargon_labels = any((r.get("human_has_undefined_hard_word") or "").strip() != "" for r in rows)
-    human_score, neg_delta = [], []
-    judge = JU.make_judge(judge_spec)
-    judge_harder, judge_score = [], []
-
-    for r in rows:
-        m = metrics.evaluate(r["source"], r["explanation"])
-        human_harder.append(int(r["human_harder"]))
-        gate_harder.append(1 if m.harder_than_source else 0)
-        if (r.get("human_has_undefined_hard_word") or "").strip() != "":
-            human_jargon.append(int(r["human_has_undefined_hard_word"]))
-            gate_jargon.append(1 if m.jargon else 0)
-        if (r.get("human_score") or "").strip():
-            human_score.append(float(r["human_score"]))
-            neg_delta.append(-m.delta)
-            if judge:
-                js = judge.score(r["source"], r["explanation"]).score
-                judge_score.append(js)
-                judge_harder.append(1 if js <= 2 else 0)
+    lex = [metrics.evaluate(r["source"], r["explanation"]) for r in rows]
+    human_harder = [int(r["human_harder"]) for r in rows]
+    lex_harder = [1 if m.harder_than_source else 0 for m in lex]
+    jrows = [r for r in rows if (r.get("human_has_undefined_hard_word") or "").strip() != ""]
+    human_jargon = [int(r["human_has_undefined_hard_word"]) for r in jrows]
+    lex_jargon = [1 if metrics.evaluate(r["source"], r["explanation"]).jargon else 0 for r in jrows]
 
     print("=" * 70)
     print(f"CALIBRATION  ·  {len(rows)} labelled items  ·  ratings: {os.path.basename(ratings)}")
     print("=" * 70)
-    k_harder = cohens_kappa(human_harder, gate_harder)
-    print(f"\nGATE 'harder than source?' vs human:  kappa = {k_harder:.3f} ({landis_koch(k_harder)})")
-    _disagreements(rows, human_harder, gate_harder, "harder")
+    print("\n### LEXICAL-ONLY gate (the objective spine) ###")
+    _report_axis("harder?", rows, human_harder, lex_harder, "harder")
+    if have_jargon:
+        _report_axis("undefined hard word (jargon)?", jrows, human_jargon, lex_jargon, "jargon")
 
-    if have_jargon_labels and len(human_jargon) >= 5:
-        k_jargon = cohens_kappa(human_jargon, gate_jargon)
-        print(f"\nGATE 'undefined hard word?' (jargon) vs human:  kappa = {k_jargon:.3f} ({landis_koch(k_jargon)})")
-        jrows = [r for r in rows if (r.get("human_has_undefined_hard_word") or "").strip() != ""]
-        _disagreements(jrows, human_jargon, gate_jargon, "jargon")
+    combined_kappa = {"harder": None, "jargon": None}
+    if judge_spec and judge_spec.lower() not in ("none", "off", ""):
+        judge = JU.make_judge(judge_spec)
+        cache_path = cache_path or os.path.join(HERE, "reports", "judge_cache.json")
+        model_label = judge_spec.split(":", 1)[1] if ":" in judge_spec else getattr(judge, "name", judge_spec)
+        items = [{"id": r["id"], "source": r["source"], "explanation": r["explanation"]} for r in rows]
+        scores = JU.score_items_cached(judge, items, cache_path, model_label=model_label)
 
-    if human_score and neg_delta:
-        s_lex = spearman(human_score, neg_delta)
-        print(f"\nLEXICAL plainness (-delta) vs human 1-5:  Spearman = {s_lex:.3f}")
-    if judge and judge_harder:
-        k_j = cohens_kappa(human_harder[: len(judge_harder)], judge_harder)
-        print(f"JUDGE vs human 'harder?':  kappa = {k_j:.3f} ({landis_koch(k_j)})")
+        comb = [
+            referee.combine(
+                lexical_harder=m.harder_than_source,
+                lexical_jargon=len(m.jargon),
+                judge_score=scores[r["id"]]["score"],
+                judge_q3=scores[r["id"]]["q3"],
+                judge_bar=judge_bar,
+            )
+            for r, m in zip(rows, lex)
+        ]
+        comb_by_id = {r["id"]: c for r, c in zip(rows, comb)}
+        comb_harder = [1 if c.harder else 0 for c in comb]
+        comb_jargon = [1 if comb_by_id[r["id"]].jargon else 0 for r in jrows]
+
+        print(f"\n\n### COMBINED gate = lexical OR judge ({model_label}, bar<= {judge_bar}) ###")
+        combined_kappa["harder"] = _report_axis("harder?", rows, human_harder, comb_harder, "harder")
+        if have_jargon:
+            combined_kappa["jargon"] = _report_axis("undefined hard word (jargon)?", jrows, human_jargon, comb_jargon, "jargon")
+
+        new_h = sum(1 for c in comb if c.judge_harder and not c.lexical_harder)
+        new_j = sum(1 for r in jrows if comb_by_id[r["id"]].judge_register and not comb_by_id[r["id"]].lexical_jargon)
+        print(f"\nRegister catches the JUDGE newly adds (lexical gate missed): {new_h} harder, {new_j} jargon")
 
     print("\n" + "=" * 70)
-    print("VERDICT GUIDE (the LEXICAL gate is the headline; the judge is flag-only):")
-    print("  kappa >= 0.61 (substantial): the gate tracks human judgment -- the re-scored")
-    print("    RED can referee prompt edits.")
-    print("  kappa < 0.61 or many false positives: the gate over-flags plain text (short-")
-    print("    text lexical bias); tune thresholds / add a guard BEFORE trusting the verdict.")
+    print("DELIVERABLE: combined-gate kappa (harder) =",
+          f"{combined_kappa['harder']:.3f}" if combined_kappa["harder"] is not None else "n/a (no judge)")
+    print("PASS = combined kappa >= 0.61 (substantial) with an acceptable false-positive")
+    print("rate -> the gate can referee part 2b. If short, the report names which lever to")
+    print("tune (lexical threshold vs judge rubric/bar) and provides an expanded worksheet.")
     return 0
 
 
@@ -262,6 +288,10 @@ def main() -> int:
     ap.add_argument("--from", dest="run_path", default=os.path.join(HERE, "reports", "run.json"),
                     help="run.json (with per-item text) to sample the worksheet from")
     ap.add_argument("--out", default=DEFAULT_WORKSHEET, help="worksheet output path (with --make-worksheet)")
+    ap.add_argument("--judge-bar", type=int, default=referee.DEFAULT_JUDGE_BAR,
+                    help="judge plainness score <= bar counts as a register 'harder' catch")
+    ap.add_argument("--judge-cache", default=os.path.join(HERE, "reports", "judge_cache.json"),
+                    help="where cached judge verdicts live (offline-reproducible)")
     ap.add_argument("--n", type=int, default=20)
     args = ap.parse_args()
     if args.make_worksheet:
@@ -270,7 +300,7 @@ def main() -> int:
     if args.make_template:
         make_template(args.ratings, args.n)
         return 0
-    return run(args.ratings, args.judge)
+    return run(args.ratings, args.judge, judge_bar=args.judge_bar, cache_path=args.judge_cache)
 
 
 if __name__ == "__main__":

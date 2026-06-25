@@ -19,6 +19,7 @@ from plaineval import judge as JU  # noqa: E402
 from plaineval import lexicons as lx  # noqa: E402
 from plaineval import metrics  # noqa: E402
 from plaineval import metrics as M  # noqa: E402
+from plaineval import referee as RF  # noqa: E402
 from plaineval import tutor_prompt as tp  # noqa: E402
 import run_eval  # noqa: E402
 
@@ -195,6 +196,84 @@ def test_introduced_proper_noun_is_exempt_from_delta_and_jargon():
     exempt = jg.exempt_lemmas_for_explanation(src, expl)
     assert lx.archaic_key("dickens") in exempt
     assert "dickens" not in {h.lemma for h in jg.find_introduced_hard_words(src, expl)}
+
+
+# ── CORE-1169 part 1c: AoA activation + combined referee (lexical OR judge) ──
+
+
+def test_hard_aoa_cutoff_comes_from_thresholds_and_is_14():
+    import json
+
+    path = os.path.join(os.path.dirname(jg.__file__), "..", "thresholds.json")
+    with open(path, encoding="utf-8") as fh:
+        jt = json.load(fh)["jargon"]
+    assert jg.HARD_AOA == jt["hard_aoa"] == 14.0
+
+
+def test_aoa_is_kept_out_of_the_difficulty_blend():
+    # The delta is the objective spine; AoA hurt it on archaic sources, so the blend
+    # must not use AoA even when the norms are present.
+    assert dif._USE_AOA_IN_BLEND is False
+
+
+def test_combine_harder_is_lexical_or_judge_below_bar():
+    # Lexical spine alone fires.
+    v = RF.combine(lexical_harder=True, lexical_jargon=0, judge_score=5, judge_q3=True)
+    assert v.harder is True and v.lexical_harder is True and v.judge_harder is False
+    # Judge catches a register case the lexical gate cleared.
+    v = RF.combine(lexical_harder=False, lexical_jargon=0, judge_score=2, judge_q3=True, judge_bar=3)
+    assert v.harder is True and v.judge_harder is True and v.lexical_harder is False
+    # Both clear -> not harder.
+    v = RF.combine(lexical_harder=False, lexical_jargon=0, judge_score=5, judge_q3=True, judge_bar=3)
+    assert v.harder is False
+
+
+def test_combine_jargon_is_lexical_or_judge_register():
+    # Lexical jargon fires.
+    v = RF.combine(lexical_harder=False, lexical_jargon=2, judge_score=5, judge_q3=True)
+    assert v.jargon is True and v.lexical_jargon is True
+    # Judge's "academic register present" (q3 False) is a jargon catch even with 0 lexical.
+    v = RF.combine(lexical_harder=False, lexical_jargon=0, judge_score=4, judge_q3=False)
+    assert v.jargon is True and v.judge_register is True and v.lexical_jargon is False
+    # q3 True -> clean.
+    v = RF.combine(lexical_harder=False, lexical_jargon=0, judge_score=5, judge_q3=True)
+    assert v.jargon is False
+
+
+def test_combine_with_no_judge_is_the_lexical_gate_alone():
+    # judge_score None / judge_q3 None: the judge contributes nothing (OR with no signal).
+    v = RF.combine(lexical_harder=True, lexical_jargon=0, judge_score=None, judge_q3=None)
+    assert v.harder is True and v.judge_harder is False and v.judge_register is False
+    v = RF.combine(lexical_harder=False, lexical_jargon=0, judge_score=None, judge_q3=None)
+    assert v.harder is False and v.jargon is False
+
+
+def test_judge_score_caching_avoids_recall(tmp_path):
+    # A fake judge that counts calls; the cache must serve the second pass with 0 calls.
+    class _CountingJudge(JU.Judge):
+        name = "fake"
+
+        def __init__(self):
+            self.calls = 0
+
+        def score(self, source, explanation):
+            self.calls += 1
+            return JU.JudgeResult(score=4, reasoning="ok", raw={"q1": True, "q2": True, "q3": True, "q4": False})
+
+    items = [{"id": "a|x", "source": "s1", "explanation": "e1"}, {"id": "b|y", "source": "s2", "explanation": "e2"}]
+    cache = str(tmp_path / "judge_cache.json")
+    j = _CountingJudge()
+    out1 = JU.score_items_cached(j, items, cache, model_label="fake")
+    assert j.calls == 2 and set(out1) == {"a|x", "b|y"} and out1["a|x"]["score"] == 4
+    j2 = _CountingJudge()
+    out2 = JU.score_items_cached(j2, items, cache, model_label="fake")
+    assert j2.calls == 0 and out2["b|y"]["q3"] is True  # served entirely from disk
+
+
+def test_make_judge_is_configurable_and_never_sonnet():
+    assert JU.make_judge("none") is None
+    j = JU.make_judge("local:gpt-oss:20b")
+    assert j.model == "gpt-oss:20b" and "sonnet" not in j.name.lower()
 
 
 # ── Gate logic ───────────────────────────────────────────────────────────────

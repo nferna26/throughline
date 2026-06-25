@@ -38,6 +38,15 @@ _W_AOA = 0.30
 _W_DALECHALL = 0.25
 _W_FORMULA = 0.15
 
+# CORE-1169 part 1c: keep AoA OUT of the harder/delta blend. The delta is the gate's
+# "objective spine"; calibration against Nick's 20 labels showed that folding AoA into
+# the blend LOWERED agreement (kappa 0.39 -> 0.15 on the harder axis), because these
+# sources are archaic/literary and themselves AoA-heavy -- AoA inflates the SOURCE D,
+# shrinking the delta and producing MORE misses. AoA's register value is real but
+# belongs in the jargon signal (jargon.is_hard reads hard_aoa) and the LLM judge, not
+# the objective delta. Flip this on only if a future calibration shows it helps.
+_USE_AOA_IN_BLEND = False
+
 # Unseen words (wordfreq Zipf == 0) are treated as rare/hard (handoff caveat).
 _ZIPF_FLOOR = 1.0
 _RARITY_MAX = 7.0  # 7 - zipf, so an unseen/Zipf-0 word contributes the max rarity.
@@ -185,7 +194,7 @@ def _blend(sig: RawSignals) -> float:
     z_rar = _z(sig.rarity, "rarity")
     z_dc = _z(sig.dalechall_prop, "dalechall")
     z_frm = _z(sig.formula, "formula")
-    if sig.aoa is not None and lx.aoa_available():
+    if _USE_AOA_IN_BLEND and sig.aoa is not None and lx.aoa_available():
         z_aoa = _z(sig.aoa, "aoa")
         return _W_RARITY * z_rar + _W_AOA * z_aoa + _W_DALECHALL * z_dc + _W_FORMULA * z_frm
     # AoA absent: redistribute its weight across the other two lexical signals,
@@ -240,7 +249,7 @@ def score(text: str, exempt_lemmas: frozenset[str] = frozenset()) -> Difficulty:
         raw=sig,
         coverage=cov,
         n_scored=len(scored),
-        aoa_used=sig.aoa is not None and lx.aoa_available(),
+        aoa_used=_USE_AOA_IN_BLEND and sig.aoa is not None and lx.aoa_available(),
     )
 
 

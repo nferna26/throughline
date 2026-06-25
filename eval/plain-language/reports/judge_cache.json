@@ -1,0 +1,322 @@
+{
+  "gpt-oss:20b|arch-09|historical|brief|anthropic": {
+    "score": 4,
+    "q1": true,
+    "q2": true,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation is written in straightforward language and avoids the poetic complexity of the source, so a reader who found the source hard would likely understand it without a dictionary. It uses simpler words than the source. However, it introduces some historical terms such as \"Licensing Order of 1643\" and \"pre\u2011publication censorship,\" which could be considered jargon. The explanation itself is clear enough that it does not require a separate explanation, though a brief historical context might help. Overall, it is quite plain but not entirely jargon\u2011free, earning a score of 4."
+  },
+  "gpt-oss:20b|arch-09|vocabulary|brief|local": {
+    "score": 4,
+    "q1": true,
+    "q2": true,
+    "q3": false,
+    "q4": false,
+    "reasoning": "The explanation breaks down the key terms from the source into more everyday language, making it accessible to readers who struggled with the original phrasing. It uses simpler words overall, though it does contain a few academic terms such as \"faculty of logic and judgment\" and \"work of enduring literary or intellectual merit,\" which slightly reduce its plainness. The explanation itself is clear enough that it does not require further unpacking."
+  },
+  "gpt-oss:20b|arch-09|socratic|deep|anthropic": {
+    "score": 5,
+    "q1": true,
+    "q2": true,
+    "q3": true,
+    "q4": false,
+    "reasoning": "The explanation breaks down the poetic source into clear, modern questions that use everyday vocabulary and avoid heavy jargon, making it accessible to readers who struggled with the original. It does not require further explanation itself."
+  },
+  "gpt-oss:20b|arch-09|explain|deep|local": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation is far more complex than the source, using advanced vocabulary and abstract concepts that would require a dictionary or further explanation for a reader who already finds the source difficult. It does not simplify the language, contains academic jargon, and itself needs clarification."
+  },
+  "gpt-oss:20b|iron-02|historical|brief|anthropic": {
+    "score": 5,
+    "q1": true,
+    "q2": true,
+    "q3": true,
+    "q4": false,
+    "reasoning": "The explanation is straightforward, uses modern language, and is understandable without a dictionary."
+  },
+  "gpt-oss:20b|iron-03|explain|brief|local": {
+    "score": 3,
+    "q1": true,
+    "q2": false,
+    "q3": false,
+    "q4": false,
+    "reasoning": "The explanation is fairly straightforward but introduces a few terms like \"deceptive duality\" and \"irony\" that may not be immediately clear to a reader unfamiliar with literary analysis. It does not use more complex vocabulary than the source overall, but it does contain some academic phrasing. It is understandable without a dictionary for most readers, but it could still benefit from a brief clarification of the jargon used."
+  },
+  "gpt-oss:20b|iron-03|socratic|deep|anthropic": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation uses complex, academic language and concepts that are not present in the original source, making it harder to understand without additional explanation."
+  },
+  "gpt-oss:20b|iron-03|vocabulary|deep|local": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation is laden with academic and literary jargon, uses complex vocabulary, and introduces concepts that a reader struggling with the original sentence would not grasp without further explanation. It is not simpler than the source, contains jargon, and itself requires clarification."
+  },
+  "gpt-oss:20b|phil-02|historical|brief|anthropic": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation adds academic jargon and complex concepts that a reader struggling with the original source would likely not grasp without further explanation. It does not simplify the language, nor is it free of specialized terms, and it would itself need clarification."
+  },
+  "gpt-oss:20b|phil-06|explain|brief|local": {
+    "score": 2,
+    "q1": true,
+    "q2": false,
+    "q3": false,
+    "q4": false,
+    "reasoning": "Explanation uses more advanced vocabulary and some literary terms, but overall understandable."
+  },
+  "gpt-oss:20b|phil-02|socratic|deep|anthropic": {
+    "score": 5,
+    "q1": true,
+    "q2": true,
+    "q3": true,
+    "q4": false,
+    "reasoning": "The explanation reframes the abstract source into straightforward questions that use everyday language and avoid obscure terms. It is accessible to a reader who struggled with the original, uses simpler vocabulary, contains no academic jargon, and does not itself require further explanation."
+  },
+  "gpt-oss:20b|phil-06|vocabulary|deep|local": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation is more complex, uses jargon, and would be hard to understand without a dictionary."
+  },
+  "gpt-oss:20b|tech-01|historical|brief|anthropic": {
+    "score": 2,
+    "q1": true,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "Explanation uses more technical terms and jargon, so it is less plain than the source; it is still understandable but requires explanation of concepts like natural selection."
+  },
+  "gpt-oss:20b|tech-01|vocabulary|brief|local": {
+    "score": 3,
+    "q1": true,
+    "q2": false,
+    "q3": true,
+    "q4": true,
+    "reasoning": "The explanation uses mostly simple synonyms and avoids jargon, so a reader who found the source hard would likely understand it without a dictionary. However, it contains some words that are not simpler than the source (e.g., 'intricately', 'biological', 'densely vegetated area', 'interwoven'), so it does not consistently use simpler language. It is free of literary or academic jargon. Because the explanation is presented as fragments rather than a full, coherent statement, it could benefit from its own explanation to clarify that it is a list of synonyms. Overall, the plainness is moderate."
+  },
+  "gpt-oss:20b|tech-03|vocabulary|deep|anthropic": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "Explanation is more complex, uses jargon, not simpler."
+  },
+  "gpt-oss:20b|tech-01|explain|deep|local": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "Explanation is more complex and uses jargon, so it is not plain."
+  },
+  "gpt-oss:20b|vict-12|historical|brief|anthropic": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "Explanation uses more complex terms and jargon than source, so not plain"
+  },
+  "gpt-oss:20b|vict-03|explain|brief|local": {
+    "score": 2,
+    "q1": false,
+    "q2": false,
+    "q3": true,
+    "q4": false,
+    "reasoning": "The explanation uses more complex vocabulary and phrasing than the source, making it harder for a reader who struggled with the original. It does not use simpler words, but it avoids heavy jargon. The explanation is clear enough that it does not require further explanation. Overall, it is less plain than the source, so it scores low on plainness."
+  },
+  "gpt-oss:20b|vict-12|socratic|deep|anthropic": {
+    "score": 4,
+    "q1": true,
+    "q2": true,
+    "q3": true,
+    "q4": false,
+    "reasoning": "The explanation uses simpler language, avoids jargon, and is phrased as straightforward questions that a reader can grasp without a dictionary."
+  },
+  "gpt-oss:20b|vict-03|vocabulary|deep|local": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation is more complex than the source, using many advanced terms and concepts that would likely confuse a reader who already found the source difficult. It is not simpler, contains academic jargon, and would itself require explanation."
+  },
+  "gemma3:12b|arch-09|historical|brief|anthropic": {
+    "score": 2,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation introduces historical and political context ('Licensing Order of 1643', 'government censors', 'state-sanctioned pre-publication censorship') that isn't present in the source, and uses terms like 'meditation' that, while not strictly jargon, elevate the explanation's complexity."
+  },
+  "gemma3:12b|arch-09|vocabulary|brief|local": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation breaks down terms from the source, but uses academic language to do so, making it less plain than the original."
+  },
+  "gemma3:12b|arch-09|socratic|deep|anthropic": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation frames the source as a puzzle to be solved, introducing concepts like 'censorship' and 'just society' that weren't explicitly present in the original. It's more analytical than explanatory."
+  },
+  "gemma3:12b|arch-09|explain|deep|local": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation uses complex vocabulary and sentence structures that significantly increase the difficulty compared to the source's straightforward analogy. It introduces abstract philosophical concepts without sufficient grounding."
+  },
+  "gemma3:12b|iron-02|historical|brief|anthropic": {
+    "score": 3,
+    "q1": false,
+    "q2": true,
+    "q3": false,
+    "q4": false,
+    "reasoning": "The explanation provides context for the source's statement, clarifying the societal pressures behind the seemingly flippant remark. It uses more complex vocabulary and concepts than the source, but the explanation is still accessible with some effort."
+  },
+  "gemma3:12b|iron-03|explain|brief|local": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation introduces complex concepts like 'deceptive duality' and 'irony' which are not present in the source, and uses more formal language."
+  },
+  "gemma3:12b|iron-03|socratic|deep|anthropic": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation uses rhetorical questions and abstract concepts ('social polish', 'moral character', 'civilization itself') that are not directly addressed in the source. It also introduces literary analysis techniques without explaining them, making it more complex than the original passage."
+  },
+  "gemma3:12b|iron-03|vocabulary|deep|local": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation uses complex language and literary analysis terms that would be inaccessible to someone unfamiliar with literary criticism. It actively *increases* the difficulty, rather than simplifying the source."
+  },
+  "gemma3:12b|phil-02|historical|brief|anthropic": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation introduces specialized philosophical terms and concepts ('rationalist metaphysics', 'Spinoza', 'Spirit', 'dynamic process') that would likely be unfamiliar to a general reader, making it less plain than the source despite attempting simplification."
+  },
+  "gemma3:12b|phil-06|explain|brief|local": {
+    "score": 2,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation retains some complex phrasing and concepts from the source, making it not significantly easier to understand without some familiarity with Nietzsche's ideas."
+  },
+  "gemma3:12b|phil-02|socratic|deep|anthropic": {
+    "score": 2,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation uses questions to unpack the source's dense statement, but the questions themselves are still abstract and require some philosophical understanding. It doesn't truly simplify the core concept."
+  },
+  "gemma3:12b|phil-06|vocabulary|deep|local": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation uses complex sentence structures and vocabulary that significantly increase its difficulty compared to the source. It introduces abstract concepts and philosophical terminology without sufficient simplification."
+  },
+  "gemma3:12b|tech-01|historical|brief|anthropic": {
+    "score": 2,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation introduces terms like 'impersonal,' 'natural selection,' 'dominant assumption,' and 'purposeful intervention,' which are more complex than the source's language and require some background knowledge."
+  },
+  "gemma3:12b|tech-01|vocabulary|brief|local": {
+    "score": 3,
+    "q1": false,
+    "q2": true,
+    "q3": false,
+    "q4": false,
+    "reasoning": "The explanation provides definitions for key terms, making the source more accessible. However, the definitions themselves use somewhat complex language, diminishing the overall plainness."
+  },
+  "gemma3:12b|tech-03|vocabulary|deep|anthropic": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation uses complex vocabulary and sentence structures, and introduces abstract concepts like 'load-bearing framing' and 'category error' that would likely confuse a reader unfamiliar with the source material. It also employs academic language ('ethical refutation', 'philosophical mistake')."
+  },
+  "gemma3:12b|tech-01|explain|deep|local": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation uses complex sentence structures and vocabulary not present in the source, and introduces abstract concepts like 'implicit assumption' and 'mechanistic continuity' that would confuse a reader unfamiliar with academic discourse."
+  },
+  "gemma3:12b|vict-12|historical|brief|anthropic": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation introduces complex terms and concepts ('socialist distinction', 'Marx's formulation', 'ability and need') without adequately defining them, making it more difficult than the source for a general reader."
+  },
+  "gemma3:12b|vict-03|explain|brief|local": {
+    "score": 4,
+    "q1": true,
+    "q2": true,
+    "q3": true,
+    "q4": false,
+    "reasoning": "The explanation uses slightly more complex sentence structure and vocabulary than the source, but generally succeeds in conveying the core idea. The use of 'elevates' and 'clear-eyed observation' are slightly elevated, but not overly so."
+  },
+  "gemma3:12b|vict-12|socratic|deep|anthropic": {
+    "score": 3,
+    "q1": false,
+    "q2": false,
+    "q3": true,
+    "q4": false,
+    "reasoning": "The explanation uses questions to guide understanding, which is a good technique for plainness. However, the questions themselves rely on understanding abstract concepts like 'individual ownership' and 'human nature,' which might still be challenging for some readers."
+  },
+  "gemma3:12b|vict-03|vocabulary|deep|local": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The explanation uses complex vocabulary and academic phrasing that significantly increases the difficulty compared to the source's straightforward language. It introduces concepts like 'optical registration,' 'moral and intellectual discipline,' and 'rigorous duty of translation' which are not present in the original passage's simplicity."
+  }
+}

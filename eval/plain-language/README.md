@@ -103,6 +103,57 @@ calls. The scorer bugs that inflated that run (now fixed + unit-tested):
    what the calibration step measures. AoA is unavailable in this environment, so the
    rarity cutoff is the sole active binary signal.
 
+## Register-sensitive combined gate (CORE-1169 part 1c)
+
+Human calibration (Nick, 20 labels, adult ~8th-grade-clarity standard) put the
+LEXICAL-ONLY gate at kappa **0.39 (harder?) / 0.52 (jargon?)** -- "fair/moderate,"
+below the 0.61 needed to referee alone. Human and gate agree *directionally* (16/20
+items human-harder), so the signal is real; the gate's misses are **register** --
+academic/abstract tone that word-rarity (Zipf) cannot see (mid-frequency words that
+still read academic: "dispassionate", "posits", "reframe"). Two fixes:
+
+1. **AoA activated** (a cheap lexical boost): `download_lexicons.py` now fetches the
+   Kuperman age-of-acquisition norms (30,121 words; license-bound, so gitignored, not
+   committed). A word learned after ~age 14 reads as academic register; `hard_aoa` is
+   set to 14.0 (jargon-axis kappa 0.375 -> 0.519, zero new false positives). AoA is
+   kept OUT of the difficulty/delta blend (it inflated archaic-source difficulty and
+   *lowered* the harder-axis kappa) -- the delta stays the objective lexical spine.
+2. **The judge** (`plaineval/judge.py`): a G-Eval pointwise plainness rubric
+   (q1 no-dictionary, q2 simpler-words, q3 free-of-academic-register, q4 needs-its-own-
+   explanation; score 1-5, temperature 0, JSON), run by an **independent, cross-family**
+   model -- never Sonnet (the tutor) nor qwen3.5 (the local tutor), to avoid
+   self-preference. Offline default `gpt-oss:20b` via Ollama; configurable with
+   `--judge local:<model>` or `JUDGE_MODEL` / `JUDGE_BASE_URL`. Verdicts are cached
+   (`reports/judge_cache.json`) so calibration re-runs are offline and free.
+
+**The combined referee** (`plaineval/referee.py`, pure + unit-tested):
+
+```
+harder = lexical delta > 0          OR  judge plainness score <= bar (default 3)
+jargon = lexical undefined-hard > 0 OR  judge says academic register present (q3 False)
+```
+
+The lexical delta stays the objective spine; the judge only ever ADDS the register
+catch (OR), never silences a lexical flag.
+
+**Calibration result (gpt-oss:20b, bar 3, Nick's 20 labels):**
+
+| gate | harder kappa | jargon kappa |
+|---|---|---|
+| lexical-only | 0.390 (fair) · raw 0.75 · PABAK 0.50 | 0.519 (moderate) · raw 0.75 · PABAK 0.50 |
+| **combined** | **0.688 (substantial)** · raw 0.90 · PABAK 0.80 | **0.875 (almost perfect)** · raw 0.95 · PABAK 0.90 |
+
+The judge newly catches 3 harder + 6 jargon register cases the lexical gate missed
+(harder-misses 4->1, jargon-misses 5->0), at 1 false positive. **Both axes clear the
+0.61 bar -> the combined gate can referee part 2b.** Reproduce offline:
+
+```bash
+python calibrate.py --ratings calibration/worksheet.csv --judge local:gpt-oss:20b --judge-bar 3
+```
+
+(PABAK = 2*raw_agreement - 1, reported alongside kappa because the base rate is skewed
+-- most items are "harder," which depresses kappa even at high agreement.)
+
 ## What it measures
 
 For each passage x {brief, deep} x {model} it gets the tutor's explanation, then:
@@ -158,11 +209,14 @@ class. `python run_eval.py --baseline` confirms the gate flags this: the
 named-term cases (panopticon, bourgeoisie) correctly score `delta <= 0` (the exclusion
 works). `reports/baseline.json` is the machine-readable record for diffing part 2.
 
-## The judge (optional, secondary, independent)
+## The judge (independent, cross-family; now part of the combined gate)
 
 `plaineval/judge.py`: a G-Eval-style 1-5 plainness rubric, scored pointwise at
 temperature 0, by a **cross-family** model (never Claude/Sonnet, to avoid self-preference
-bias): Gemini/GPT in the cloud, or Llama-3.1-8B locally for offline runs. It is flag-only.
+bias): Gemini/GPT in the cloud, or a local open model (`gpt-oss:20b` default, configurable)
+for offline runs. As of part 1c it is no longer flag-only -- it is OR-combined with the
+lexical gate (see "Register-sensitive combined gate" above) because the lexical signal
+alone cannot see academic register. The lexical delta remains the objective spine.
 `calibrate.py` validates judge + lexical agreement vs a labelled set (Cohen's kappa,
 Spearman; target kappa >= 0.61). `calibration/handrated.csv` is a small **seed only**
 (~20 rows on the recorded baseline fixtures, harder-axis only, author-assigned) and is
@@ -201,7 +255,9 @@ reports/          machine-readable run outputs (run.json now carries per-item te
 thresholds.json   the LOCKED gate definition (jargon cutoffs read by jargon.py)
 run_eval.py       the runner + red/green headline + non-zero exit (+ per-item persistence)
 rescore.py        re-score a captured run; --legacy-ref diffs the pre-fix scorer
-calibrate.py      kappa (harder + jargon) / Spearman; --make-worksheet from a live run
+calibrate.py      kappa (harder + jargon) / PABAK; --judge runs the COMBINED gate
+plaineval/referee.py   the combined referee (lexical OR judge); pure + unit-tested
+plaineval/judge.py     G-Eval plainness judge (cross-family) + offline score cache
 download_lexicons.py   optional AoA fetch
 tests/            deterministic pytest (no network)
 ```

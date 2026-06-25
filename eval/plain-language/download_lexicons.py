@@ -24,6 +24,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "vendor", "aoa_kuperman.csv")
 
 MIRRORS = [
+    # Live as of 2026-06 (CORE-1169 part 1c); these carry the same 30,121-word Kuperman
+    # norms with Word + Rating.Mean columns. Kept ahead of the historically-flaky ones.
+    "https://raw.githubusercontent.com/wehlutyk/brainscopypaste/master/data/AoA/Kuperman-BRM-data-2012.csv",
+    "https://raw.githubusercontent.com/interpretation-experiment/analysis/master/data/Kuperman-BRM-data-2012.csv",
     "https://raw.githubusercontent.com/lcompton1/AoA/master/AoA_ratings_Kuperman_et_al_BRM.csv",
     "https://raw.githubusercontent.com/ArtsEngine/concreteness/master/AoA_ratings_Kuperman_et_al_BRM.csv",
     "http://crr.ugent.be/papers/AoA_ratings_Kuperman_et_al_BRM.zip",
