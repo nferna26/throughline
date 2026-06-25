@@ -195,15 +195,20 @@ pub fn safety_preamble() -> String {
 /// lexical gate at `eval/plain-language/` is the regression referee. This text is
 /// static, so it rides in the stable cache prefix (before the fence) and never
 /// weakens the untrusted-content boundary. No em dashes (banned across the prompt).
-const PLAIN_DIRECTIVE: &str = "Plain-language rule (this governs HOW you write the answer): \
-Your explanation must be easier to read than the passage you are explaining. Use everyday words a \
-curious adult already knows. If you must use a hard or technical word, even one taken from the passage, \
-explain what it means in the same sentence, in plain words. Never introduce a word harder than the \
-hardest word in the passage without defining it. Capture the real difficulty of the line (the irony, an \
-unclear who or what, an old meaning of a word, or a hidden comparison) but say it in ordinary language. \
-Do not use academic or literary-critical jargon (for example: mock-academic, solemnity, diction, \
-register). Aim for the reading level of a clear newspaper or a good children's encyclopedia, roughly US \
-grade 7 to 8, and never harder than the source. The explanation should not itself need an explanation. \
+const PLAIN_DIRECTIVE: &str = "Plain-language rule (the most important rule; it governs HOW you write the \
+answer): Write for a curious 12-year-old who stops reading at the first word they do not know. Your \
+explanation must be easier to read than the passage you are explaining: use shorter, commoner words and \
+shorter sentences than the passage has. An answer that sounds fancier, more formal, or more academic than \
+the passage has FAILED, even when it is correct. If the passage is already plain and simple, do not dress \
+it up: give its meaning in the same plain words or fewer and add nothing it does not need. Use everyday \
+words a curious adult already knows. If you \
+must use a hard or technical word, even one taken from the passage, explain what it means in the same \
+sentence, in plain words. Never introduce a word harder than the hardest word in the passage without \
+defining it. Capture the real difficulty of the line (the irony, an unclear who or what, an old meaning of \
+a word, or a hidden comparison) but say it in ordinary language. Do not use academic or literary-critical \
+jargon (for example: mock-academic, solemnity, diction, register, posits, dispassionate, underscores, \
+juxtaposition). Aim for the reading level of a clear newspaper or a good children's encyclopedia, roughly \
+US grade 7 to 8, and never harder than the source. The explanation should not itself need an explanation. \
 Do not use em dashes.";
 
 /// CORE-1169: the self-check / revise pass, appended after the lens instruction.
@@ -233,6 +238,22 @@ Too hard, do NOT write like this: \"A juxtaposition deploying ironic litotes to 
 genteel characterization.\"\n\
 Plain, write like this: \"This is a joke that means the opposite of what it says. Calling a pirate who \
 sinks ships and kills people 'mild mannered' is meant to be funny and shocking at once.\"";
+
+/// CORE-1169 part 2b lever 2: a DEEP-tier exemplar. The deep tier (about 130 words)
+/// drifts hardest into abstraction, so it gets its own longer good/bad pair showing
+/// that a deeper answer stays just as plain (short common words, concrete steps).
+const PLAIN_FEWSHOT_DEEP: &str = "One more example, for a longer answer that goes deeper. A longer answer \
+must stay just as plain, in short common words:\n\n\
+Passage: \"The truth is the whole. But the whole is nothing other than the essence consummating itself \
+through its development.\"\n\
+Too hard, do NOT write like this: \"Hegel posits a dialectical totality wherein essence actualizes itself \
+through immanent self-mediation toward absolute self-consciousness.\"\n\
+Plain, write like this: \"Hegel's deeper point is that you cannot catch the truth of something in one neat \
+sentence. The real truth is the whole thing, seen all the way through. And that whole is not sitting there \
+finished; it grows. The main idea starts out simple and one-sided, runs into its own limits, and becomes \
+fuller by working through them, step by step, until nothing important is left out. So when he says the \
+truth is the whole, he means you only really understand something once you have followed it through all \
+its changes, not when you have a tidy one-line definition of it.\"";
 
 /// Split a built prompt at the untrusted-content fence into
 /// `(stable_prefix, volatile_passage)` for Anthropic prompt caching: the role +
@@ -296,8 +317,12 @@ pub fn build_prompt_with_depth(mode: StubMode, depth: Depth, ctx: &PromptContext
     let attr = attribution(ctx);
     let preamble = safety_preamble();
     // CORE-1169: the plain-language block rides the stable cache prefix (before the
-    // fence) for all four reading lenses, brief and deep, cloud and local alike.
-    let plain = format!("{PLAIN_DIRECTIVE}\n\n{PLAIN_FEWSHOT}");
+    // fence) for all four reading lenses, brief and deep, cloud and local alike. The
+    // deep tier also gets the deep exemplar (part 2b lever 2), since it drifts hardest.
+    let plain = match depth {
+        Depth::Brief => format!("{PLAIN_DIRECTIVE}\n\n{PLAIN_FEWSHOT}"),
+        Depth::Deep => format!("{PLAIN_DIRECTIVE}\n\n{PLAIN_FEWSHOT}\n\n{PLAIN_FEWSHOT_DEEP}"),
+    };
     let selfcheck = PLAIN_SELFCHECK;
 
     match (mode, depth) {
@@ -306,15 +331,17 @@ pub fn build_prompt_with_depth(mode: StubMode, depth: Depth, ctx: &PromptContext
 
 {preamble}
 
-Explain ONLY the selected lines. In 2-3 sentences (about 55 words, never more), \
-in plain flowing prose, give the single main point this passage makes and decode \
-the one thing that makes it hard right here (the irony, the ambiguous referent, \
-the archaic word, or the buried metaphor), not a surface paraphrase. Never \
-mention or imply anything beyond the selection: no later events, outcomes, or \
+Explain ONLY the selected lines in plain words a smart 12-year-old reads easily, \
+always simpler than the passage itself. In 2-3 sentences (about 55 words, never \
+more), in plain flowing prose, give the single main point this passage makes and \
+decode the one thing that makes it hard right here (the irony, the ambiguous \
+referent, the archaic word, or the buried metaphor), not a surface paraphrase. If \
+a hard word from the passage is unavoidable, say what it means in the same breath. \
+Never mention or imply anything beyond the selection: no later events, outcomes, or \
 characters' fates, and never say it \"foreshadows,\" \"sets up,\" or \"leads to\" \
 what follows. Don't open with a wind-up like \"This passage\"; start with the \
-substance. No headers, no lists, no closing question. At most one **bold** term \
-for the key idea. Stop the instant the point is made.
+substance. No headers, no lists, no closing question, no academic or literary \
+terms. At most one **bold** term for the key idea. Stop the instant the point is made.
 
 {plain}
 
@@ -329,15 +356,17 @@ for the key idea. Stop the instant the point is made.
 {preamble}
 
 I've already read a 2-3 sentence gist of this passage and asked to go deeper, \
-so do NOT restate it. In at most ~130 words (one or two short paragraphs of \
-plain prose), go down one altitude: unpack the author's reasoning move, the \
-hidden assumption the claim rests on, or the tension or counter-position it \
-answers, working only from what these lines themselves show. Stay strictly \
+so do NOT restate it. Keep every sentence in plain words a smart 12-year-old \
+reads easily, simpler than the passage. In at most ~130 words (one or two short \
+paragraphs of plain prose), show the one move the writer is making under the \
+surface: the thing they quietly assume, or the view they are arguing against, \
+working only from what these lines themselves show. Say each step in everyday \
+language and define any unavoidable hard word in the same sentence. Stay strictly \
 inside the selection: never mention or imply later events, outcomes, or \
 characters' fates, and never say it \"foreshadows,\" \"sets up,\" or \"leads \
 to\" what follows. At most one **bold** named distinction. No headers, no \
-numbered or multi-level lists, no closing question. Build past the gist; don't \
-summarize it.
+numbered or multi-level lists, no closing question, no academic register. Build \
+past the gist; don't summarize it.
 
 {plain}
 
@@ -351,12 +380,13 @@ summarize it.
 
 {preamble}
 
-In 1-2 sentences (about 50 words, never more), give ONLY the one piece of \
-background a modern reader is missing to make sense of this passage: the \
-person, work, debate, or assumption it takes for granted. No biography, no \
-period overview, no date-dumps unless the date IS the point. If no special \
-context is needed, say so in one sentence. No headers, no lists, no closing \
-question.
+In 1-2 sentences (about 50 words, never more), in plain words a smart 12-year-old \
+reads easily and simpler than the passage, give ONLY the one piece of background a \
+modern reader is missing to make sense of this passage: the person, work, debate, \
+or assumption it takes for granted. Define any unavoidable hard word in the same \
+sentence. No biography, no period overview, no date-dumps unless the date IS the \
+point. If no special context is needed, say so in one sentence. No headers, no \
+lists, no closing question, no academic terms.
 
 {plain}
 
@@ -371,12 +401,13 @@ question.
 {preamble}
 
 I've already seen the one anchoring fact and asked to go deeper, so don't \
-repeat it. In at most ~130 words (one or two short paragraphs of plain prose), \
-widen the frame: the intellectual tradition or historical situation this \
-passage responds to, who or what it argues against, and why that mattered then, \
-but only what changes how I read these specific lines. Tie it to a phrase \
-from the passage. No timeline dumps, no encyclopedia tone, no headers, no \
-lists, no closing question.
+repeat it. Keep every sentence in plain words a smart 12-year-old reads easily, \
+simpler than the passage. In at most ~130 words (one or two short paragraphs of \
+plain prose), widen the frame: the bigger conversation or situation this passage \
+is part of, who or what it argues against, and why that mattered then, but only \
+what changes how I read these specific lines. Tie it to a phrase from the passage \
+and define any unavoidable hard word in the same sentence. No timeline dumps, no \
+encyclopedia tone, no academic register, no headers, no lists, no closing question.
 
 {plain}
 
@@ -391,10 +422,11 @@ lists, no closing question.
 {preamble}
 
 Gloss ONLY the 1-3 genuinely hard or archaic words or phrases in the passage \
-below, in the sense used here. One per line as \"**term**: gloss\" with the \
-gloss at most ~12 words, hardest first. No intro line, no usage notes, no \
-etymology, no closing remark. If nothing is truly hard, say so in one short \
-sentence.
+below, in the sense used here, using plain everyday words a 12-year-old \
+understands. One per line as \"**term**: gloss\" with the gloss at most ~12 \
+words and always simpler than the term, hardest first. No intro line, no usage \
+notes, no etymology, no closing remark, no academic terms. If nothing is truly \
+hard, say so in one short sentence.
 
 {plain}
 
@@ -410,10 +442,12 @@ sentence.
 
 I've already seen short glosses for this passage and asked to go deeper, so \
 don't just re-list. Take the 1-2 most load-bearing terms and unfold each (about \
-130 words total): the sense the author intends versus the modern default, the \
-connotation or period-specific use, and how that meaning shapes the passage's \
-argument. Prose preferred; a 2-item \"**term**: gloss\" list only if two terms \
-each need real unpacking. No headers, no intro paragraph.
+130 words total) in plain everyday words simpler than the term: the meaning the \
+author intends versus what the word means today, the feeling or period-specific \
+use it carries, and how that meaning shapes what the passage is saying. Define \
+any unavoidable hard word in the same sentence. Prose preferred; a 2-item \
+\"**term**: gloss\" list only if two terms each need real unpacking. No headers, \
+no intro paragraph, no academic register.
 
 {plain}
 
@@ -428,9 +462,10 @@ each need real unpacking. No headers, no intro paragraph.
 {preamble}
 
 Pose exactly ONE short guiding question (about 30 words, a single sentence \
-ending in '?') that points me back into the passage below to work out the \
-meaning myself. The question must be answerable from the passage itself. Don't \
-answer it, don't hint, don't preface; give only the question.
+ending in '?'), in plain everyday words simpler than the passage, that points me \
+back into the passage below to work out the meaning myself. The question must be \
+answerable from the passage itself and use no word harder than the passage. \
+Don't answer it, don't hint, don't preface; give only the question.
 
 {plain}
 
@@ -445,11 +480,11 @@ answer it, don't hint, don't preface; give only the question.
 {preamble}
 
 I engaged your first question and asked to go deeper. Pose a short sequence of \
-2-3 linked questions (about 70 words total), each building on the last to walk \
-from the passage's surface claim toward its underlying assumption and then its \
-broader implication. Number them 1-3 (the only place a list is allowed). No \
-answers, no hints, no commentary between them; let the last question open \
-outward.
+2-3 linked questions (about 70 words total), in plain everyday words simpler than \
+the passage, each building on the last to walk from what the passage plainly says \
+toward the idea it rests on and then what it might mean more widely. Number them \
+1-3 (the only place a list is allowed). No answers, no hints, no commentary \
+between them, no academic words; let the last question open outward.
 
 {plain}
 
@@ -857,6 +892,62 @@ mod tests {
                     "mode {mode:?}/{depth:?}: few-shot must show both the jargon failure and the plain target:\n{p}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn plainness_is_integrated_into_each_lens_instruction_not_only_the_block() {
+        // CORE-1169 part 2b lever 1: plainness is woven into each lens's OWN task
+        // instruction (before the shared plain block the model deprioritized), so the
+        // model treats "simpler than the passage" as part of the task, not an aside.
+        for mode in [
+            StubMode::Explain,
+            StubMode::Historical,
+            StubMode::Vocabulary,
+            StubMode::Socratic,
+        ] {
+            for depth in [Depth::Brief, Depth::Deep] {
+                let p = build_prompt_with_depth(mode, depth, &ctx("Sample passage."));
+                let block_at = p
+                    .find("Plain-language rule")
+                    .expect("the shared plain block is present");
+                let instruction = &p[..block_at];
+                assert!(
+                    instruction.contains("simpler than the")
+                        || instruction.contains("12-year-old"),
+                    "mode {mode:?}/{depth:?}: the lens instruction itself must demand plainness:\n{instruction}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deep_tier_carries_its_own_plain_exemplar_brief_does_not() {
+        // CORE-1169 part 2b lever 2: the deep tier (which drifts hardest into
+        // abstraction) gets an extra deep good/bad exemplar; the brief tier does not.
+        for mode in [
+            StubMode::Explain,
+            StubMode::Historical,
+            StubMode::Vocabulary,
+            StubMode::Socratic,
+        ] {
+            let brief = build_prompt_with_depth(mode, Depth::Brief, &ctx("Sample."));
+            let deep = build_prompt_with_depth(mode, Depth::Deep, &ctx("Sample."));
+            let anchor = "for a longer answer that goes deeper";
+            assert!(
+                deep.contains(anchor),
+                "mode {mode:?}: deep must carry the deep exemplar:\n{deep}"
+            );
+            assert!(
+                !brief.contains(anchor),
+                "mode {mode:?}: brief must NOT carry the deep exemplar:\n{brief}"
+            );
+            // Both tiers still carry the shared communistic few-shot (part-2 invariant).
+            assert!(
+                brief.contains("strictly communistic basis")
+                    && deep.contains("strictly communistic basis"),
+                "mode {mode:?}: both tiers keep the shared few-shot"
+            );
         }
     }
 
