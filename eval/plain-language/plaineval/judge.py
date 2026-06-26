@@ -19,12 +19,17 @@ import re
 from dataclasses import dataclass
 
 RUBRIC = (
-    "You are grading how PLAIN an explanation is, relative to a hard source passage. "
-    "Read the SOURCE, then the EXPLANATION. Answer each with one short reason:\n"
-    "(1) Would a reader who found the source hard understand the explanation with no dictionary?\n"
-    "(2) Does the explanation use simpler words than the source?\n"
+    "You are grading how PLAIN a tutor's answer is, relative to a hard source passage. "
+    "Read the SOURCE, then the ANSWER. Answer each with one short reason:\n"
+    "(1) Would a reader who found the source hard understand the answer with no dictionary?\n"
+    "(2) Does the answer use simpler words than the source?\n"
     "(3) Is it free of literary or academic jargon (no 'mock-academic', 'diction', 'register', 'solemnity')?\n"
-    "(4) Does the explanation itself need its own explanation?\n"
+    "(4) Does the answer itself need its own explanation?\n"
+    "IMPORTANT: the answer is sometimes a SOCRATIC QUESTION (or a few questions) meant to point the "
+    "reader back into the passage, NOT an explanation. A question is not supposed to explain anything, so "
+    "do NOT score it low for 'not explaining' or for leaving the meaning open. Judge a question ONLY on "
+    "whether the question itself is worded in plain, everyday language a reader could easily understand; a "
+    "clear, plainly-worded question is a 5 even though it answers nothing.\n"
     "Then give an overall plainness score 1-5 (5 = perfectly plain, no harder than the source; "
     "1 = harder than the source or needs its own explanation). Judge plainness only; ignore length. "
     'Output ONLY JSON: {"reasoning": str, "q1": bool, "q2": bool, "q3": bool, "q4": bool, "score": int}.'
@@ -39,7 +44,15 @@ class JudgeResult:
 
 
 def _user_prompt(source: str, explanation: str) -> str:
-    return f"{RUBRIC}\n\nSOURCE:\n{source}\n\nEXPLANATION:\n{explanation}\n"
+    # The field label MUST match the rubric's wording ("the ANSWER"): a mismatched
+    # "EXPLANATION:" label made the judge intermittently reply "I need the answer text
+    # first" and return no JSON (a parse-failure FP). The fenced ANSWER block also makes
+    # the boundary unambiguous.
+    return (
+        f"{RUBRIC}\n\nSOURCE PASSAGE:\n{source}\n\n"
+        f"TUTOR ANSWER TO GRADE (between the lines):\n"
+        f"---\n{explanation}\n---\n"
+    )
 
 
 def _parse(text: str) -> JudgeResult:
