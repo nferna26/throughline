@@ -62,8 +62,27 @@ _CUE_RE = re.compile(
 _SENT_SPLIT = re.compile(r"[.!?]+(?:\s+|$)")
 
 
+def _rarity_zipf(lemma: str) -> float:
+    """Zipf frequency, reading a plain word spelled archaically at its REAL frequency.
+
+    CORE-1169 part 2b fix #2 (gate bug): the live models echo archaic source spelling
+    ("thinke", "talke", "growe", "mixe", "develope"), which wordfreq scores as rare
+    (thinke 1.06) even though the modern word is among the commonest ("think" 6.08), so
+    the jargon gate flagged plain words. Fold accents and a single trailing archaic -e
+    and take the MAX zipf, so the archaic spelling is read at the modern word's
+    frequency. Deliberately ONLY the trailing -e (Nick's spec): the full archaic_key's
+    i/y and doubled-consonant folds produce non-words ("play" -> "plai") with spurious
+    low frequencies, so they are NOT used for the rarity check.
+    """
+    folded = lx.fold_accents(lemma).lower()
+    z = lx.zipf(folded)
+    if len(folded) > 3 and folded.endswith("e"):
+        z = max(z, lx.zipf(folded[:-1]))
+    return z
+
+
 def is_hard(lemma: str) -> bool:
-    z = lx.zipf(lemma)
+    z = _rarity_zipf(lemma)
     if z == 0.0:  # never seen by wordfreq -> treat as rare/hard
         return True
     if z < HARD_ZIPF:

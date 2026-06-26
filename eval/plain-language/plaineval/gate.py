@@ -65,8 +65,10 @@ class GateResult:
 
 
 def evaluate_gate(rows: list[Row], thresholds: dict | None = None) -> GateResult:
-    th = (thresholds or load_thresholds())["gate"]
-    jt = (thresholds or load_thresholds()).get("judge", {})
+    full = thresholds or load_thresholds()
+    th = full["gate"]
+    jt = full.get("judge", {})
+    rt = full.get("gate_rates")
 
     n = len(rows)
     deltas = [r.delta for r in rows]
@@ -74,21 +76,44 @@ def evaluate_gate(rows: list[Row], thresholds: dict | None = None) -> GateResult
     harder = [r for r in rows if r.harder_than_source]
     n_harder = len(harder)
     n_jargon = sum(r.n_jargon for r in rows)
+    n_jargon_items = sum(1 for r in rows if r.n_jargon > 0)
 
     per_cat: dict[str, int] = {}
+    cat_total: dict[str, int] = {}
+    for r in rows:
+        cat_total[r.category] = cat_total.get(r.category, 0) + 1
     for r in harder:
         per_cat[r.category] = per_cat.get(r.category, 0) + 1
-    worst_cat_over = [c for c, k in per_cat.items() if k > th["per_category_max_harder"]]
 
     conds: list[Condition] = []
-    c1 = n_harder <= th["max_harder_than_source"]
-    conds.append(Condition("zero_harder_than_source", c1, f"{n_harder} harder (allowed {th['max_harder_than_source']})"))
-    c2 = median_delta <= th["median_delta_max"]
-    conds.append(Condition("median_delta", c2, f"median {median_delta:.3f} (must be <= {th['median_delta_max']})"))
-    c3 = n_jargon <= th["max_undefined_hard_words"]
-    conds.append(Condition("zero_undefined_hard_words", c3, f"{n_jargon} undefined hard words (allowed {th['max_undefined_hard_words']})"))
-    c4 = len(worst_cat_over) == 0
-    conds.append(Condition("per_category", c4, f"over-limit categories: {worst_cat_over or 'none'}"))
+    use_rates = rt is not None and n >= rt.get("min_items_for_rate", 60)
+    if use_rates:
+        # CORE-1169 part 2b fix #3: on a large live run, gate on RATES set to the
+        # combined gate's calibrated false-positive rate (a few boundary items can never
+        # be zeroed, but a genuinely-plain prompt stays at or below the gate's own FP rate).
+        hr = n_harder / n
+        jr = n_jargon_items / n
+        worst_cat = max(
+            ((per_cat.get(c, 0) / cat_total[c], c) for c in cat_total), default=(0.0, "none")
+        )
+        c1 = hr <= rt["harder_rate_max"]
+        conds.append(Condition("harder_rate", c1, f"{n_harder}/{n} = {hr:.1%} (allowed <= {rt['harder_rate_max']:.0%})"))
+        c2 = median_delta <= rt.get("median_delta_max", th["median_delta_max"])
+        conds.append(Condition("median_delta", c2, f"median {median_delta:.3f} (must be <= {rt.get('median_delta_max', th['median_delta_max'])})"))
+        c3 = jr <= rt["jargon_rate_max"]
+        conds.append(Condition("jargon_rate", c3, f"{n_jargon_items}/{n} = {jr:.1%} (allowed <= {rt['jargon_rate_max']:.0%})"))
+        c4 = worst_cat[0] <= rt["per_category_harder_rate_max"]
+        conds.append(Condition("per_category_rate", c4, f"worst {worst_cat[1]} {worst_cat[0]:.1%} (allowed <= {rt['per_category_harder_rate_max']:.0%})"))
+    else:
+        worst_cat_over = [c for c, k in per_cat.items() if k > th["per_category_max_harder"]]
+        c1 = n_harder <= th["max_harder_than_source"]
+        conds.append(Condition("zero_harder_than_source", c1, f"{n_harder} harder (allowed {th['max_harder_than_source']})"))
+        c2 = median_delta <= th["median_delta_max"]
+        conds.append(Condition("median_delta", c2, f"median {median_delta:.3f} (must be <= {th['median_delta_max']})"))
+        c3 = n_jargon <= th["max_undefined_hard_words"]
+        conds.append(Condition("zero_undefined_hard_words", c3, f"{n_jargon} undefined hard words (allowed {th['max_undefined_hard_words']})"))
+        c4 = len(worst_cat_over) == 0
+        conds.append(Condition("per_category", c4, f"over-limit categories: {worst_cat_over or 'none'}"))
 
     # Judge: secondary / flag-only. Reported, but only contributes to the headline
     # via the lexical conditions above; a judge shortfall flags for human review.

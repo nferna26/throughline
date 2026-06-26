@@ -228,14 +228,21 @@ def test_combine_harder_is_lexical_or_judge_below_bar():
     assert v.harder is False
 
 
-def test_combine_jargon_is_lexical_or_judge_register():
-    # Lexical jargon fires.
+def test_combine_jargon_judge_register_or_lexical_unless_judge_clears():
+    # part 2b fix #1 (jargon axis): the judge's q3 may OVERRIDE a lexical jargon FP.
+    # Lexical jargon + judge says clean (q3 True) -> overridden to NOT jargon.
     v = RF.combine(lexical_harder=False, lexical_jargon=2, judge_score=5, judge_q3=True)
-    assert v.jargon is True and v.lexical_jargon is True
-    # Judge's "academic register present" (q3 False) is a jargon catch even with 0 lexical.
+    assert v.jargon is False, "a lexical jargon FP the judge calls clean must be overridden"
+    # Lexical jargon + no judge -> stays (no override without a judge).
+    v = RF.combine(lexical_harder=False, lexical_jargon=2, judge_score=None, judge_q3=None)
+    assert v.jargon is True
+    # Lexical jargon + judge says register present (q3 False) -> jargon (they agree).
+    v = RF.combine(lexical_harder=False, lexical_jargon=2, judge_score=3, judge_q3=False)
+    assert v.jargon is True
+    # Judge's "academic register present" is still a catch even with 0 lexical jargon.
     v = RF.combine(lexical_harder=False, lexical_jargon=0, judge_score=4, judge_q3=False)
     assert v.jargon is True and v.judge_register is True and v.lexical_jargon is False
-    # q3 True -> clean.
+    # Clean both ways -> not jargon.
     v = RF.combine(lexical_harder=False, lexical_jargon=0, judge_score=5, judge_q3=True)
     assert v.jargon is False
 
@@ -246,6 +253,34 @@ def test_combine_with_no_judge_is_the_lexical_gate_alone():
     assert v.harder is True and v.judge_harder is False and v.judge_register is False
     v = RF.combine(lexical_harder=False, lexical_jargon=0, judge_score=None, judge_q3=None)
     assert v.harder is False and v.jargon is False
+
+
+def test_combine_judge_overrides_borderline_lexical_fp(tmp_path=None):
+    # CORE-1169 part 2b fix #1: the judge may OVERRIDE a BORDERLINE lexical harder flag
+    # (0 < delta < override_delta_max) when confidently plain (score >= plain_floor).
+    # Borderline FP + confidently plain -> overridden to NOT harder.
+    v = RF.combine(lexical_harder=True, lexical_delta=0.2, lexical_jargon=0, judge_score=5, judge_q3=True)
+    assert v.harder is False, "borderline lexical FP + confident-plain judge must be overridden"
+    # A CLEARLY-harder lexical flag (delta beyond the gate) is NOT overridden, even if
+    # the judge says plain -- this is what keeps the calibration kappa at 0.688.
+    v = RF.combine(lexical_harder=True, lexical_delta=1.4, lexical_jargon=0, judge_score=5, judge_q3=True)
+    assert v.harder is True, "a large lexical delta must not be silenced by the judge"
+    # The judge still ADDS a register catch the lexical gate missed.
+    v = RF.combine(lexical_harder=False, lexical_delta=-0.3, lexical_jargon=0, judge_score=2, judge_q3=True)
+    assert v.harder is True and v.judge_harder is True
+    # Borderline but judge only mildly plain (below the plain_floor) -> not overridden.
+    v = RF.combine(lexical_harder=True, lexical_delta=0.2, lexical_jargon=0, judge_score=3, judge_q3=True)
+    assert v.harder is True
+
+
+def test_is_hard_folds_archaic_trailing_e_spelling():
+    # CORE-1169 part 2b fix #2: a plain word spelled archaically (the live models echo
+    # archaic sources) must be read at the modern word's frequency, not as rare jargon.
+    for w in ["thinke", "talke", "growe", "mixe", "fixe", "develope", "playe"]:
+        assert not jg.is_hard(w), f"{w} is a plain word spelled archaically; must not flag"
+    # Genuinely hard / archaic words still flag.
+    for w in ["solemnity", "litotes", "deontological", "apperception", "wend"]:
+        assert jg.is_hard(w), f"{w} is genuinely hard; must still flag"
 
 
 def test_judge_score_caching_avoids_recall(tmp_path):

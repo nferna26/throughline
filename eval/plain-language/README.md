@@ -154,6 +154,39 @@ python calibrate.py --ratings calibration/worksheet.csv --judge local:gpt-oss:20
 (PABAK = 2*raw_agreement - 1, reported alongside kappa because the base rate is skewed
 -- most items are "harder," which depresses kappa even at high agreement.)
 
+## Gate fixes after the part-2b live run (CORE-1169 part 2b)
+
+The first plain-prompt live run exposed that the combined gate, calibrated on *part-1*
+(jargon-heavy) output, false-positives on *plain* output: 74/960 lexical-harder items of
+which the judge itself rated 71 (96%) PLAIN, and a jargon count dominated by archaic
+spellings of common words. Nick authorized three gate fixes, with the rule that **GREEN
+counts only if the changed gate still agrees with the 20 labels at kappa >= 0.61**:
+
+1. **Fix #2 (clean bug):** `jargon.is_hard` now folds accents + a single trailing archaic
+   `-e` before the rarity check (`_rarity_zipf`), so a plain word the model spelled
+   archaically (`thinke`=think 6.08, `growe`=grow, `mixe`=mix) is read at the modern
+   word's frequency. Cut full-run jargon 117 -> 39 with **no change to the calibration
+   kappa** (0.688 / 0.875). Only the trailing -e, not the full `archaic_key` (whose i/y
+   fold makes non-words like `play`->`plai`).
+2. **Fix #1 (referee, REVERSES part-1c "judge only adds" on BOTH axes):** the judge may now
+   OVERRIDE a lexical false positive. On HARDER, only a *borderline* flag (`0 < delta < 0.5`)
+   when confidently plain (`score >= 4`) -- the 0.5 delta gate is the calibration boundary
+   that keeps **harder kappa at 0.688** (a blanket override drops it to 0.571). On JARGON,
+   the judge clears a lexical flag when it sees no academic register (`q3 True`) -- it
+   separates plain compounds (`countable`, `guessable`) from real jargon (`solemnity`)
+   better than rarity can, at **jargon kappa 0.762** (down from 0.875, still >= 0.61).
+3. **Fix #3 (rate thresholds, `gate_rates`):** absolute counts (`max_harder=0`, etc.) were
+   locked for the 20-item baseline and are infeasible on 960 cells. `evaluate_gate` now
+   gates on RATES for a large run, set to the combined gate's **calibrated 5% false-
+   positive rate** on the 20 labels (1 harder FP, 1 jargon FP) -- from the calibration,
+   not to make any run pass. median_delta_max (-0.5) is unchanged.
+
+`combined_gate.py` applies the fixed gate to a persisted run (judge cached, offline):
+
+```bash
+python combined_gate.py reports/run.json --judge local:gpt-oss:20b
+```
+
 ## What it measures
 
 For each passage x {brief, deep} x {model} it gets the tutor's explanation, then:

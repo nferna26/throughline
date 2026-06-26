@@ -250,6 +250,7 @@ def run(ratings: str, judge_spec: str, judge_bar: int = referee.DEFAULT_JUDGE_BA
         comb = [
             referee.combine(
                 lexical_harder=m.harder_than_source,
+                lexical_delta=m.delta,
                 lexical_jargon=len(m.jargon),
                 judge_score=scores[r["id"]]["score"],
                 judge_q3=scores[r["id"]]["q3"],

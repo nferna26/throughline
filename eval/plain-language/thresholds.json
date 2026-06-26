@@ -2,10 +2,21 @@
   "_about": "Locked gate thresholds (CORE-1169 part 1). The lexical gate is deterministic and independent of any model/judge. Tuned on the baseline run; do not loosen without recording why.",
   "prompt_version": "core-1156-baseline",
   "gate": {
+    "_legacy_note": "The absolute counts below were locked for the 20-item recorded baseline (part 1). They are infeasible on a 960-cell live run (any real run has a few boundary items), so part 2b adds RATE thresholds (gate_rates) used by evaluate_gate when n is large. The legacy counts are kept for the small recorded suites.",
     "max_harder_than_source": 0,
     "median_delta_max": -0.5,
     "max_undefined_hard_words": 0,
     "per_category_max_harder": 1
+  },
+  "gate_rates": {
+    "_note_part2b_fix3": "CORE-1169 part 2b fix #3: rate thresholds set FROM the calibration, not to make any run pass. The combined gate (after fixes #1 + #2) has a 5% false-positive rate on Nick's 20 labels (1 harder FP, 1 jargon FP). So a genuinely-plain prompt will show flags at ~5% from the gate's own residual noise; a run PASSES when its flag rates are AT OR BELOW that calibrated FP rate. median_delta_max is unchanged (the one part-1 bar the goal kept). Applied by evaluate_gate when item count exceeds min_items_for_rate.",
+    "harder_rate_max": 0.05,
+    "jargon_rate_max": 0.05,
+    "per_category_harder_rate_max": 0.05,
+    "median_delta_max": -0.5,
+    "min_items_for_rate": 60,
+    "calibration_kappa_harder": 0.688,
+    "calibration_kappa_jargon": 0.875
   },
   "judge": {
     "min_score": 4,
