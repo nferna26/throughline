@@ -187,6 +187,41 @@ counts only if the changed gate still agrees with the 20 labels at kappa >= 0.61
 python combined_gate.py reports/run.json --judge local:gpt-oss:20b
 ```
 
+## Reproducing + verifying the combined-gate GREEN (committed fixtures)
+
+The combined-gate GREEN is only trustworthy if it reproduces from committed state and its
+64 judge overrides are auditable. It does, via three committed fixtures under `fixtures/`:
+
+- `core_1169_run.json` -- the 960 recorded tutor outputs, each carrying its DETERMINISTIC
+  lexical scores (`lex_delta`, `lex_harder`, `lex_n_jargon`). Because the lexical scores are
+  committed, verification needs neither a model nor the license-bound AoA lexicon.
+- `core_1169_judge_verdicts.json` -- the judge verdicts, regenerated with the SHIPPING
+  rubric and **content-hashed keys** (`model|rubric_fp|id|text_sha`), each with the judge's
+  reasoning. A verdict is bound to the exact text and rubric it graded, so a stale or
+  wrong-text verdict can never be silently reused.
+- `core_1169_expected.json` -- the recorded gate result the fixtures must reproduce.
+
+```bash
+# Re-verify the gate deterministically from the committed fixtures (NO model, NO lexicon).
+# This is what CI runs; exit 0 means the committed evidence reproduces the recorded result.
+python verify_gate.py
+
+# Audit the judge overrides the green depends on (+ a human-review worksheet for Nick):
+python overrides_audit.py     # -> reports/core_1169_overrides_audit.md + _review_worksheet.md
+```
+
+Regenerating the fixtures (the one authorized model step; needs the local judge). Once
+committed, everything above is model-free and deterministic:
+
+```bash
+python regen_run_verdicts.py --run reports/run.json \
+    --out fixtures/core_1169_judge_verdicts.json --judge local:gpt-oss:20b
+python verify_gate.py --write-expected      # freeze whatever the honest result is
+```
+
+The `plain-language-gate` CI job (`.github/workflows/ci.yml`) runs the unit suite and
+`verify_gate.py`, so the gate is a protected check, not just documentation.
+
 ## What it measures
 
 For each passage x {brief, deep} x {model} it gets the tutor's explanation, then:

@@ -81,3 +81,34 @@ jobs:
       - name: Dependency audit (advisory, non-blocking)
         run: npm audit --audit-level=high
         continue-on-error: true
+
+  plain-language-gate:
+    # CORE-1169: the plain-language eval harness (Python) is a REQUIRED gate, not just
+    # documentation. It runs the harness unit suite AND re-verifies the combined-gate
+    # result over COMMITTED fixtures (the recorded 960-cell run + content-hashed judge
+    # verdicts) with NO model calls and NO lexicon dependency (the deterministic lexical
+    # scores are committed in the fixture). So "GREEN" reproduces from a named revision.
+    # Pure Python, no macOS dependency -> ubuntu is fine and fast.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: eval/plain-language
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install eval dependencies
+        # The harness runs fully without the license-bound AoA lexicon (it is optional and
+        # gitignored); the committed fixtures already carry the lexical scores, so the gate
+        # verification needs neither the lexicon nor any model.
+        run: pip install -r requirements.txt pytest
+
+      - name: Plain-language harness tests
+        run: python -m pytest tests/ -q
+
+      - name: Verify combined gate reproduces from committed fixtures (no model)
+        run: python verify_gate.py

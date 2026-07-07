@@ -1,0 +1,202 @@
+{
+  "gpt-oss:20b|25f3f75f|arch-09|historical|brief|anthropic|2fb8b6f139caf7f9": {
+    "score": 4,
+    "q1": true,
+    "q2": true,
+    "q3": true,
+    "q4": true,
+    "reasoning": "The answer is written in straightforward, everyday language and avoids the poetic complexity of the source. It uses simple words and clear phrasing, though it introduces a historical term that a reader might not know without context. Overall, it is much easier to understand than the source, but a brief explanation of the Licensing Order would help a reader unfamiliar with that reference.",
+    "_text_sha": "2fb8b6f139caf7f9",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|arch-09|vocabulary|brief|local|2cc29d7cb6753a50": {
+    "score": 4,
+    "q1": true,
+    "q2": true,
+    "q3": false,
+    "q4": false,
+    "reasoning": "The tutor\u2019s answer provides straightforward definitions that a reader who struggled with the source could grasp without a dictionary. It replaces terms like \u201creasonable creature\u201d with \u201chuman being endowed with rationality\u201d and \u201creason itself\u201d with \u201cfaculty of logic and judgment,\u201d which are generally simpler or at least clearer. However, it does include a few academic words such as \u201cfaculty\u201d and \u201cintellectual merit,\u201d so it isn\u2019t entirely free of jargon. The definitions are self\u2011explanatory and don\u2019t require further explanation.",
+    "_text_sha": "2cc29d7cb6753a50",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|arch-09|socratic|deep|anthropic|631f5db3f4aa6166": {
+    "score": 5,
+    "q1": true,
+    "q2": true,
+    "q3": true,
+    "q4": false,
+    "reasoning": "The answer uses everyday language, avoids archaic terms, and is clear enough for a reader who struggled with the source.",
+    "_text_sha": "631f5db3f4aa6166",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|arch-09|explain|deep|local|7ce3ca39e51ce75c": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The tutor\u2019s answer uses many complex, academic terms and long, elaborate sentences that would be difficult for a reader who already finds the source passage hard to understand. It does not simplify the language, contains literary and academic jargon, and would itself require explanation. Therefore it scores lowest on plainness.",
+    "_text_sha": "7ce3ca39e51ce75c",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|iron-02|historical|brief|anthropic|ee79b693ff91d905": {
+    "score": 5,
+    "q1": true,
+    "q2": true,
+    "q3": true,
+    "q4": false,
+    "reasoning": "The answer uses everyday language, avoids jargon, and explains the idea plainly, so a reader who struggled with the source would understand it without extra help.",
+    "_text_sha": "ee79b693ff91d905",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|iron-03|explain|brief|local|09a94ca854e3505b": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The tutor\u2019s answer uses more advanced vocabulary and literary terms than the source, making it harder for a reader who found the source difficult. It is not simpler, contains jargon, and may require further explanation.",
+    "_text_sha": "09a94ca854e3505b",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|iron-03|socratic|deep|anthropic|161cb3f1ea225714": {
+    "score": 5,
+    "q1": true,
+    "q2": true,
+    "q3": true,
+    "q4": true,
+    "reasoning": "The tutor\u2019s answer is phrased in everyday language that a reader who found the source passage somewhat archaic would still understand without a dictionary. It replaces the source\u2019s archaic terms with simpler, more common words and avoids any specialized academic or literary jargon. The questions are clear and self\u2011contained, requiring no further explanation. Overall, the answer is at least as plain as, and in fact simpler than, the source passage.",
+    "_text_sha": "161cb3f1ea225714",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|iron-03|vocabulary|deep|local|f6f468c7edebb620": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The tutor\u2019s answer is laden with complex vocabulary and academic phrasing that exceeds the simplicity of the source passage, making it harder to understand without additional explanation.",
+    "_text_sha": "f6f468c7edebb620",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|phil-02|historical|brief|anthropic|183826f210d3f4a2": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The answer introduces philosophical jargon and complex terms that are not present in the source, making it harder to understand for a reader who found the source difficult.",
+    "_text_sha": "183826f210d3f4a2",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|phil-06|explain|brief|local|98bda8338dc6b14f": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The answer uses many words and phrases (precarious, chasm, animalistic instinct, superior overman, profound difficulty, static goal, void) that are more complex than those in the source, making it harder for a reader who struggled with the source to understand without a dictionary. It is not simpler, contains literary/academic jargon, and would itself require explanation.",
+    "_text_sha": "98bda8338dc6b14f",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|phil-02|socratic|deep|anthropic|6fe65bb17d0e1b9a": {
+    "score": 5,
+    "q1": true,
+    "q2": true,
+    "q3": true,
+    "q4": false,
+    "reasoning": "The tutor\u2019s questions use everyday vocabulary, avoid the source\u2019s advanced term \u2018consummating\u2019, and are clear enough that a reader can grasp them without extra explanation.",
+    "_text_sha": "6fe65bb17d0e1b9a",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|phil-06|vocabulary|deep|local|6f981003ff7367d0": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The answer is far more complex than the source, using academic jargon and long sentences that would require a dictionary or further explanation for a reader who struggled with the source.",
+    "_text_sha": "6f981003ff7367d0",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|tech-01|historical|brief|anthropic|312665f97c979104": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "Answer uses more complex vocabulary and concepts than the source, likely requiring explanation.",
+    "_text_sha": "312665f97c979104",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|tech-01|vocabulary|brief|local|623a07a1f1db9f44": {
+    "score": 4,
+    "q1": true,
+    "q2": true,
+    "q3": true,
+    "q4": false,
+    "reasoning": "The answer uses everyday language that a reader who found the source challenging can understand without a dictionary. It replaces some of the source\u2019s phrasing with slightly simpler terms, avoids academic or literary jargon, and does not require further explanation. Overall it is quite plain, though a touch more verbose than the source, so a score of 4 is appropriate.",
+    "_text_sha": "623a07a1f1db9f44",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|tech-03|vocabulary|deep|anthropic|7851a492549f8cfa": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The tutor\u2019s answer uses many technical terms and complex phrasing that would be difficult for a reader who already found the source hard to understand. It does not simplify the source\u2019s language, contains academic jargon, and would likely require further explanation. Therefore it scores lowest on plainness.",
+    "_text_sha": "7851a492549f8cfa",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|tech-01|explain|deep|local|e888c44cfe7dbb36": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": false,
+    "reasoning": "The tutor answer uses more complex vocabulary and abstract concepts than the simple source passage, making it harder to understand without additional explanation. It contains academic jargon and does not simplify the ideas presented in the source. Therefore, it would not be comprehensible to a reader who found the source difficult, and it would likely require its own explanation. The overall plainness score is 1.",
+    "_text_sha": "e888c44cfe7dbb36",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|vict-12|historical|brief|anthropic|6b164c0d6cb36894": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The tutor\u2019s answer introduces academic terms such as \"socialist distinction,\" \"mere cooperation,\" \"abolition of private property,\" and references Marx, all of which are more complex than the source\u2019s simple phrasing. A reader who struggled with the source would likely need a dictionary to grasp the answer. The vocabulary is not simpler, contains jargon, and the explanation itself would benefit from further clarification. Thus the answer is not plain and scores low.",
+    "_text_sha": "6b164c0d6cb36894",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|vict-03|explain|brief|local|9d9f57590dec4138": {
+    "score": 4,
+    "q1": true,
+    "q2": false,
+    "q3": true,
+    "q4": true,
+    "reasoning": "The answer is largely understandable to a reader who found the source challenging, using everyday language with only a few slightly elevated terms. It does not simplify the vocabulary compared to the source, but it avoids heavy jargon and does not require further explanation.",
+    "_text_sha": "9d9f57590dec4138",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|vict-12|socratic|deep|anthropic|48ee9b39ad3141ce": {
+    "score": 5,
+    "q1": true,
+    "q2": true,
+    "q3": true,
+    "q4": false,
+    "reasoning": "The answer uses plain, everyday language, simpler words than the source, no jargon, and is self-explanatory.",
+    "_text_sha": "48ee9b39ad3141ce",
+    "_rubric_fp": "25f3f75f"
+  },
+  "gpt-oss:20b|25f3f75f|vict-03|vocabulary|deep|local|8e331384790ccb64": {
+    "score": 1,
+    "q1": false,
+    "q2": false,
+    "q3": false,
+    "q4": true,
+    "reasoning": "The answer uses many complex, academic terms and concepts that are not present in the source, making it harder to understand for someone who already finds the source challenging.",
+    "_text_sha": "8e331384790ccb64",
+    "_rubric_fp": "25f3f75f"
+  }
+}

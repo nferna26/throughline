@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "n_items": 960,
+  "n_harder": 21,
+  "median_delta": -0.66075,
+  "n_undefined_hard": 9,
+  "per_category_harder": {
+    "archaic": 2,
+    "irony": 7,
+    "philosophy": 2,
+    "technical": 2,
+    "victorian": 8
+  },
+  "n_override": 65,
+  "n_add": 14
+}

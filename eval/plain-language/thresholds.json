@@ -9,14 +9,16 @@
     "per_category_max_harder": 1
   },
   "gate_rates": {
-    "_note_part2b_fix3": "CORE-1169 part 2b fix #3: rate thresholds set FROM the calibration, not to make any run pass. The combined gate (after fixes #1 + #2) has a 5% false-positive rate on Nick's 20 labels (1 harder FP, 1 jargon FP). So a genuinely-plain prompt will show flags at ~5% from the gate's own residual noise; a run PASSES when its flag rates are AT OR BELOW that calibrated FP rate. median_delta_max is unchanged (the one part-1 bar the goal kept). Applied by evaluate_gate when item count exceeds min_items_for_rate.",
+    "_note_part2b_fix3": "CORE-1169 part 2b fix #3 + gate-reproducible audit: the 5% RATE bars are a conservative small-sample bound, not tuned to any run. On Nick's 20 human labels the SHIPPING-rubric combined gate has ZERO false positives on BOTH axes (harder and jargon), i.e. an FP rate at or below 5% with margin. (The earlier 1-FP/20 = 5% figure was the pre-Fix-#2 rubric; the 5% bars were kept as the conservative bound, not re-tightened to 0.) median_delta_max (-0.5) unchanged. calibration_kappa_* below are the SHIPPING-rubric agreement with the 20 labels, regenerated with the fixed judge and reproduced offline (0 model calls) from the committed content-hashed cache calibration/worksheet_verdicts_shipping.json via calibrate.py; they REPLACE the earlier unreproducible 1.000/0.886 recalibration claim. Applied by evaluate_gate when item count exceeds min_items_for_rate.",
     "harder_rate_max": 0.05,
     "jargon_rate_max": 0.05,
     "per_category_harder_rate_max": 0.05,
     "median_delta_max": -0.5,
     "min_items_for_rate": 60,
-    "calibration_kappa_harder": 0.688,
-    "calibration_kappa_jargon": 0.875
+    "calibration_kappa_harder": 0.857,
+    "calibration_kappa_jargon": 0.783,
+    "calibration_source": "calibration/worksheet_verdicts_shipping.json",
+    "calibration_combined_fp_per_20": {"harder": 0, "jargon": 0}
   },
   "judge": {
     "min_score": 4,

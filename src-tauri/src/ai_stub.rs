@@ -193,8 +193,10 @@ pub fn safety_preamble() -> String {
 /// CORE-1169: relative-difficulty directive for the four reading lenses. An
 /// explanation must read EASIER than the passage it explains; the deterministic
 /// lexical gate at `eval/plain-language/` is the regression referee. This text is
-/// static, so it rides in the stable cache prefix (before the fence) and never
-/// weakens the untrusted-content boundary. No em dashes (banned across the prompt).
+/// static and selection-independent, and sits before the fenced passage so it never
+/// weakens the untrusted-content boundary. (Note: it is NOT inside `cache_split`'s
+/// stable prefix; that split lands at the FIRST fence marker, which appears inside
+/// `safety_preamble`, so this block is on the volatile side.) No em dashes (banned).
 const PLAIN_DIRECTIVE: &str = "Plain-language rule (the most important rule; it governs HOW you write the \
 answer): Write for a curious 12-year-old who stops reading at the first word they do not know. Your \
 explanation must be easier to read than the passage you are explaining: use shorter, commoner words and \
@@ -316,9 +318,11 @@ pub fn build_prompt_with_depth(mode: StubMode, depth: Depth, ctx: &PromptContext
     let fenced = fenced_passage(&selection);
     let attr = attribution(ctx);
     let preamble = safety_preamble();
-    // CORE-1169: the plain-language block rides the stable cache prefix (before the
-    // fence) for all four reading lenses, brief and deep, cloud and local alike. The
-    // deep tier also gets the deep exemplar (part 2b lever 2), since it drifts hardest.
+    // CORE-1169: the plain-language block sits before the fenced passage for all four
+    // reading lenses, brief and deep, cloud and local alike. (It precedes the passage
+    // fence but lands on the volatile side of cache_split, whose boundary is the first
+    // fence marker inside safety_preamble, not the stable prefix.) The deep tier also
+    // gets the deep exemplar (part 2b lever 2), since it drifts hardest.
     let plain = match depth {
         Depth::Brief => format!("{PLAIN_DIRECTIVE}\n\n{PLAIN_FEWSHOT}"),
         Depth::Deep => format!("{PLAIN_DIRECTIVE}\n\n{PLAIN_FEWSHOT}\n\n{PLAIN_FEWSHOT_DEEP}"),

@@ -13,6 +13,7 @@ without it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -120,10 +121,22 @@ class OpenAICompatJudge(Judge):
         if self._key:
             headers["authorization"] = f"Bearer {self._key}"
         body = json.dumps(
-            {"model": self.model, "temperature": 0, "messages": [{"role": "user", "content": prompt}]}
+            {
+                "model": self.model,
+                "temperature": 0,
+                # The verdict is a short JSON object; a cap stops a local model that
+                # occasionally runs away (repetition loop) on a hard item from generating
+                # thousands of tokens and blowing the timeout. Ample for the JSON.
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": prompt}],
+            }
         ).encode()
         req = urllib.request.Request(f"{self.base_url}/chat/completions", data=body, headers=headers)
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        # The slowest deep-tier local generations run past a tight 120s cap; keep a
+        # generous default (overridable) so a genuine slow item completes rather than
+        # failing spuriously. Only affects live judging, never the cached/offline path.
+        timeout = int(os.environ.get("JUDGE_HTTP_TIMEOUT_SECONDS", "300"))
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.load(resp)
         return data["choices"][0]["message"]["content"]
 
@@ -152,20 +165,42 @@ def make_judge(spec: str) -> Judge | None:
     raise ValueError(f"unknown judge spec: {spec}")
 
 
-# ── Offline-reproducible scoring: cache judge verdicts keyed by (model, item) ────
+# ── Offline-reproducible scoring: cache verdicts keyed by (model, rubric, item, text) ──
+
+
+def verdict_text_sha(source: str, explanation: str) -> str:
+    """Content hash binding a verdict to the EXACT text it graded.
+
+    CORE-1169 audit fix: the cache was keyed by "<model>|<id>" alone, so if the text for
+    an id ever changed (a re-run with a different tutor output, or a cache shared across
+    runs) a stale verdict silently graded the WRONG text. Hashing (source + explanation)
+    into the key, and storing that hash in the verdict, makes that impossible: a changed
+    text is a new key, and a hit whose stored hash disagrees is re-judged, never trusted.
+    """
+    h = hashlib.sha256()
+    h.update(source.encode("utf-8"))
+    h.update(b"\x00")
+    h.update(explanation.encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
+# Fingerprint of the grading rubric. Folding it into the cache key means a rubric change
+# (e.g. the Fix #2 Socratic rewrite) never collides with old-rubric verdicts: they are
+# distinct keys, so a shipping-rubric run never silently reuses a stale-rubric verdict.
+# This is what lets a committed cache prove it is the shipping rubric's verdicts.
+RUBRIC_FP = hashlib.sha256(RUBRIC.encode("utf-8")).hexdigest()[:8]
 
 
 def score_items_cached(judge: Judge, items: list[dict], cache_path: str, *, model_label: str | None = None) -> dict:
     """Score items with the judge, persisting each verdict so re-runs need no model.
 
     items: dicts with 'id', 'source', 'explanation'. Returns {id: verdict-dict} where
-    verdict-dict is {score, q1..q4, reasoning}. The cache (a JSON file) is keyed by
-    "<model>|<id>", so the same worksheet calibrates offline forever once scored, and a
-    different judge model gets its own cache entries. Only missing items hit the model.
+    verdict-dict is {score, q1..q4, reasoning, _text_sha, _rubric_fp}. The cache (a JSON
+    file) is keyed by "<model>|<rubric_fp>|<id>|<text_sha>", so a verdict is bound to the
+    exact text AND rubric that produced it: a changed passage/answer or a changed rubric
+    is a cache MISS (re-judged), never a silent wrong-text hit. Only missing items call
+    the model, so the same worksheet/run calibrates offline forever once scored.
     """
-    import json
-    import os
-
     label = model_label or getattr(judge, "name", "judge")
     cache: dict = {}
     if os.path.exists(cache_path):
@@ -177,8 +212,12 @@ def score_items_cached(judge: Judge, items: list[dict], cache_path: str, *, mode
     changed = False
     out: dict = {}
     for it in items:
-        key = f"{label}|{it['id']}"
-        if key not in cache:
+        tsha = verdict_text_sha(it["source"], it["explanation"])
+        key = f"{label}|{RUBRIC_FP}|{it['id']}|{tsha}"
+        cached = cache.get(key)
+        # Defense in depth: a hit whose stored hash disagrees with the current text would
+        # mean grading the wrong text, so it is not trusted -> re-judge.
+        if cached is None or cached.get("_text_sha") != tsha:
             res = judge.score(it["source"], it["explanation"])
             cache[key] = {
                 "score": res.score,
@@ -187,6 +226,8 @@ def score_items_cached(judge: Judge, items: list[dict], cache_path: str, *, mode
                 "q3": res.raw.get("q3"),
                 "q4": res.raw.get("q4"),
                 "reasoning": res.reasoning,
+                "_text_sha": tsha,
+                "_rubric_fp": RUBRIC_FP,
             }
             changed = True
         out[it["id"]] = cache[key]

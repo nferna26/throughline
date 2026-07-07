@@ -499,3 +499,121 @@ def test_open_json_retries_transient_dns_failure(monkeypatch):
 
     assert be._open_json("request", attempts=2) == {"ok": True}
     assert calls == {"n": 2, "sleeps": [1]}
+
+
+def test_content_hashed_judge_cache_key_rejects_wrong_text():
+    # CORE-1169 audit fix (gap 2): a cached verdict is bound to the EXACT text it graded.
+    # A cache built for one (source, explanation) must NOT be reused for different text
+    # under the same id -> the changed text is a MISS (re-judged), never a silent wrong-text
+    # hit. A counting judge proves the second, differently-texted call is not served stale.
+    import tempfile
+
+    class _Counting(JU.Judge):
+        name = "fake"
+
+        def __init__(self):
+            self.calls = 0
+
+        def score(self, source, explanation):
+            self.calls += 1
+            return JU.JudgeResult(score=4, reasoning="ok", raw={"q1": True, "q2": True, "q3": True, "q4": False})
+
+    with tempfile.TemporaryDirectory() as d:
+        cache = os.path.join(d, "c.json")
+        j = _Counting()
+        JU.score_items_cached(j, [{"id": "x", "source": "s1", "explanation": "e1"}], cache, model_label="fake")
+        assert j.calls == 1
+        # Same id, SAME text -> served from disk (0 calls).
+        j2 = _Counting()
+        JU.score_items_cached(j2, [{"id": "x", "source": "s1", "explanation": "e1"}], cache, model_label="fake")
+        assert j2.calls == 0
+        # Same id, DIFFERENT text -> must re-judge, not serve the stale verdict.
+        j3 = _Counting()
+        JU.score_items_cached(j3, [{"id": "x", "source": "s1", "explanation": "DIFFERENT"}], cache, model_label="fake")
+        assert j3.calls == 1, "a changed answer under the same id must not be served a stale verdict"
+
+
+def test_core_1169_gate_reproduces_from_committed_fixtures():
+    # CORE-1169 (gaps 1 + 3): the combined-gate result must reproduce DETERMINISTICALLY from
+    # committed fixtures (recorded run + content-hashed judge verdicts) with NO model calls.
+    # This is the regression that keeps "green" an auditable, reproducible gate result.
+    import json as _json
+
+    run = os.path.join(ROOT, "fixtures", "core_1169_run.json")
+    verdicts = os.path.join(ROOT, "fixtures", "core_1169_judge_verdicts.json")
+    expected = os.path.join(ROOT, "fixtures", "core_1169_expected.json")
+    if not all(os.path.exists(p) for p in (run, verdicts, expected)):
+        import pytest
+
+        pytest.skip("CORE-1169 fixtures not present (run regen_run_verdicts.py + verify_gate.py --write-expected)")
+
+    import verify_gate
+
+    got = verify_gate.compute_result(run, verdicts)
+    want = _json.load(open(expected, encoding="utf-8"))
+    for k in ("passed", "n_items", "n_harder", "median_delta", "n_undefined_hard",
+              "per_category_harder", "n_override", "n_add"):
+        assert got[k] == want[k], f"{k}: recomputed {got[k]!r} != committed {want[k]!r}"
+
+
+def test_shipping_rubric_kappa_reproduces_from_committed_worksheet_cache():
+    # CORE-1169 gap 4: the shipping-rubric combined-gate kappa recorded in thresholds.json
+    # must reproduce from the COMMITTED content-hashed worksheet verdict cache with NO model
+    # calls, and clear the 0.61 bar on BOTH axes. The lexical half needs the license-bound
+    # AoA lexicon (gitignored), like all lexical scoring, so this skips cleanly without it.
+    import csv as _csv
+    import json as _json
+
+    from plaineval import lexicons as lx
+
+    if not lx.aoa_available():
+        import pytest
+
+        pytest.skip("AoA lexicon absent; the lexical half of the kappa is not reproducible here")
+    from sklearn.metrics import cohen_kappa_score
+
+    worksheet = os.path.join(ROOT, "calibration", "worksheet.csv")
+    cache = os.path.join(ROOT, "calibration", "worksheet_verdicts_shipping.json")
+    thresholds = os.path.join(ROOT, "thresholds.json")
+    if not (os.path.exists(worksheet) and os.path.exists(cache)):
+        import pytest
+
+        pytest.skip("worksheet fixtures not present")
+
+    class _CacheOnly(JU.Judge):
+        name = "gpt-oss:20b"
+
+        def score(self, source, explanation):
+            raise AssertionError("verdict missing from committed worksheet cache (no model in tests)")
+
+    rows = [r for r in _csv.DictReader(open(worksheet, encoding="utf-8")) if (r.get("human_harder") or "").strip()]
+    scores = JU.score_items_cached(
+        _CacheOnly(),
+        [{"id": r["id"], "source": r["source"], "explanation": r["explanation"]} for r in rows],
+        cache,
+        model_label="gpt-oss:20b",
+    )
+    human_h, comb_h, human_j, comb_j = [], [], [], []
+    for r in rows:
+        m = M.evaluate(r["source"], r["explanation"])
+        s = scores[r["id"]]
+        c = RF.combine(
+            lexical_harder=m.harder_than_source,
+            lexical_delta=m.delta,
+            lexical_jargon=len(m.jargon),
+            judge_score=s["score"],
+            judge_q3=s["q3"],
+        )
+        human_h.append(int(r["human_harder"]))
+        comb_h.append(1 if c.harder else 0)
+        if (r.get("human_has_undefined_hard_word") or "").strip():
+            human_j.append(int(r["human_has_undefined_hard_word"]))
+            comb_j.append(1 if c.jargon else 0)
+
+    kh = float(cohen_kappa_score(human_h, comb_h))
+    kj = float(cohen_kappa_score(human_j, comb_j))
+    assert kh >= 0.61, f"shipping-rubric harder kappa {kh:.3f} < 0.61"
+    assert kj >= 0.61, f"shipping-rubric jargon kappa {kj:.3f} < 0.61"
+    rec = _json.load(open(thresholds, encoding="utf-8"))["gate_rates"]
+    assert abs(kh - rec["calibration_kappa_harder"]) < 0.005, f"harder kappa {kh:.3f} != recorded {rec['calibration_kappa_harder']}"
+    assert abs(kj - rec["calibration_kappa_jargon"]) < 0.005, f"jargon kappa {kj:.3f} != recorded {rec['calibration_kappa_jargon']}"
