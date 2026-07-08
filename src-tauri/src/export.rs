@@ -291,12 +291,7 @@ const OWNED_FRONTMATTER_KEYS: &[&str] = &[
 /// Render the flat, app-owned frontmatter block (no nested YAML). `now` is the
 /// ISO timestamp the caller supplies (deterministic in tests — never `now()`
 /// inside here). `extra` carries user-added keys to preserve verbatim, in order.
-fn render_frontmatter(
-    book: &Book,
-    note_count: usize,
-    now: &str,
-    extra: &[String],
-) -> String {
+fn render_frontmatter(book: &Book, note_count: usize, now: &str, extra: &[String]) -> String {
     let mut out = String::new();
     out.push_str("---\n");
     out.push_str(&format!("title: {}\n", yaml_escape(&book.title)));
@@ -352,9 +347,8 @@ fn parse_existing_frontmatter(existing: &str) -> (Vec<String>, usize) {
     let mut extra: Vec<String> = Vec::new();
     let mut keep_current = false;
     for line in block.lines() {
-        let is_continuation = line.starts_with(' ')
-            || line.starts_with('\t')
-            || line.trim_start().starts_with("- ");
+        let is_continuation =
+            line.starts_with(' ') || line.starts_with('\t') || line.trim_start().starts_with("- ");
         if is_continuation {
             if keep_current {
                 extra.push(line.to_string());
@@ -367,7 +361,10 @@ fn parse_existing_frontmatter(existing: &str) -> (Vec<String>, usize) {
             continue;
         }
         // A top-level key line: own it (drop) or keep it verbatim.
-        let key = trimmed.split_once(':').map(|(k, _)| k.trim()).unwrap_or(trimmed.trim());
+        let key = trimmed
+            .split_once(':')
+            .map(|(k, _)| k.trim())
+            .unwrap_or(trimmed.trim());
         if OWNED_FRONTMATTER_KEYS.contains(&key) {
             keep_current = false;
         } else {
@@ -1061,7 +1058,14 @@ mod tests {
     fn reexport_preserves_multiline_list_frontmatter() {
         let conn = migrated_with_book();
         insert_note(
-            &conn, "n1", "Takeaway", "char:120", Some("Book I"), "first body", None, None,
+            &conn,
+            "n1",
+            "Takeaway",
+            "char:120",
+            Some("Book I"),
+            "first body",
+            None,
+            None,
         );
         let root = std::env::temp_dir().join(format!("tl-litnote-mlfm-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
@@ -1076,11 +1080,15 @@ mod tests {
         );
         std::fs::write(&path, &edited).unwrap();
 
-        conn.execute("UPDATE notes SET body='UPDATED' WHERE id='n1'", []).unwrap();
+        conn.execute("UPDATE notes SET body='UPDATED' WHERE id='n1'", [])
+            .unwrap();
         export_book_literature_note(&conn, &root, "b1", "2026-06-11T00:00:00Z").unwrap();
         let after = std::fs::read_to_string(&path).unwrap();
 
-        assert!(after.contains("tags:"), "the tags key must survive:\n{after}");
+        assert!(
+            after.contains("tags:"),
+            "the tags key must survive:\n{after}"
+        );
         assert!(
             after.contains("- reading") && after.contains("- augustine"),
             "every list item under tags: must survive re-export verbatim:\n{after}"
@@ -1099,7 +1107,10 @@ mod tests {
     #[test]
     fn find_heading_requires_a_whole_line_not_a_prefix() {
         // A longer heading must NOT be matched by a shorter prefix heading.
-        assert_eq!(find_heading("intro\n## Book II\nnotes\n", "## Book I"), None);
+        assert_eq!(
+            find_heading("intro\n## Book II\nnotes\n", "## Book I"),
+            None
+        );
         assert_eq!(find_heading("## Book II\nx", "## Book I"), None);
         // The exact heading still matches, mid-body and at start-of-file.
         assert!(find_heading("intro\n## Book I\nnotes\n", "## Book I").is_some());

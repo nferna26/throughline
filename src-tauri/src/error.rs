@@ -288,13 +288,16 @@ mod tests {
     /// stay intact so kind-branching consumers are unaffected.
     #[test]
     fn consent_and_cap_errors_serialize_a_message_backstop() {
-        let consent = serde_json::to_value(AppError::needs_cloud_consent("ai.example.com")).unwrap();
+        let consent =
+            serde_json::to_value(AppError::needs_cloud_consent("ai.example.com")).unwrap();
         assert_eq!(consent["kind"], "NeedsCloudConsent");
         assert_eq!(consent["host"], "ai.example.com");
         assert!(consent["message"].as_str().is_some_and(|m| !m.is_empty()));
 
         let cap = serde_json::to_value(AppError::cap_exhausted()).unwrap();
         assert_eq!(cap["kind"], "CapExhausted");
-        assert!(cap["message"].as_str().is_some_and(|m| m.contains("Throughline AI")));
+        assert!(cap["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("Throughline AI")));
     }
 }

@@ -541,14 +541,10 @@ async fn download_and_import(
     // Gutenberg/Gutendex host is ever fetched, even though we produced this URL
     // ourselves (the frontend round-trips it back as untrusted input).
     let validated = validate_download_url(url)?;
-    let resp = client
-        .get(validated)
-        .send()
-        .await
-        .map_err(|e| {
-            tracing::warn!("book download request failed: {e}");
-            AppError::io(DOWNLOAD_FAILED_MSG)
-        })?;
+    let resp = client.get(validated).send().await.map_err(|e| {
+        tracing::warn!("book download request failed: {e}");
+        AppError::io(DOWNLOAD_FAILED_MSG)
+    })?;
     if !resp.status().is_success() {
         return Err(AppError::io(format!("download returned {}", resp.status())));
     }
@@ -890,10 +886,15 @@ mod tests {
     fn download_failure_copy_never_leaks_the_source_brand_or_url() {
         let m = DOWNLOAD_FAILED_MSG.to_ascii_lowercase();
         for needle in ["gutenberg", "gutendex", "http", "://", "www", ".org"] {
-            assert!(!m.contains(needle), "reader copy leaks '{needle}': {DOWNLOAD_FAILED_MSG}");
+            assert!(
+                !m.contains(needle),
+                "reader copy leaks '{needle}': {DOWNLOAD_FAILED_MSG}"
+            );
         }
         // House style: no em/en dashes in user-facing copy.
-        assert!(!DOWNLOAD_FAILED_MSG.contains('\u{2014}') && !DOWNLOAD_FAILED_MSG.contains('\u{2013}'));
+        assert!(
+            !DOWNLOAD_FAILED_MSG.contains('\u{2014}') && !DOWNLOAD_FAILED_MSG.contains('\u{2013}')
+        );
         assert!(!DOWNLOAD_FAILED_MSG.trim().is_empty());
     }
 }

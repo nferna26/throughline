@@ -1865,7 +1865,10 @@ mod tests {
         // 429 throttle + 5xx transient => retry copy, never "invalid".
         for s in [429u16, 500, 502, 503] {
             let m = activation_error_message(s).to_ascii_lowercase();
-            assert!(!m.contains("invalid"), "status {s} must not brand the code invalid");
+            assert!(
+                !m.contains("invalid"),
+                "status {s} must not brand the code invalid"
+            );
             assert!(
                 m.contains("try again") || m.contains("wait"),
                 "status {s} must invite a retry: {m}"

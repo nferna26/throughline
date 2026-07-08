@@ -577,7 +577,10 @@ mod tests {
         // s1: closed at the scroll save's timestamp, minutes = 23 (never wall-clock-now).
         let (ended1, mins1) = row("s1");
         assert!(
-            ended1.as_deref().unwrap_or("").starts_with("2026-07-07T10:23:10"),
+            ended1
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("2026-07-07T10:23:10"),
             "ended_at must be the last reading evidence, got {ended1:?}"
         );
         assert_eq!(mins1, Some(23));
