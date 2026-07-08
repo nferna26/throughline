@@ -295,7 +295,7 @@ fn render_frontmatter(
     book: &Book,
     note_count: usize,
     now: &str,
-    extra: &[(String, String)],
+    extra: &[String],
 ) -> String {
     let mut out = String::new();
     out.push_str("---\n");
@@ -311,9 +311,11 @@ fn render_frontmatter(
     out.push_str(&format!("throughline_book_id: {}\n", book.id));
     out.push_str(&format!("note_count: {}\n", note_count));
     out.push_str(&format!("last_export: {}\n", now));
-    // Preserve user-added keys verbatim (those the app doesn't own).
-    for (k, v) in extra {
-        out.push_str(&format!("{k}: {v}\n"));
+    // Preserve user-added frontmatter verbatim, one raw line per entry (this includes
+    // list-item and other continuation lines, not just `key: value` lines).
+    for line in extra {
+        out.push_str(line);
+        out.push('\n');
     }
     out.push_str("---\n");
     out
@@ -323,7 +325,7 @@ fn render_frontmatter(
 /// user-added key/value lines (those NOT in `OWNED_FRONTMATTER_KEYS`) in order,
 /// plus the byte index in `existing` just AFTER the closing `---\n`. Returns
 /// `(extra_keys, body_start)`. When there's no frontmatter, `body_start` is 0.
-fn parse_existing_frontmatter(existing: &str) -> (Vec<(String, String)>, usize) {
+fn parse_existing_frontmatter(existing: &str) -> (Vec<String>, usize) {
     if !existing.starts_with("---\n") {
         return (Vec::new(), 0);
     }
@@ -341,18 +343,36 @@ fn parse_existing_frontmatter(existing: &str) -> (Vec<(String, String)>, usize) 
         body_start += 1;
     }
 
-    let mut extra = Vec::new();
+    // Keep the RAW lines of every non-owned key, verbatim, INCLUDING its continuation
+    // lines (indented block scalars and `- item` list entries). N-1: the previous parser
+    // kept only `key: value` colon lines and re-emitted them flat, which silently dropped
+    // a reader's `tags:` / `aliases:` list items on every re-export. A top-level key line
+    // (column 0, non-blank) starts a new block; indented or list-item lines continue the
+    // current key's block and ride along with it (or are dropped with an owned key).
+    let mut extra: Vec<String> = Vec::new();
+    let mut keep_current = false;
     for line in block.lines() {
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
+        let is_continuation = line.starts_with(' ')
+            || line.starts_with('\t')
+            || line.trim_start().starts_with("- ");
+        if is_continuation {
+            if keep_current {
+                extra.push(line.to_string());
+            }
             continue;
         }
-        if let Some(colon) = trimmed.find(':') {
-            let key = trimmed[..colon].trim().to_string();
-            let val = trimmed[colon + 1..].trim().to_string();
-            if !OWNED_FRONTMATTER_KEYS.contains(&key.as_str()) {
-                extra.push((key, val));
-            }
+        let trimmed = line.trim_end();
+        if trimmed.trim().is_empty() {
+            keep_current = false;
+            continue;
+        }
+        // A top-level key line: own it (drop) or keep it verbatim.
+        let key = trimmed.split_once(':').map(|(k, _)| k.trim()).unwrap_or(trimmed.trim());
+        if OWNED_FRONTMATTER_KEYS.contains(&key) {
+            keep_current = false;
+        } else {
+            keep_current = true;
+            extra.push(line.to_string());
         }
     }
     (extra, body_start)
@@ -1019,6 +1039,45 @@ mod tests {
         assert!(!after.contains("first body"), "old fence content replaced");
         // App-owned key refreshed.
         assert!(after.contains("last_export: 2026-06-11T00:00:00Z"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Data-loss regression (N-1): a reader's multiline / list frontmatter (the most
+    /// common Obsidian customization, `tags:` with `- item` lines) must survive re-export
+    /// verbatim. The old parser kept only colon lines and re-emitted them flat, so every
+    /// `- item` continuation line was silently dropped and `tags:` was left value-less.
+    #[test]
+    fn reexport_preserves_multiline_list_frontmatter() {
+        let conn = migrated_with_book();
+        insert_note(
+            &conn, "n1", "Takeaway", "char:120", Some("Book I"), "first body", None, None,
+        );
+        let root = std::env::temp_dir().join(format!("tl-litnote-mlfm-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        let path = export_book_literature_note(&conn, &root, "b1", NOW).unwrap();
+
+        // Reader adds a YAML list block and a flow-style list, above the owned keys.
+        let original = std::fs::read_to_string(&path).unwrap();
+        let edited = original.replace(
+            "---\ntitle:",
+            "---\ntags:\n  - reading\n  - augustine\naliases: [Conf, Confessiones]\ntitle:",
+        );
+        std::fs::write(&path, &edited).unwrap();
+
+        conn.execute("UPDATE notes SET body='UPDATED' WHERE id='n1'", []).unwrap();
+        export_book_literature_note(&conn, &root, "b1", "2026-06-11T00:00:00Z").unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+
+        assert!(after.contains("tags:"), "the tags key must survive:\n{after}");
+        assert!(
+            after.contains("- reading") && after.contains("- augustine"),
+            "every list item under tags: must survive re-export verbatim:\n{after}"
+        );
+        assert!(
+            after.contains("aliases: [Conf, Confessiones]"),
+            "flow-style list value must survive:\n{after}"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
