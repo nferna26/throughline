@@ -11,6 +11,7 @@ pub mod ai;
 pub mod books;
 pub mod db_helpers;
 pub mod discover;
+pub mod feedback;
 pub mod notes;
 pub mod plans;
 pub mod sessions;

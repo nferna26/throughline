@@ -325,6 +325,8 @@ pub fn run() {
             commands::settings_cmds::cmd_consume_update_relaunch_focus,
             commands::settings_cmds::cmd_focus_main_window_after_update_relaunch,
             commands::settings_cmds::cmd_get_settings,
+            commands::feedback::cmd_feedback_diagnostics,
+            commands::feedback::cmd_send_feedback,
             commands::settings_cmds::cmd_set_export_path,
             commands::settings_cmds::cmd_check_export_path,
             commands::plans::cmd_list_plans_for_book,

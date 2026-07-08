@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import ModelSelect from "../components/ModelSelect";
 import CodexLogin from "../components/CodexLogin";
+import FeedbackPanel from "../components/FeedbackPanel";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
 import {
   AI_PROVIDERS,
@@ -116,6 +117,8 @@ const KEY_PROVIDERS = AI_PROVIDERS.filter((p) => p.id === "anthropic" || p.id ==
 
 export default function Settings() {
   const [dto, setDto] = useState<SettingsDto | null>(null);
+  // CORE-1094: the feedback panel opens from the About section.
+  const [showFeedback, setShowFeedback] = useState(false);
 
   // Reading pace — the global sitting size the first-journey pace step sets, also
   // editable here ("changeable anytime"). Reading terms only on screen; the
@@ -1045,6 +1048,30 @@ export default function Settings() {
                 </span>
               </div>
             </div>
+          </div>
+
+          {/* CORE-1094: unobtrusive feedback affordance. The panel shows exactly what will
+              leave the Mac before Send; all egress is built in Rust (cmd_send_feedback). */}
+          <div className="card">
+            <div className="row row-flex">
+              <div className="row-main">
+                <p className="row-title">Send feedback</p>
+                <p className="row-desc">
+                  A note goes straight to the people building Throughline. You'll see exactly
+                  what leaves your Mac before it does.
+                </p>
+              </div>
+              <div className="row-control">
+                {!showFeedback && (
+                  <button className="btn" onClick={() => setShowFeedback(true)}>
+                    Send feedback
+                  </button>
+                )}
+              </div>
+            </div>
+            {showFeedback && (
+              <FeedbackPanel mode={mode} onClose={() => setShowFeedback(false)} />
+            )}
           </div>
         </section>
 

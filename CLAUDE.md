@@ -49,6 +49,16 @@ export) only when the reader explicitly saves it. While local-only mode is ON, n
 endpoints are refused at the call site — that enforcement point is load-bearing; treat any
 change to it as a security change.
 
+**2b. Feedback is the single deliberate exception to local-only (CORE-1094).** `cmd_send_feedback`
+(`src-tauri/src/commands/feedback.rs`) posts to the relay's `/v1/feedback` in ALL modes,
+including local-only. This one exemption is safe because the send is user-initiated (a Send
+tap), fully previewed (the panel shows the exact values first), and carries ONLY an allowlisted
+payload built in Rust: the typed message, 3 diagnostics (app version, macOS version, tutor
+mode), and an optional reply email. It NEVER carries reading content, book metadata, identity,
+or the license token. It does NOT relax the reading/tutor gate: it is a SEPARATE path that never
+calls `validate_base_url`, so invariant 2's local-only refusal is untouched. Do not route any
+other egress through this path, and keep the payload an allowlist (never an echo).
+
 **2a. Cloud-consent attaches to first egress, not to entitlement (CORE-1177).** The
 cloud-consent flag (`KEY_FIRST_CLOUD_CONFIRMED_AT`) is written ONLY by
 `cmd_confirm_cloud_send`, i.e. an explicit in-app user confirmation shown alongside the exact
