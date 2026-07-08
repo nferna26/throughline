@@ -811,7 +811,10 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
     let bytes = fs::read(src_path).with_context(|| format!("read {:?}", src_path))?;
     let raw = decode_text_to_utf8(&bytes);
     let (meta_title, meta_author, body_start) = extract_gutenberg_meta(&raw);
-    let body_end = body_end_offset(&raw);
+    // N-3: a malformed/hostile file can have its END marker before its START marker, so
+    // body_end may be < body_start; clamp so the slice never panics. A reversed pair
+    // yields an empty body, which the empty-body guard below refuses cleanly.
+    let body_end = body_end_offset(&raw).max(body_start);
     let body = &raw[body_start..body_end];
 
     // #5 (CORE-1156): refuse an empty/whitespace-only book BEFORE any book_dir
@@ -1324,6 +1327,29 @@ mod tests {
         assert!(
             msg.contains("100 MB"),
             "error must name the limit in plain language, got: {msg}"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // N-3: a malformed / hostile .txt whose END marker precedes its START marker gives
+    // body_start > body_end; the raw slice must NOT panic inside the #[tauri::command].
+    #[test]
+    fn import_txt_with_end_marker_before_start_does_not_panic() {
+        let _g = paths::lock_env_for_test();
+        let dir = std::env::temp_dir().join(format!("tl-txt-badmarkers-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let bad = dir.join("reversed.txt");
+        // END appears BEFORE START (truncated / concatenated / hostile file).
+        fs::write(
+            &bad,
+            "*** END OF THE PROJECT GUTENBERG EBOOK X ***\n\nsome text\n\n\
+             *** START OF THE PROJECT GUTENBERG EBOOK X ***\n",
+        )
+        .unwrap();
+        // Graceful Err, never a panic on the reversed slice.
+        assert!(
+            import_txt(&bad).is_err(),
+            "reversed START/END markers must be refused, not panic"
         );
         fs::remove_dir_all(&dir).ok();
     }
