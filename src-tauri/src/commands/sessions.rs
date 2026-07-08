@@ -15,6 +15,20 @@ use crate::error::AppError;
 use crate::models::{Book, ReadingSession};
 use crate::{export, log, sittings};
 
+/// The single parser for the sessions-side durable reading offset (invariant 4a:
+/// bare-digit UTF-8 byte offset dialect). A non-numeric locator is a LOUD failure —
+/// logged at error level and returned as Err — never a silent no-op. This is the
+/// exact Stage-2 case law the invariant exists for: the old reader sent "char:N"
+/// where the backend parsed bare digits, and every test passed while reading_position
+/// never advanced. The frontend is pinned to bare digits, so this only fires on a
+/// regression, which is precisely when it must be loud.
+pub(crate) fn parse_reading_offset(locator: &str) -> Result<i64, AppError> {
+    locator.trim().parse::<i64>().map_err(|_| {
+        tracing::error!("non-numeric reading locator (invariant 4a violation): {locator:?}");
+        AppError::validation("internal: reading position was not a plain offset")
+    })
+}
+
 #[tauri::command]
 pub fn cmd_save_section_progress(
     book_id: String,
@@ -25,6 +39,9 @@ pub fn cmd_save_section_progress(
 ) -> Result<(), AppError> {
     let conn = state.0.lock()?;
     let now = Utc::now().to_rfc3339();
+    // 4a: validate the locator LOUDLY before storing it or advancing — a bad locator
+    // here is a real save failure, not a silently-dropped position update.
+    let global = parse_reading_offset(&locator)?;
     conn.execute(
         "INSERT INTO section_progress (book_id, section_id, completed_at, last_locator, last_percent, updated_at)
          VALUES (?1, ?2, NULL, ?3, ?4, ?5)
@@ -36,10 +53,8 @@ pub fn cmd_save_section_progress(
     )?;
     // Advance the durable, position-based progress (furthest is MAX-clamped,
     // last_read is exact). `locator` is a global body offset.
-    if let Ok(global) = locator.trim().parse::<i64>() {
-        let sections = list_sections(&conn, &book_id)?;
-        let _ = sittings::record_progress(&conn, &book_id, &sections, global, &now);
-    }
+    let sections = list_sections(&conn, &book_id)?;
+    let _ = sittings::record_progress(&conn, &book_id, &sections, global, &now);
     Ok(())
 }
 
@@ -180,9 +195,12 @@ pub fn cmd_end_session(
 
     // Advance the durable, position-based progress to where the session ended, so
     // tomorrow's Today resumes at the next sitting. `end_locator` is a global offset.
+    // 4a: a non-numeric end_locator is logged LOUDLY by parse_reading_offset (not a
+    // silent skip); the advance is skipped but session-end must still complete, so we
+    // do not propagate here (unlike cmd_save_section_progress).
     if let Some(global) = end_locator
         .as_deref()
-        .and_then(|l| l.trim().parse::<i64>().ok())
+        .and_then(|l| parse_reading_offset(l).ok())
     {
         if let Ok(book_id) = conn.query_row(
             "SELECT book_id FROM reading_sessions WHERE id = ?1",
@@ -479,6 +497,45 @@ mod tests {
             "active",
             "a let-go (soft-deleted) plan must not be rewritten"
         );
+    }
+
+    /// P1-6 / invariant 4a: the sessions-side locator parser accepts only the
+    /// bare-digit dialect and fails LOUDLY (Err) on anything else — never the old
+    /// silent no-op that let the Stage-2 "char:N" mismatch pass every test while
+    /// reading_position never advanced.
+    #[test]
+    fn parse_reading_offset_is_loud_on_non_numeric() {
+        assert_eq!(parse_reading_offset("123").unwrap(), 123);
+        assert_eq!(parse_reading_offset("  4200 ").unwrap(), 4200);
+        assert_eq!(parse_reading_offset("-1").unwrap(), -1);
+        // The exact case law: a "char:N" dialect must be an error, not a silent skip.
+        assert!(parse_reading_offset("char:5").is_err());
+        assert!(parse_reading_offset("42%").is_err());
+        assert!(parse_reading_offset("percent:50").is_err());
+        assert!(parse_reading_offset("").is_err());
+    }
+
+    /// P1-6: cmd_save_section_progress must reject (loudly) a non-bare-digit locator
+    /// rather than silently store it and skip the position advance.
+    #[test]
+    fn save_section_progress_rejects_a_non_bare_digit_locator() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO books (id,title,author,source_type,source_path,source_sha256,created_at,last_opened_at)
+               VALUES ('b1','T',NULL,'txt','/x','sha','2026-01-01',NULL);
+             INSERT INTO book_sections (id,book_id,label,start_locator,sort_order,assignable)
+               VALUES ('sec1','b1','S1','0',0,1);",
+        )
+        .unwrap();
+        // Mirror the command body without the Tauri State wrapper.
+        let bad = "char:5";
+        assert!(parse_reading_offset(bad).is_err());
+        // And a good bare-digit locator advances position.
+        let now = "2026-07-07T00:00:00Z";
+        let g = parse_reading_offset("100").unwrap();
+        let sections = list_sections(&conn, "b1").unwrap();
+        assert!(sittings::record_progress(&conn, "b1", &sections, g, now).is_ok());
     }
 
     /// P0 quit-flush safety net: a session a previous run left open (Cmd+Q, crash)
