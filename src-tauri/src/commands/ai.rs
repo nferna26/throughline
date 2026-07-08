@@ -764,6 +764,21 @@ fn company_http() -> Result<reqwest::Client, AppError> {
 const COMPANY_UNREACHABLE_MSG: &str =
     "Couldn't reach Throughline AI — check that this Mac is online, then try again.";
 
+/// Map a non-2xx activation status to reader copy (P1-4). A valid, portable code can
+/// hit the multi-device throttle (429, retry_after up to a day) or a transient cap-DO
+/// hiccup (503/5xx); telling a paying reader their good code is "invalid" at the $20
+/// first-run moment sends them to support instead of back for a retry. Only a genuine
+/// 4xx no (invalid / expired / already used / revoked) is permanent.
+fn activation_error_message(status: u16) -> &'static str {
+    if status == 429 {
+        "Too many activations recently. Please wait a little while, then try again."
+    } else if (500..600).contains(&status) {
+        "Throughline AI is briefly unavailable. Please try again in a moment."
+    } else {
+        "That activation code is invalid, expired, or already used."
+    }
+}
+
 /// Exchange a single-use activation token (deep link or typed code) for a durable
 /// license, store it in the Keychain, and switch the active provider to Company.
 /// Activating IS the reader's cloud-send consent, so we stamp that too.
@@ -787,9 +802,9 @@ pub async fn cmd_activate_company(
         .await
         .map_err(|_| AppError::ai(COMPANY_UNREACHABLE_MSG))?;
     if !resp.status().is_success() {
-        return Err(AppError::validation(
-            "That activation code is invalid, expired, or already used.",
-        ));
+        return Err(AppError::validation(activation_error_message(
+            resp.status().as_u16(),
+        )));
     }
     let body: serde_json::Value = resp.json().await.unwrap_or_default();
     let license = body
@@ -1840,6 +1855,33 @@ mod tests {
         std::fs::remove_dir_all(&export_dir).ok();
         unsafe {
             std::env::remove_var("THROUGHLINE_EXPORT_DIR");
+        }
+    }
+
+    /// P1-4: activation must distinguish a transient/throttle relay response (retry)
+    /// from a permanent bad code. Before the fix every non-2xx said "invalid".
+    #[test]
+    fn activation_error_message_distinguishes_transient_from_permanent() {
+        // 429 throttle + 5xx transient => retry copy, never "invalid".
+        for s in [429u16, 500, 502, 503] {
+            let m = activation_error_message(s).to_ascii_lowercase();
+            assert!(!m.contains("invalid"), "status {s} must not brand the code invalid");
+            assert!(
+                m.contains("try again") || m.contains("wait"),
+                "status {s} must invite a retry: {m}"
+            );
+        }
+        // Genuine 4xx no (incl. 403 revoked, 410 gone) => the permanent invalid copy.
+        for s in [400u16, 401, 403, 404, 410] {
+            assert!(
+                activation_error_message(s).contains("invalid, expired, or already used"),
+                "status {s} must be the permanent message"
+            );
+        }
+        // House style: no em/en dashes in any branch.
+        for s in [429u16, 503, 400] {
+            let m = activation_error_message(s);
+            assert!(!m.contains('\u{2014}') && !m.contains('\u{2013}'));
         }
     }
 }
