@@ -582,3 +582,96 @@ describe("MarginTutorCard: instant cached reopen (CORE-1163)", () => {
     await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
   });
 });
+
+// ── P1-3: an interrupted stream must never lead to a SILENT second paid call ──
+// Money-path regression. The relay bills the answer as it streams; before this
+// fix, unmounting the card mid-stream (a second question, a kept-marker click,
+// section nav) dropped the answer AND never cached it, so reopening auto-fired a
+// FRESH cmd_ai_ask and the reader paid twice. The card fix persists an interrupted
+// snapshot so reopen replays instead of re-charging. The $8 cap itself is relay-
+// side and untouched by this change (its own cap.test.ts still passes); these
+// tests prove the app no longer emits the second billable call, and that a normal
+// single ask still fires exactly one.
+import { setTutorEnabled } from "../tutorConsent";
+import { type TutorCache } from "./MarginTutorCard";
+
+function totalAsks() {
+  return mocks.invoke.mock.calls.filter((c) => c[0] === "cmd_ai_ask").length;
+}
+
+describe("MarginTutorCard — P1-3 interrupted stream never double-charges", () => {
+  it("mid-stream unmount persists an interrupted cache; reopen replays with no 2nd cmd_ai_ask", async () => {
+    setTutorEnabled(true);
+    let saved: TutorCache | undefined;
+    const onCached = vi.fn((_id: string, c: TutorCache) => { saved = c; });
+    const draft = baseDraft();
+    const { unmount } = render(
+      <MarginTutorCard bookId="bk1" draft={draft} active onActivate={() => {}} onSaved={() => {}} onDiscard={() => {}} onCached={onCached} />,
+    );
+    // The brief call auto-fired and the stream is live (one delta arrived).
+    await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
+    const ch = lastChannel();
+    await pushDelta(ch, "partial answer so far");
+    expect(totalAsks()).toBe(1);
+
+    // Reader switches cards -> this card unmounts mid-stream (before "done").
+    unmount();
+    // An interrupted snapshot was persisted with the partial text.
+    expect(onCached).toHaveBeenCalledTimes(1);
+    expect(saved?.interrupted).toBe(true);
+    expect(saved?.brief).toContain("partial answer so far");
+
+    // Reopen the SAME draft carrying that interrupted cache.
+    const asksBefore = totalAsks();
+    render(
+      <MarginTutorCard bookId="bk1" draft={baseDraft({ cache: saved })} active onActivate={() => {}} onSaved={() => {}} onDiscard={() => {}} onCached={onCached} />,
+    );
+    // Give any mount effect a chance to (wrongly) fire a call.
+    await act(async () => { await Promise.resolve(); });
+    expect(totalAsks()).toBe(asksBefore); // NO second paid call — double-charge gone
+    // The partial answer is replayed, with an honest interrupted hint + explicit re-ask.
+    expect(screen.getByText(/partial answer so far/)).toBeInTheDocument();
+    expect(screen.getByText(/interrupted/i)).toBeInTheDocument();
+  });
+
+  it("a normal single ask fires exactly one cmd_ai_ask and completes to a clean (non-interrupted) cache", async () => {
+    setTutorEnabled(true);
+    const onCached = vi.fn();
+    render(
+      <MarginTutorCard bookId="bk1" draft={baseDraft()} active onActivate={() => {}} onSaved={() => {}} onDiscard={() => {}} onCached={onCached} />,
+    );
+    await waitFor(() => expect(asksOfDepth("brief").length).toBe(1));
+    const ch = lastChannel();
+    await pushDelta(ch, "the whole answer");
+    await pushDone(ch);
+
+    expect(totalAsks()).toBe(1); // exactly one billable call
+    await waitFor(() => expect(onCached).toHaveBeenCalled());
+    const calls = onCached.mock.calls;
+    const lastCache = calls[calls.length - 1]?.[1] as TutorCache;
+    expect(lastCache.interrupted).toBeFalsy();
+    expect(lastCache.brief).toContain("the whole answer");
+  });
+
+  it("replaying an interrupted card never re-charges and never silently heals the flag", async () => {
+    setTutorEnabled(true);
+    const interrupted: TutorCache = {
+      lens: "explain", brief: "partial", deep: "", deepRequested: false,
+      aiRequestId: null, collapsed: false, interrupted: true,
+    };
+    const onCached = vi.fn();
+    const asksBefore = totalAsks();
+    const { unmount } = render(
+      <MarginTutorCard bookId="bk1" draft={baseDraft({ cache: interrupted })} active onActivate={() => {}} onSaved={() => {}} onDiscard={() => {}} onCached={onCached} />,
+    );
+    await act(async () => { await Promise.resolve(); });
+    unmount();
+    // Never fires a billable call on pure replay.
+    expect(totalAsks()).toBe(asksBefore);
+    // Any idempotent re-persist MUST keep interrupted=true — a partial answer must
+    // not be silently promoted to complete without a deliberate re-ask.
+    for (const c of onCached.mock.calls) {
+      expect((c[1] as TutorCache).interrupted).toBe(true);
+    }
+  });
+});

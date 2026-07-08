@@ -43,6 +43,15 @@ export interface TutorCache {
   deepRequested: boolean;
   aiRequestId: string | null;
   collapsed: boolean;
+  /**
+   * P1-3: set when a paid call was in flight but the card was unmounted (card
+   * switch / section nav) before the answer settled. Its mere presence makes
+   * `cached` truthy, so REOPEN replays the (possibly partial) answer instead of
+   * auto-firing a SECOND paid `cmd_ai_ask` — the relay already billed the first.
+   * The reader can Regenerate explicitly (a deliberate single re-ask), and the UI
+   * shows an "interrupted" hint so a partial answer is not mistaken for complete.
+   */
+  interrupted?: boolean;
 }
 
 export interface TutorDraft {
@@ -170,6 +179,21 @@ export default function MarginTutorCard(props: {
   const briefRef = useRef<string>(cached?.brief ?? "");
   const deepRef = useRef<string>(cached?.deep ?? "");
   const streamTierRef = useRef<Depth>("brief");
+  // P1-3 double-charge guard: startedRef => a paid cmd_ai_ask was fired for THIS
+  // card instance; doneRef => the answer settled and was persisted to the parent.
+  // On unmount, started-but-not-done means the relay billed a call the reader never
+  // saw complete, so we persist an interrupted snapshot (below) rather than let a
+  // reopen fire a second billable call. lensRef/deepRequestedRef mirror the current
+  // state so the empty-deps unmount cleanup can snapshot the latest values.
+  const startedRef = useRef<boolean>(false);
+  const doneRef = useRef<boolean>(!!cached && !cached.interrupted);
+  const lensRef = useRef<TutorMode>(cached?.lens ?? draft.mode);
+  const deepRequestedRef = useRef<boolean>(cached?.deepRequested ?? false);
+  // True only once a stream actually COMPLETES in this instance. Until then, a
+  // replayed interrupted cache must keep its `interrupted` flag when re-persisted
+  // (a collapse toggle, say) — otherwise a partial answer silently heals to "done"
+  // without the reader ever regenerating it (P1-3).
+  const completedFreshRef = useRef<boolean>(false);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef<boolean>(true);
 
@@ -261,6 +285,7 @@ export default function MarginTutorCard(props: {
           setDeepAnswer(deepRef.current);
         }
       } else if (ev.kind === "done") {
+        completedFreshRef.current = true; // a real completion clears any interrupted flag
         setPhase((p) => (p === "error" ? p : "done"));
       } else if (ev.kind === "error") {
         setErrorMsg(humanizeError(liveProvider, ev.message ?? "The tutor couldn't answer this time."));
@@ -279,7 +304,13 @@ export default function MarginTutorCard(props: {
         userNote: null,
         onEvent: channel,
       });
-      if (channelRef.current === channel) aiReqRef.current = handle.ai_request_id;
+      if (channelRef.current === channel) {
+        aiReqRef.current = handle.ai_request_id;
+        // The stream is live and the relay is now billing it; a subsequent unmount
+        // before the answer settles must NOT let a reopen fire a second call (P1-3).
+        startedRef.current = true;
+        doneRef.current = false;
+      }
     } catch (e) {
       if (channelRef.current === channel) {
         const err = e as { kind?: string; host?: string; message?: string };
@@ -305,15 +336,41 @@ export default function MarginTutorCard(props: {
   useEffect(() => {
     if (!cached && isTutorEnabled()) startStream(draft.mode, "brief");
     // Dropping the channel ref on unmount soft-cancels any in-flight stream.
-    return () => { channelRef.current = null; };
+    return () => {
+      channelRef.current = null;
+      // P1-3: a paid stream that started but never settled to a "done" cache (card
+      // switch / section nav mid-stream). Persist an interrupted snapshot so REOPEN
+      // replays the partial answer instead of silently firing a SECOND paid call —
+      // the relay already billed this one. Uses refs (not the stale mount-time
+      // closure) for the latest streamed text + sub-state.
+      if (startedRef.current && !doneRef.current) {
+        props.onCached?.(draft.draftId, {
+          lens: lensRef.current,
+          brief: briefRef.current,
+          deep: deepRef.current,
+          deepRequested: deepRequestedRef.current,
+          aiRequestId: aiReqRef.current || null,
+          collapsed: false,
+          interrupted: true,
+        });
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Mirror sub-state into refs the unmount cleanup reads (empty-deps closure).
+  useEffect(() => {
+    lensRef.current = lens;
+    deepRequestedRef.current = deepRequested;
+  });
 
   // CORE-1163: persist the completed answer + sub-state to the parent so a later
   // reopen replays it. Fires when the stream settles (phase "done") and whenever a
   // persisted sub-state (collapsed / lens / deep) changes. Idempotent on replay.
   useEffect(() => {
     if (phase !== "done" || !briefAnswer) return;
+    // The answer settled: a clean cache (never interrupted). doneRef stops the
+    // unmount cleanup from overwriting it with an interrupted snapshot (P1-3).
+    doneRef.current = true;
     props.onCached?.(draft.draftId, {
       lens,
       brief: briefAnswer,
@@ -321,6 +378,9 @@ export default function MarginTutorCard(props: {
       deepRequested,
       aiRequestId: aiReqRef.current || null,
       collapsed,
+      // Preserve the interrupted flag on pure replay/sub-state changes; only a
+      // fresh stream completion in this instance clears it (P1-3).
+      interrupted: !completedFreshRef.current && !!cached?.interrupted,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, briefAnswer, deepAnswer, deepRequested, lens, collapsed]);
@@ -645,6 +705,18 @@ export default function MarginTutorCard(props: {
                 )}
               </div>
             </div>
+          )}
+
+          {/* P1-3: the first answer was interrupted (a card switch mid-stream). We
+              replay what streamed rather than silently re-charge; tell the reader it
+              is partial so they can Regenerate deliberately. */}
+          {!collapsed && cached?.interrupted && phase === "done" && (
+            <p className="tl-tutor-note" role="status">
+              This answer was interrupted.{" "}
+              <button className="tl-tutor-deeper-link" onClick={(e) => { e.stopPropagation(); regenerate(); }}>
+                Ask again
+              </button>
+            </p>
           )}
 
           {collapsed && (
