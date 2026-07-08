@@ -620,11 +620,22 @@ fn insert_under_chapter(body: &mut String, heading: &str, block: &str) {
 /// Find a `## {heading}` line at the start of a line; returns the byte index of
 /// the `#`.
 fn find_heading(body: &str, heading_line: &str) -> Option<usize> {
-    if body.starts_with(heading_line) {
+    // N-2: the match must be a WHOLE line (followed by '\n' or end-of-string), or
+    // "## Book I" spuriously matches the prefix of "## Book II" and mis-files notes.
+    let line_ends_here = |after: usize| body[after..].is_empty() || body[after..].starts_with('\n');
+    if body.starts_with(heading_line) && line_ends_here(heading_line.len()) {
         return Some(0);
     }
     let needle = format!("\n{heading_line}");
-    body.find(&needle).map(|i| i + 1)
+    let mut from = 0;
+    while let Some(rel) = body[from..].find(&needle) {
+        let start = from + rel + 1; // the '#', just after the '\n'
+        if line_ends_here(start + heading_line.len()) {
+            return Some(start);
+        }
+        from = start; // a prefix-only hit; keep scanning past it
+    }
+    None
 }
 
 /// Byte offset of the next `## ` (h2) heading in `s`, if any.
@@ -1079,6 +1090,20 @@ mod tests {
             "flow-style list value must survive:\n{after}"
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// N-2: chapter-heading matching must be whole-line, not a prefix substring. Otherwise
+    /// "## Book I" matches the start of "## Book II"/"## Book IX" and a Book I note added
+    /// out of order is filed under Book II and never heals. The golden-loop fixture
+    /// (Augustine, Book I..Book XIII) is maximally prefix-colliding.
+    #[test]
+    fn find_heading_requires_a_whole_line_not_a_prefix() {
+        // A longer heading must NOT be matched by a shorter prefix heading.
+        assert_eq!(find_heading("intro\n## Book II\nnotes\n", "## Book I"), None);
+        assert_eq!(find_heading("## Book II\nx", "## Book I"), None);
+        // The exact heading still matches, mid-body and at start-of-file.
+        assert!(find_heading("intro\n## Book I\nnotes\n", "## Book I").is_some());
+        assert!(find_heading("## Book I\nx", "## Book I").is_some());
     }
 
     /// A reader who hand-deletes a fence's raw `<!-- /tl:note -->` close comment in
