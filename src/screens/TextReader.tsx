@@ -14,6 +14,7 @@ import { NOTE_TYPES, errorMessage, makeCharLocator, parseLocator } from "../type
 import { locatorHint } from "../locatorHint";
 import { endReached } from "../sectionCompletion";
 import { reduceMargin, initialMarginState, marginVisible } from "../marginPanel";
+import { registerQuitFlush } from "../sessionQuitFlush";
 
 interface Props {
   today: TodayCard;
@@ -168,6 +169,12 @@ export default function TextReader({ today, onExit }: Props) {
   useEffect(() => () => { if (deleteTimer.current) clearTimeout(deleteTimer.current); }, []);
   // The reader unmounting must also drop any pending trailing progress save.
   useEffect(() => () => cancelPendingProgressSave(), []);
+  // P0 quit-flush: on Cmd+Q / window close, flush the sitting (minutes, completed
+  // sections, roll-forward) instead of stranding the session open. flushSession is
+  // a fresh closure each render, so route through a ref kept current by the effect
+  // below; idempotence lives in flushSession's endedRef, so a double signal is safe.
+  const flushSessionRef = useRef<() => void>(() => {});
+  useEffect(() => registerQuitFlush(() => void flushSessionRef.current()), []);
   // Draft tutor cards live only in component state until the reader saves one
   // (which turns it into a durable TutorNote via the existing approval path).
   const [tutorDrafts, setTutorDrafts] = useState<TutorDraft[]>([]);
@@ -554,6 +561,10 @@ export default function TextReader({ today, onExit }: Props) {
       });
     } catch { /* ending is best-effort; never trap the reader in the reader */ }
   }
+  // Keep the quit-flush listener pointed at the latest flushSession closure.
+  useEffect(() => {
+    flushSessionRef.current = flushSession;
+  });
 
   // `takeaway` is passed explicitly (not read from state) so Skip can end with
   // null without racing a setState. A takeaway is never forced — a short

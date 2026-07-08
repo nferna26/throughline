@@ -257,6 +257,58 @@ fn complete_plan_if_book_done(conn: &Connection, book_id: &str) {
     }
 }
 
+/// Close sessions a previous run left open (P0 quit-flush safety net). The primary
+/// fix is the frontend quit-flush (pagehide + close-requested -> `cmd_end_session`),
+/// but a hard kill or a lost IPC race can still strand a session with
+/// `ended_at IS NULL` forever. This launch sweep closes those rows HONESTLY:
+///
+/// - `ended_at` / `minutes` come from the last durable evidence of reading — the
+///   book's `reading_position.updated_at` (written by every throttled scroll save) —
+///   never from "now" at next launch (Cmd+Q Friday, relaunch Monday must not record
+///   a three-day sitting).
+/// - With no evidence after `started_at`, the row is closed at `started_at` with
+///   `minutes` left NULL (unknown), never fabricated.
+/// - Completion, roll-forward, and exports are NOT synthesized: those need frontend
+///   truth (what the viewport reached) and remain the quit-flush's job. Position
+///   itself is already durable in `reading_position`.
+///
+/// Runs at launch, before any new session can start, so every open row is from a
+/// previous run by construction. Returns the number of sessions closed.
+pub fn sweep_orphan_sessions(conn: &Connection) -> Result<usize, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.started_at, rp.updated_at
+           FROM reading_sessions s
+           LEFT JOIN reading_position rp ON rp.book_id = s.book_id
+          WHERE s.ended_at IS NULL",
+    )?;
+    let rows: Vec<(String, String, Option<String>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    let mut closed = 0usize;
+    for (id, started_at, position_at) in rows {
+        let started = chrono::DateTime::parse_from_rfc3339(&started_at).ok();
+        let evidence = position_at
+            .as_deref()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .filter(|e| started.map(|s| *e > s).unwrap_or(false));
+        let (ended_at, minutes): (String, Option<i64>) = match (started, evidence) {
+            (Some(s), Some(e)) => {
+                let mins = ((e - s).num_seconds() as f64 / 60.0).round() as i64;
+                (e.to_rfc3339(), Some(mins.max(1)))
+            }
+            // No trustworthy evidence: close at start, minutes honestly unknown.
+            _ => (started_at.clone(), None),
+        };
+        conn.execute(
+            "UPDATE reading_sessions SET ended_at = ?1, minutes = ?2
+              WHERE id = ?3 AND ended_at IS NULL",
+            params![ended_at, minutes, id],
+        )?;
+        closed += 1;
+    }
+    Ok(closed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,5 +479,60 @@ mod tests {
             "active",
             "a let-go (soft-deleted) plan must not be rewritten"
         );
+    }
+
+    /// P0 quit-flush safety net: a session a previous run left open (Cmd+Q, crash)
+    /// is closed at launch from the last durable reading evidence, minutes honest,
+    /// nothing fabricated, and already-closed sessions untouched.
+    #[test]
+    fn sweep_orphan_sessions_closes_open_rows_honestly() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO books (id,title,author,source_type,source_path,source_sha256,created_at,last_opened_at)
+               VALUES ('b1','T',NULL,'txt','/x','sha1','2026-01-01',NULL),
+                      ('b2','U',NULL,'txt','/y','sha2','2026-01-01',NULL);
+             -- s1: open, with scroll-save evidence 23 min after start.
+             INSERT INTO reading_sessions (id,book_id,started_at)
+               VALUES ('s1','b1','2026-07-07T10:00:00+00:00');
+             INSERT INTO reading_position (book_id,furthest_section_id,furthest_offset,last_read_section_id,last_read_offset,updated_at)
+               VALUES ('b1','sec',100,'sec',100,'2026-07-07T10:23:10+00:00');
+             -- s2: open, NO reading_position row (no evidence at all).
+             INSERT INTO reading_sessions (id,book_id,started_at)
+               VALUES ('s2','b2','2026-07-07T11:00:00+00:00');
+             -- s3: properly closed by a past run; the sweep must not touch it.
+             INSERT INTO reading_sessions (id,book_id,started_at,ended_at,minutes)
+               VALUES ('s3','b1','2026-07-06T09:00:00+00:00','2026-07-06T09:30:00+00:00',30);",
+        )
+        .unwrap();
+
+        let closed = sweep_orphan_sessions(&conn).unwrap();
+        assert_eq!(closed, 2, "exactly the two open sessions are swept");
+
+        let row = |id: &str| -> (Option<String>, Option<i64>) {
+            conn.query_row(
+                "SELECT ended_at, minutes FROM reading_sessions WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        // s1: closed at the scroll save's timestamp, minutes = 23 (never wall-clock-now).
+        let (ended1, mins1) = row("s1");
+        assert!(
+            ended1.as_deref().unwrap_or("").starts_with("2026-07-07T10:23:10"),
+            "ended_at must be the last reading evidence, got {ended1:?}"
+        );
+        assert_eq!(mins1, Some(23));
+        // s2: closed at started_at with minutes honestly NULL, never fabricated.
+        let (ended2, mins2) = row("s2");
+        assert_eq!(ended2.as_deref(), Some("2026-07-07T11:00:00+00:00"));
+        assert_eq!(mins2, None, "no evidence -> minutes stays unknown");
+        // s3: untouched.
+        let (ended3, mins3) = row("s3");
+        assert_eq!(ended3.as_deref(), Some("2026-07-06T09:30:00+00:00"));
+        assert_eq!(mins3, Some(30));
+        // Idempotent: a second sweep finds nothing.
+        assert_eq!(sweep_orphan_sessions(&conn).unwrap(), 0);
     }
 }

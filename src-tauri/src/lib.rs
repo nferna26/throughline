@@ -218,6 +218,13 @@ pub fn run() {
         Ok(_) => {}
         Err(e) => tracing::warn!("plan_retention: sweep failed: {}", e),
     }
+    // P0 quit-flush safety net: close sessions a previous run left open (hard kill
+    // or a lost quit-flush race), honestly, from the last durable reading evidence.
+    match commands::sessions::sweep_orphan_sessions(&conn) {
+        Ok(n) if n > 0 => tracing::info!("session sweep: closed {} orphaned session(s)", n),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("session sweep failed: {}", e),
+    }
     let state = DbState(Mutex::new(conn));
 
     tauri::Builder::default()
