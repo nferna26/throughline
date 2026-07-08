@@ -525,6 +525,12 @@ pub async fn cmd_import_from_gutendex(
 /// collisions between concurrent imports).
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// Reader-facing copy for a failed download. N-5: never interpolate a reqwest error into
+/// reader copy. Its `Display` embeds the request URL (`https://www.gutenberg.org/...`),
+/// which would surface the public-domain source's brand in the UI, the one place the store
+/// posture says it must never appear. The detail goes to the log only.
+const DOWNLOAD_FAILED_MSG: &str = "Couldn't download that book. Please try again.";
+
 async fn download_and_import(
     client: &reqwest::Client,
     url: &str,
@@ -539,7 +545,10 @@ async fn download_and_import(
         .get(validated)
         .send()
         .await
-        .map_err(|e| AppError::io(format!("download failed: {e}")))?;
+        .map_err(|e| {
+            tracing::warn!("book download request failed: {e}");
+            AppError::io(DOWNLOAD_FAILED_MSG)
+        })?;
     if !resp.status().is_success() {
         return Err(AppError::io(format!("download returned {}", resp.status())));
     }
@@ -567,7 +576,10 @@ async fn download_and_import(
     let mut stream = resp.bytes_stream();
     let mut bytes: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| AppError::io(format!("download interrupted: {e}")))?;
+        let chunk = chunk.map_err(|e| {
+            tracing::warn!("book download stream interrupted: {e}");
+            AppError::io(DOWNLOAD_FAILED_MSG)
+        })?;
         if bytes.len() + chunk.len() > MAX_DOWNLOAD_BYTES {
             return Err(AppError::validation(format!(
                 "download exceeded the {MAX_DOWNLOAD_BYTES}-byte limit"
@@ -867,5 +879,21 @@ mod tests {
         // A suffix match must respect the dot boundary.
         assert!(!is_allowed_download_host("notgutenberg.org"));
         assert!(!is_allowed_download_host("gutenberg.org.evil.com"));
+    }
+
+    /// N-5: the reader-facing download-failure copy must never carry the request URL or
+    /// the public-domain source's brand. The reqwest error's Display embeds the URL
+    /// (`https://www.gutenberg.org/...`); the two download-failure `map_err`s now return
+    /// this fixed string and log the detail instead (a real network repro would need the
+    /// network, banned in the default suite; this locks the copy that ships to the reader).
+    #[test]
+    fn download_failure_copy_never_leaks_the_source_brand_or_url() {
+        let m = DOWNLOAD_FAILED_MSG.to_ascii_lowercase();
+        for needle in ["gutenberg", "gutendex", "http", "://", "www", ".org"] {
+            assert!(!m.contains(needle), "reader copy leaks '{needle}': {DOWNLOAD_FAILED_MSG}");
+        }
+        // House style: no em/en dashes in user-facing copy.
+        assert!(!DOWNLOAD_FAILED_MSG.contains('\u{2014}') && !DOWNLOAD_FAILED_MSG.contains('\u{2013}'));
+        assert!(!DOWNLOAD_FAILED_MSG.trim().is_empty());
     }
 }
