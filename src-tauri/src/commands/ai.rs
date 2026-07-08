@@ -440,12 +440,12 @@ pub async fn cmd_ai_ask(
             _ => String::new(),
         };
 
-        // First-cloud-call consent (C2): a remote provider must be confirmed once
-        // before the first send. The frontend catches this, shows a consent sheet,
-        // then retries after cmd_confirm_cloud_send.
-        if provider.is_remote()
-            && settings::get_string(&conn, settings::KEY_FIRST_CLOUD_CONFIRMED_AT).is_none()
-        {
+        // First-cloud-call consent (C2 / CORE-1177): a remote provider must be
+        // confirmed once before the first send. The frontend catches this, shows a
+        // consent sheet with the passage, then retries after cmd_confirm_cloud_send.
+        // This now fires for freshly-activated company users too (activation no longer
+        // pre-stamps consent), so the privacy promise is delivered at first egress.
+        if cloud_consent_required(&conn, provider) {
             return Err(AppError::needs_cloud_consent(provider_host.clone()));
         }
 
@@ -781,7 +781,12 @@ fn activation_error_message(status: u16) -> &'static str {
 
 /// Exchange a single-use activation token (deep link or typed code) for a durable
 /// license, store it in the Keychain, and switch the active provider to Company.
-/// Activating IS the reader's cloud-send consent, so we stamp that too.
+///
+/// CORE-1177: activation grants the ENTITLEMENT (license, provider, LOCAL_ONLY off) but
+/// NOT cloud-send consent. Consent is a separate, explicit act captured at the reader's
+/// first real send by cmd_confirm_cloud_send, so the privacy promise is actually delivered
+/// (the consent sheet shows the passage before anything leaves the Mac). This fn must never
+/// write KEY_FIRST_CLOUD_CONFIRMED_AT.
 #[tauri::command]
 pub async fn cmd_activate_company(
     activation_token: String,
@@ -820,27 +825,37 @@ pub async fn cmd_activate_company(
     crate::phrases::reset_backoff();
     {
         let conn = state.0.lock()?;
-        settings::set_string(&conn, settings::KEY_AI_PROVIDER, "company")?;
-        settings::set_string(&conn, settings::KEY_COMPANY_ACTIVATED, "1")?;
-        settings::set_string(&conn, settings::KEY_LOCAL_ONLY, "false")?;
-        // Activating company mode is the reader's first-cloud consent.
-        settings::set_string(
-            &conn,
-            settings::KEY_FIRST_CLOUD_CONFIRMED_AT,
-            &Utc::now().to_rfc3339(),
-        )?;
-        if settings::get_string(&conn, settings::KEY_AI_PROVIDER_CHOSEN_AT).is_none() {
-            settings::set_string(
-                &conn,
-                settings::KEY_AI_PROVIDER_CHOSEN_AT,
-                &Utc::now().to_rfc3339(),
-            )?;
-        }
+        apply_company_activation(&conn, &Utc::now().to_rfc3339())?;
     }
     Ok(CompanyStatus {
         provider_active: true,
         has_license: true,
     })
+}
+
+/// Apply the ENTITLEMENT settings for company activation (CORE-1177): the active provider,
+/// the activated flag, LOCAL_ONLY off, and (first time only) the provider-chosen stamp.
+/// It deliberately writes NO consent flag: KEY_FIRST_CLOUD_CONFIRMED_AT is owned solely by
+/// cmd_confirm_cloud_send, so cloud-send consent is captured at the reader's first real send
+/// (where the sheet shows the passage), never granted as a side effect of activation.
+fn apply_company_activation(conn: &rusqlite::Connection, now: &str) -> Result<(), AppError> {
+    settings::set_string(conn, settings::KEY_AI_PROVIDER, "company")?;
+    settings::set_string(conn, settings::KEY_COMPANY_ACTIVATED, "1")?;
+    settings::set_string(conn, settings::KEY_LOCAL_ONLY, "false")?;
+    if settings::get_string(conn, settings::KEY_AI_PROVIDER_CHOSEN_AT).is_none() {
+        settings::set_string(conn, settings::KEY_AI_PROVIDER_CHOSEN_AT, now)?;
+    }
+    Ok(())
+}
+
+/// The first-cloud-consent gate (Epic C2 / CORE-1177): a remote provider must have an
+/// explicit in-app confirmation (KEY_FIRST_CLOUD_CONFIRMED_AT, written only by
+/// cmd_confirm_cloud_send) before ANY relay egress. Because activation grants the
+/// entitlement but not consent, this stays true right after activation until the reader
+/// confirms the first send. Pure, so cmd_ai_ask's gate is unit-testable.
+fn cloud_consent_required(conn: &rusqlite::Connection, provider: settings::AiProvider) -> bool {
+    provider.is_remote()
+        && settings::get_string(conn, settings::KEY_FIRST_CLOUD_CONFIRMED_AT).is_none()
 }
 
 fn company_status_db_bits(conn: &rusqlite::Connection) -> (bool, bool) {
@@ -1504,6 +1519,69 @@ mod tests {
             confirmed(&conn),
             "confirmed after cmd_confirm_cloud_send → gate clears"
         );
+    }
+
+    /// CORE-1177: activation grants the entitlement (provider, activated flag,
+    /// LOCAL_ONLY off, provider-chosen stamp) but must NOT write cloud-send consent.
+    #[test]
+    fn activation_grants_entitlement_but_not_consent() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        apply_company_activation(&conn, "2026-07-07T00:00:00Z").unwrap();
+
+        assert_eq!(
+            settings::get_string(&conn, settings::KEY_AI_PROVIDER).as_deref(),
+            Some("company")
+        );
+        assert_eq!(
+            settings::get_string(&conn, settings::KEY_COMPANY_ACTIVATED).as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            settings::get_string(&conn, settings::KEY_LOCAL_ONLY).as_deref(),
+            Some("false")
+        );
+        assert!(settings::get_string(&conn, settings::KEY_AI_PROVIDER_CHOSEN_AT).is_some());
+        // The load-bearing assertion: consent is NOT granted by activation.
+        assert!(
+            settings::get_string(&conn, settings::KEY_FIRST_CLOUD_CONFIRMED_AT).is_none(),
+            "activation must NOT write cloud-send consent (CORE-1177)"
+        );
+    }
+
+    /// CORE-1177: the "no relay egress without consent" invariant holds immediately
+    /// after activation — cmd_ai_ask's gate (cloud_consent_required) still fires, so a
+    /// remote provider returns needs_cloud_consent until the reader confirms the send.
+    #[test]
+    fn cloud_consent_gate_fires_right_after_activation_and_clears_on_confirm() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        apply_company_activation(&conn, "2026-07-07T00:00:00Z").unwrap();
+
+        // Freshly activated company user (remote) is still gated at first send.
+        assert!(
+            cloud_consent_required(&conn, settings::AiProvider::Company),
+            "no relay egress without consent, even right after activation"
+        );
+        // That gate is exactly what cmd_ai_ask returns to the frontend.
+        assert_eq!(
+            AppError::needs_cloud_consent("ai.example.com").kind(),
+            "NeedsCloudConsent"
+        );
+        // Local is on-device and never gates.
+        assert!(!cloud_consent_required(&conn, settings::AiProvider::Local));
+
+        // The explicit confirmation (written only by cmd_confirm_cloud_send) clears it.
+        settings::set_string(
+            &conn,
+            settings::KEY_FIRST_CLOUD_CONFIRMED_AT,
+            "2026-07-07T00:01:00Z",
+        )
+        .unwrap();
+        assert!(!cloud_consent_required(
+            &conn,
+            settings::AiProvider::Company
+        ));
     }
 
     /// The brevity contract is cross-provider: the cap that `cmd_ai_ask` threads

@@ -49,6 +49,14 @@ export) only when the reader explicitly saves it. While local-only mode is ON, n
 endpoints are refused at the call site — that enforcement point is load-bearing; treat any
 change to it as a security change.
 
+**2a. Cloud-consent attaches to first egress, not to entitlement (CORE-1177).** The
+cloud-consent flag (`KEY_FIRST_CLOUD_CONFIRMED_AT`) is written ONLY by
+`cmd_confirm_cloud_send`, i.e. an explicit in-app user confirmation shown alongside the exact
+passage about to leave the Mac. Activation flows, deep links, and migrations may change
+entitlements (license, provider, `LOCAL_ONLY`) but MUST NOT write consent. So the
+first-cloud-send sheet fires for every reader, including freshly-activated paying ones,
+because that sheet is where the privacy promise is actually delivered.
+
 **3. Copyright posture (counsel-reviewed 2026-06-08 — binding, do not weaken).**
 
 - Raw EPUB/text source files stay local: never exported, never bulk-uploaded to any API.
