@@ -53,12 +53,15 @@ pub enum AppError {
 
     /// The reader enabled a cloud provider but hasn't confirmed the FIRST cloud
     /// send. The frontend catches this, shows a consent sheet naming `host`, and
-    /// retries after cmd_confirm_cloud_send. (Epic C2.)
-    NeedsCloudConsent { host: String },
+    /// retries after cmd_confirm_cloud_send. (Epic C2.) `message` is a serialized
+    /// backstop (P1-2): a consumer that only reads `message` still gets meaningful
+    /// copy instead of "[object Object]".
+    NeedsCloudConsent { host: String, message: String },
 
     /// The reader's Throughline AI (company-paid) credits are spent. The frontend
     /// catches this and offers the BYO-key / local floor. (Company mode, CM3.)
-    CapExhausted,
+    /// `message` is a serialized backstop (P1-2), same reason as NeedsCloudConsent.
+    CapExhausted { message: String },
 
     /// Catch-all. Used by the `From<anyhow::Error>` impl for errors that
     /// haven't been classified into a more specific variant yet. Adding a
@@ -104,10 +107,15 @@ impl AppError {
         }
     }
     pub fn needs_cloud_consent(host: impl Into<String>) -> Self {
-        AppError::NeedsCloudConsent { host: host.into() }
+        let host = host.into();
+        let message =
+            format!("Confirm sending your selection to {host} before the first cloud call.");
+        AppError::NeedsCloudConsent { host, message }
     }
     pub fn cap_exhausted() -> Self {
-        AppError::CapExhausted
+        AppError::CapExhausted {
+            message: "You've used your Throughline AI credits. Keep reading with your own API key, or switch to a local model.".to_string(),
+        }
     }
 
     /// Short, user-facing one-liner for log / UI display. Maps NotFound
@@ -124,12 +132,8 @@ impl AppError {
                 Some(id) => format!("{} not found: {}", resource, id),
                 None => format!("{} not found", resource),
             },
-            AppError::NeedsCloudConsent { host } => {
-                format!("Confirm sending your selection to {host} before the first cloud call.")
-            }
-            AppError::CapExhausted => {
-                "You've used your Throughline AI credits. Keep reading with your own API key, or switch to a local model.".to_string()
-            }
+            AppError::NeedsCloudConsent { message, .. } => message.clone(),
+            AppError::CapExhausted { message } => message.clone(),
         }
     }
 
@@ -143,7 +147,7 @@ impl AppError {
             AppError::Config { .. } => "Config",
             AppError::NotFound { .. } => "NotFound",
             AppError::NeedsCloudConsent { .. } => "NeedsCloudConsent",
-            AppError::CapExhausted => "CapExhausted",
+            AppError::CapExhausted { .. } => "CapExhausted",
             AppError::Internal { .. } => "Internal",
         }
     }
@@ -277,5 +281,20 @@ mod tests {
         let s = format!("{}", e);
         assert!(s.contains("Ai"));
         assert!(s.contains("local-only refused"));
+    }
+
+    /// P1-2: NeedsCloudConsent and CapExhausted must serialize a non-empty `message`
+    /// so a frontend that reads `.message` never renders "[object Object]". kind + host
+    /// stay intact so kind-branching consumers are unaffected.
+    #[test]
+    fn consent_and_cap_errors_serialize_a_message_backstop() {
+        let consent = serde_json::to_value(AppError::needs_cloud_consent("ai.example.com")).unwrap();
+        assert_eq!(consent["kind"], "NeedsCloudConsent");
+        assert_eq!(consent["host"], "ai.example.com");
+        assert!(consent["message"].as_str().is_some_and(|m| !m.is_empty()));
+
+        let cap = serde_json::to_value(AppError::cap_exhausted()).unwrap();
+        assert_eq!(cap["kind"], "CapExhausted");
+        assert!(cap["message"].as_str().is_some_and(|m| m.contains("Throughline AI")));
     }
 }

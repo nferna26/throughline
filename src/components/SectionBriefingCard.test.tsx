@@ -228,4 +228,39 @@ describe("SectionBriefingCard — provider gate", () => {
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.anything()));
     expect(screen.queryByText(/^On this Mac$/)).toBeNull();
   });
+
+  // P1-2: NeedsCloudConsent / CapExhausted historically carried no `message`, so the
+  // catch rendered the literal "[object Object]" with a Try again that re-fired the
+  // same rejection forever. Both must now show actionable copy and no garbage.
+  function rejectAskWith(err: unknown) {
+    localStorage.setItem("tl.tutorEnabled", "true");
+    mocks.invoke.mockReset();
+    mocks.invoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings":
+          return Promise.resolve({ ai_provider: "company", margin_help: "deep_study" });
+        case "cmd_ai_ask":
+          return Promise.reject(err);
+        case "cmd_test_ai_connection":
+          return Promise.resolve({ reachable: true, first_model_id: "m", message: "ok" });
+        default:
+          return Promise.resolve(null);
+      }
+    });
+  }
+
+  it("cap-exhausted rejection shows actionable copy, never [object Object]", async () => {
+    rejectAskWith({ kind: "CapExhausted" }); // historic shape: no message field
+    render(<SectionBriefingCard {...props} />);
+    expect(await screen.findByText(/Throughline AI/i)).toBeInTheDocument();
+    expect(screen.getByText(/Settings/i)).toBeInTheDocument();
+    expect(screen.queryByText(/object Object/i)).toBeNull();
+  });
+
+  it("needs-consent rejection shows consent guidance, never [object Object]", async () => {
+    rejectAskWith({ kind: "NeedsCloudConsent", host: "ai.example.com" });
+    render(<SectionBriefingCard {...props} />);
+    expect(await screen.findByText(/confirm the cloud send/i)).toBeInTheDocument();
+    expect(screen.queryByText(/object Object/i)).toBeNull();
+  });
 });

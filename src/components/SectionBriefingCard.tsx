@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { invoke, Channel } from "@tauri-apps/api/core";
 import TLIcon from "./TLIcon";
 import AiSetupSheet from "./AiSetupSheet";
-import { aiProviderLabel, type AskHandle, type SettingsDto, type StreamEvent } from "../types";
+import { aiProviderLabel, errorMessage, type AskHandle, type SettingsDto, type StreamEvent } from "../types";
 import { humanizeError, looksUnavailable } from "../aiErrors";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
 import {
@@ -162,7 +162,23 @@ export default function SectionBriefingCard(props: {
     } catch (e) {
       if (channelRef.current === channel) {
         setBriefingAttempt(bookId, sectionId, sourceSha, mode, "failed");
-        setErrorMsg(humanizeError(liveProvider, String((e as { message?: string })?.message ?? e)));
+        // P1-2: branch on the AppError kind. NeedsCloudConsent and CapExhausted have
+        // no `message` historically, so the old String(e) rendered "[object Object]"
+        // and Try again re-fired the identical rejection forever. Give each an
+        // actionable line, and otherwise fall back to errorMessage() (which reads the
+        // now-backstopped `message`) so no reject ever surfaces as garbage.
+        const err = e as { kind?: string };
+        if (err?.kind === "NeedsCloudConsent") {
+          setErrorMsg(
+            "Deep Study uses the cloud tutor. Ask the tutor about a passage once and confirm the cloud send, then prepare the briefing.",
+          );
+        } else if (err?.kind === "CapExhausted") {
+          setErrorMsg(
+            "You've used your Throughline AI for now. Add your own key or a local model in Settings to keep going.",
+          );
+        } else {
+          setErrorMsg(humanizeError(liveProvider, errorMessage(e)));
+        }
         setPhase("error");
       }
     }
