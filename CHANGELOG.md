@@ -7,6 +7,8 @@ documented in [`docs/IPC.md`](./docs/IPC.md).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-07-09
+
 ### Fixed
 
 - **The update pill's download button works.** "Download update" opened nothing
