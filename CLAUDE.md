@@ -111,7 +111,7 @@ crossing any line in this section, stop and ask in plain text first.
 
 ## Settings surface (left-rail redesign, 2026-07)
 
-Settings is a macOS System Settings-style left rail of seven destinations — Reading,
+Settings is a macOS System Settings-style left rail of eight destinations — Reading,
 Appearance, Assistant, Privacy, Files, Shortcuts, then Send feedback below a divider
 (CORE-1094's panel became its own destination; its behavior, allowlisted payload, and
 honest line are unchanged, and the draft persists until sent). The deep provider setup
