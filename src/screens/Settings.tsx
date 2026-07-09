@@ -4,6 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import ModelSelect from "../components/ModelSelect";
 import CodexLogin from "../components/CodexLogin";
 import FeedbackPanel from "../components/FeedbackPanel";
+import SoftwareUpdatePane from "../components/SoftwareUpdate";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
 import { useDialog } from "../hooks/useDialog";
 import {
@@ -144,8 +145,17 @@ function modeForProvider(prov: string): Mode {
 
 const KEY_PROVIDERS = AI_PROVIDERS.filter((p) => p.id === "anthropic" || p.id === "openai" || p.id === "codex");
 
-/** The rail's seven destinations, in design order. */
-type Section = "reading" | "appearance" | "assistant" | "privacy" | "files" | "shortcuts" | "feedback";
+/** The rail's destinations, in design order. Software Update joined the rail
+ *  with CORE-1193 (the durable, never-a-dead-end manual update path). */
+type Section =
+  | "reading"
+  | "appearance"
+  | "assistant"
+  | "privacy"
+  | "files"
+  | "shortcuts"
+  | "update"
+  | "feedback";
 const SECTIONS: Array<{ id: Exclude<Section, "feedback">; label: string }> = [
   { id: "reading", label: "Reading" },
   { id: "appearance", label: "Appearance" },
@@ -153,6 +163,7 @@ const SECTIONS: Array<{ id: Exclude<Section, "feedback">; label: string }> = [
   { id: "privacy", label: "Privacy" },
   { id: "files", label: "Files" },
   { id: "shortcuts", label: "Shortcuts" },
+  { id: "update", label: "Software Update" },
 ];
 
 /** Shared modal shell for the Settings sheets (provider setup, audit, restore).
@@ -184,7 +195,14 @@ function SettingsSheet({
   );
 }
 
-export default function Settings() {
+type SettingsProps = {
+  /** The macOS "Check for Updates…" menu item lands the reader here: when true,
+   *  jump to the Software Update section (then tell App the jump was consumed). */
+  jumpToUpdate?: boolean;
+  onJumpConsumed?: () => void;
+};
+
+export default function Settings({ jumpToUpdate = false, onJumpConsumed }: SettingsProps) {
   const [dto, setDto] = useState<SettingsDto | null>(null);
 
   // ── Rail navigation. "feedback" is a destination like any other; Cancel and
@@ -195,6 +213,15 @@ export default function Settings() {
     if (section !== "feedback") prevSection.current = section;
     setActive(section);
   }
+
+  // The app-menu "Check for Updates…" path: jump straight to Software Update.
+  useEffect(() => {
+    if (jumpToUpdate) {
+      goTo("update");
+      onJumpConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpToUpdate]);
   function onRailKeyDown(e: React.KeyboardEvent<HTMLElement>) {
     const keys = ["ArrowDown", "ArrowUp", "Home", "End"];
     if (!keys.includes(e.key)) return;
@@ -1402,6 +1429,7 @@ export default function Settings() {
         {active === "privacy" && privacyPane}
         {active === "files" && filesPane}
         {active === "shortcuts" && shortcutsPane}
+        {active === "update" && <SoftwareUpdatePane appVersion={appVersion} />}
         {active === "feedback" && (
           <FeedbackPanel mode={mode} onClose={() => setActive(prevSection.current)} />
         )}

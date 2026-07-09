@@ -4,6 +4,11 @@ import Settings, { fmtBackupWhen } from "./Settings";
 import type { SettingsDto, CompanyCredits, AiRequest, BackupEntry, BackupStatus } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+// The Software Update pane pulls in the update machine; mock its plugins (the
+// real plugin-updater extends api/core's Resource at import time).
+vi.mock("@tauri-apps/plugin-updater", () => ({ check: vi.fn(() => Promise.resolve(null)) }));
+vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(() => Promise.resolve()) }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(() => Promise.resolve()) }));
 import { invoke } from "@tauri-apps/api/core";
 const mockInvoke = vi.mocked(invoke);
 
@@ -89,13 +94,13 @@ beforeEach(() => {
 /* ═══════════════ Rail + frame ═══════════════ */
 
 describe("Settings — left rail", () => {
-  it("renders the seven destinations in order, with Send feedback below the divider", async () => {
+  it("renders the rail destinations in order, with Send feedback below the divider", async () => {
     wire({});
     const { container } = render(<Settings />);
     const nav = await screen.findByRole("navigation", { name: /settings sections/i });
     const items = Array.from(nav.querySelectorAll("button.set-rail-item")).map((b) => b.textContent);
     expect(items).toEqual([
-      "Reading", "Appearance", "Assistant", "Privacy", "Files", "Shortcuts", "Send feedback",
+      "Reading", "Appearance", "Assistant", "Privacy", "Files", "Shortcuts", "Software Update", "Send feedback",
     ]);
     // The divider sits between Shortcuts and Send feedback.
     expect(container.querySelector(".set-rail-divider")).toBeTruthy();
@@ -604,13 +609,39 @@ describe("Send feedback destination", () => {
   });
 });
 
+/* ═══════════════ Software Update destination (CORE-1193) ═══════════════ */
+
+describe("Software Update destination", () => {
+  it("is on the rail and renders the live update state with the version line", async () => {
+    wire({});
+    render(<Settings />);
+    await openPane("Software Update");
+    expect(await screen.findByRole("heading", { name: "Software Update" })).toBeInTheDocument();
+    // Idle machine + the diagnostics version → an honest version line, a
+    // working manual check, and the auto-download toggle. Never a dead end.
+    expect(await screen.findByText("You are on version 0.8.4.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check for updates" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("switch", { name: "Download updates automatically" }),
+    ).toBeInTheDocument();
+  });
+
+  it("jumps straight to Software Update when the app menu asks (jumpToUpdate)", async () => {
+    wire({});
+    const consumed = vi.fn();
+    render(<Settings jumpToUpdate onJumpConsumed={consumed} />);
+    expect(await screen.findByRole("heading", { name: "Software Update" })).toBeInTheDocument();
+    expect(consumed).toHaveBeenCalledTimes(1);
+  });
+});
+
 /* ═══════════════ Voice: no plumbing words ═══════════════ */
 
 describe("reader-facing voice", () => {
   it("uses plain words only across every pane — no tokens / endpoint / hostnames", async () => {
     wire({});
     const { container } = render(<Settings />);
-    for (const pane of ["Reading", "Appearance", "Assistant", "Privacy", "Files", "Shortcuts"]) {
+    for (const pane of ["Reading", "Appearance", "Assistant", "Privacy", "Files", "Shortcuts", "Software Update"]) {
       await openPane(pane);
       await screen.findByRole("heading", { name: pane });
       const text = container.textContent ?? "";

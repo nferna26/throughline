@@ -245,8 +245,44 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // CORE-1192: opens the public download page in the reader's BROWSER as
+        // the updater's last-resort recovery (window.open is a no-op in wry).
+        // The capability scopes it to https://readthroughline.com/* only.
+        .plugin(tauri_plugin_opener::init())
         .manage(state)
+        // CORE-1193: the app-menu "Check for Updates…" item. Focus the reading
+        // window, then let the webview land the reader on Settings › Software
+        // Update and start a manual (cooldown-free) check.
+        .on_menu_event(|app, event| {
+            if event.id() == "check-for-updates" {
+                use tauri::{Emitter, Manager};
+                if let Some(w) = app.webview_windows().values().next() {
+                    let _ = w.set_focus();
+                }
+                let _ = app.emit("tl-menu-check-updates", ());
+            }
+        })
         .setup(|app| {
+            // macOS app menu: the stock default menu plus "Check for Updates…"
+            // right under "About Throughline" (CORE-1193). macOS-only — the
+            // other platforms ship no menubar today and this must not add one.
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{Menu, MenuItem, MenuItemKind};
+                let handle = app.handle();
+                let menu = Menu::default(handle)?;
+                if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.first() {
+                    let check_item = MenuItem::with_id(
+                        handle,
+                        "check-for-updates",
+                        "Check for Updates…",
+                        true,
+                        None::<&str>,
+                    )?;
+                    app_menu.insert(&check_item, 1)?;
+                }
+                app.set_menu(menu)?;
+            }
             // Company-mode activation deep link (CM5). Handles warm-start (running)
             // and cold-start (launched from the URL); emits the token to the webview,
             // which calls cmd_activate_company. Verify on a signed release build —

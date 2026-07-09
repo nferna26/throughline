@@ -418,6 +418,47 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_set_ai_key": case "cmd_clear_ai_key":
       case "cmd_set_export_path": case "cmd_forget_ai_history": case "cmd_codex_logout":
         return null;
+      // ── Updater (CORE-1192/1193). Default: up to date (null). Flags drive the
+      // found/failing paths so the Software Update section and the pill can be
+      // clicked end-to-end. The recorded __TL_FAKE_* markers are what the spec
+      // asserts — a REAL click firing the REAL plugin IPC, observed at the
+      // faked __TAURI_INTERNALS__ boundary.
+      case "plugin:updater|check": {
+        if (window.__TL_FAKE_UPDATE_CHECK_FAILS__) throw { message: "could not fetch a valid release JSON" };
+        if (window.__TL_FAKE_UPDATE_AVAILABLE__ || window.__TL_FAKE_UPDATE_DOWNLOAD_FAILS__) {
+          return {
+            rid: 4242,
+            currentVersion: "0.8.4",
+            version: "0.9.9",
+            date: null,
+            body: null,
+            rawJson: window.__TL_FAKE_UPDATE_CRITICAL__ ? { severity: "critical" } : {},
+          };
+        }
+        return null;
+      }
+      case "plugin:updater|download_and_install": {
+        if (window.__TL_FAKE_UPDATE_DOWNLOAD_FAILS__) throw { message: "signature mismatch" };
+        const ch = args && args.onEvent;
+        const emit = (ev) => { try { if (ch && typeof ch.onmessage === "function") ch.onmessage(ev); } catch (_) {} };
+        emit({ event: "Started", data: { contentLength: 100 } });
+        emit({ event: "Progress", data: { chunkLength: 42 } });
+        emit({ event: "Progress", data: { chunkLength: 58 } });
+        emit({ event: "Finished" });
+        window.__TL_FAKE_UPDATE_DOWNLOADED__ = true;
+        return null;
+      }
+      case "plugin:opener|open_url":
+        window.__TL_FAKE_OPENED_URL__ = args && args.url;
+        return null;
+      case "plugin:process|restart":
+        window.__TL_FAKE_RESTARTED__ = true;
+        return null;
+      case "cmd_prepare_update_relaunch_focus":
+        window.__TL_FAKE_RELAUNCH_MARKER__ = true;
+        return null;
+      case "cmd_consume_update_relaunch_focus":
+        return false;
       case "cmd_codex_device_start": return { user_code: "ABCD-1234", verification_uri: "https://example.com", device_code: "dev", interval: 5 };
       case "cmd_codex_device_poll": return { status: "pending" };
       case "cmd_import_book": case "cmd_import_from_gutendex":

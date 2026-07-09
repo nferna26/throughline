@@ -201,6 +201,15 @@
   color: var(--ink-soft);
   font-weight: 600;
 }
+/* CORE-1193 — the Software Update security recommendation: quietly emphatic,
+   the same calm green the critical pill wears, never an alarm. */
+.tl-settings2 .set-update-security {
+  color: #3e7a4e;
+  font-weight: 600;
+}
+[data-theme="dark"] .tl-settings2 .set-update-security {
+  color: #7fbf90;
+}
 .tl-settings2 .set-note {
   margin: 10px 0 0;
   font-size: 13px;

@@ -1,28 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import UpdateChecker, {
-  FALLBACK_DOWNLOAD_URL,
-  UPDATE_INITIAL_CHECK_DELAY_MS,
-  UPDATE_CHECK_COOLDOWN_MS,
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import UpdateChecker, { updatePillView } from "./UpdateChecker";
+import {
+  createUpdateMachine,
+  initialUpdateState,
+  updateReducer,
   UPDATE_BACKSTOP_INTERVAL_MS,
-  UPDATE_HEARTBEAT_MS,
-  UPDATE_WAKE_GAP_MS,
-  backstopDue,
-  isCriticalUpdate,
-  semverLt,
-  updateCheckAllowed,
-  updatePillView,
-  wakeDetected,
-} from "./UpdateChecker";
+  type UpdateMachineState,
+} from "../updateMachine";
+
+// CORE-1192 case law: the old suite mocked window.open and asserted the mock —
+// which passed forever while the real button did nothing (window.open is a
+// no-op in the wry webview). The fallback now goes through
+// @tauri-apps/plugin-opener (mocked HERE, asserted as openUrl in
+// updateMachine.test.ts and Settings.test.tsx), plus a real-click Playwright
+// e2e (e2e/update.spec.ts) that fires the opener IPC, plus real-app
+// verification. Nothing in this suite may assert window.open again.
 
 const mocks = vi.hoisted(() => ({
   check: vi.fn(),
   invoke: vi.fn(),
   relaunch: vi.fn(),
+  openUrl: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: mocks.check }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: mocks.relaunch }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: mocks.openUrl }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 
 beforeEach(() => {
@@ -33,7 +37,9 @@ beforeEach(() => {
   mocks.invoke.mockResolvedValue(null);
   mocks.relaunch.mockReset();
   mocks.relaunch.mockResolvedValue(undefined);
-  vi.spyOn(window, "open").mockImplementation(() => null);
+  mocks.openUrl.mockReset();
+  mocks.openUrl.mockResolvedValue(undefined);
+  localStorage.clear();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -43,285 +49,95 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// A test-controlled logical clock, injected via the `now` prop and decoupled from
-// the fake-timer scheduling clock, so a callback can be made to observe an
-// arbitrary "now" (e.g. a sleep jump) when it fires.
-function makeClock(start = 0) {
-  const clock = { value: start };
-  return { clock, now: () => clock.value };
+function foundUpdate(over: Record<string, unknown> = {}) {
+  return {
+    version: "0.9.5",
+    currentVersion: "0.9.1",
+    rawJson: {},
+    downloadAndInstall: vi.fn(() => Promise.resolve()),
+    ...over,
+  };
 }
 
-describe("cadence helpers (pure, time-injected)", () => {
-  it("allows the first check, then gates the rest to the cooldown", () => {
-    expect(updateCheckAllowed(null, 12345)).toBe(true); // first check always allowed
-    expect(updateCheckAllowed(1000, 1000 + UPDATE_CHECK_COOLDOWN_MS - 1)).toBe(false);
-    expect(updateCheckAllowed(1000, 1000 + UPDATE_CHECK_COOLDOWN_MS)).toBe(true);
+/** Drive a fresh machine into a wanted phase via its real reducer actions. */
+function stateAt(actions: Parameters<typeof updateReducer>[1][]): UpdateMachineState {
+  return actions.reduce(updateReducer, initialUpdateState());
+}
+
+const FOUND = {
+  type: "CHECK_FOUND",
+  version: "1.0.0",
+  currentVersion: "0.9.1",
+  critical: false,
+  at: 1,
+} as const;
+
+describe("updatePillView (pure pill model)", () => {
+  it("maps every pill-visible state to its label and action", () => {
+    expect(updatePillView(stateAt([FOUND]))).toMatchObject({
+      label: "Update ready",
+      action: "download",
+      dismissable: true,
+    });
+    expect(updatePillView(stateAt([{ ...FOUND, critical: true }]))).toMatchObject({
+      label: "Security update",
+      action: "download",
+    });
+    expect(updatePillView(stateAt([FOUND, { type: "DOWNLOAD_STARTED" }]))).toMatchObject({
+      label: "Updating",
+      busy: true,
+      action: null,
+    });
+    expect(
+      updatePillView(stateAt([FOUND, { type: "DOWNLOAD_STARTED" }, { type: "DOWNLOAD_FINISHED" }])),
+    ).toMatchObject({ label: "Restart to update", action: "restart" });
+    expect(
+      updatePillView(
+        stateAt([FOUND, { type: "DOWNLOAD_STARTED" }, { type: "DOWNLOAD_FAILED", offline: false }]),
+      ),
+    ).toMatchObject({ label: "Try again", action: "retry", fallback: true });
   });
 
-  it("flags a wake only when the heartbeat gap exceeds the wake threshold", () => {
-    expect(wakeDetected(null, 9_999_999)).toBe(false); // no prior tick
-    expect(wakeDetected(0, UPDATE_WAKE_GAP_MS)).toBe(false); // exactly at threshold, not past
-    expect(wakeDetected(0, UPDATE_WAKE_GAP_MS + 1)).toBe(true);
-  });
-
-  it("makes the backstop due only 6h after a real check", () => {
-    expect(backstopDue(null, UPDATE_BACKSTOP_INTERVAL_MS)).toBe(false); // no check yet
-    expect(backstopDue(0, UPDATE_BACKSTOP_INTERVAL_MS - 1)).toBe(false);
-    expect(backstopDue(0, UPDATE_BACKSTOP_INTERVAL_MS)).toBe(true);
-  });
-});
-
-describe("UpdateChecker pill model", () => {
-  it("maps every visible state to the shipped pill label", () => {
-    expect(updatePillView("ready")).toMatchObject({ label: "Update ready", icon: "download", busy: false, fallback: false });
-    expect(updatePillView("updating")).toMatchObject({ label: "Updating", icon: "download", busy: true, fallback: false });
-    expect(updatePillView("restart")).toMatchObject({ label: "Restart to update", icon: "restart", busy: false, fallback: false });
-    expect(updatePillView("fallback")).toMatchObject({ label: "Download update", icon: "download", busy: false, fallback: true });
-  });
-});
-
-describe("UpdateChecker cadence (the four triggers, one funnel)", () => {
-  it("does not check on first paint, then checks once after the launch delay", async () => {
-    vi.useFakeTimers();
-    const { now } = makeClock(0);
-    render(<UpdateChecker now={now} />);
-
-    expect(mocks.check).not.toHaveBeenCalled(); // first paint: nothing
-    await act(async () => {
-      vi.advanceTimersByTime(UPDATE_INITIAL_CHECK_DELAY_MS);
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(1);
-  });
-
-  it("checks on focus/visibility outside the cooldown, and not within it", async () => {
-    vi.useFakeTimers();
-    const { clock, now } = makeClock(0);
-    render(<UpdateChecker now={now} />);
-
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(1); // first check allowed
-
-    await act(async () => {
-      window.dispatchEvent(new Event("focus")); // still within cooldown
-      document.dispatchEvent(new Event("visibilitychange"));
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(1); // cooldown held
-
-    clock.value = UPDATE_CHECK_COOLDOWN_MS; // cooldown elapsed
-    await act(async () => {
-      document.dispatchEvent(new Event("visibilitychange"));
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(2);
-  });
-
-  it("checks after a wake (a heartbeat gap past the wake threshold), cooldown permitting", async () => {
-    vi.useFakeTimers();
-    const { clock, now } = makeClock(0);
-    render(<UpdateChecker now={now} />);
-
-    // The launch check stamps lastCheckAt; ignore it.
-    await act(async () => {
-      vi.advanceTimersByTime(UPDATE_INITIAL_CHECK_DELAY_MS);
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(1);
-    mocks.check.mockClear();
-
-    // The laptop slept well past the cooldown; one heartbeat tick observes the gap.
-    clock.value = UPDATE_CHECK_COOLDOWN_MS + UPDATE_WAKE_GAP_MS;
-    await act(async () => {
-      vi.advanceTimersByTime(UPDATE_HEARTBEAT_MS);
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not wake-check on a normal heartbeat tick (small gap)", async () => {
-    vi.useFakeTimers();
-    render(<UpdateChecker now={() => Date.now()} />);
-    // Let the launch check run, then forget it.
-    await act(async () => {
-      vi.advanceTimersByTime(UPDATE_INITIAL_CHECK_DELAY_MS);
-    });
-    mocks.check.mockClear();
-    // A handful of ordinary 60s ticks (each gap = 60s < wake gap) → no checks.
-    await act(async () => {
-      vi.advanceTimersByTime(UPDATE_HEARTBEAT_MS * 5);
-    });
-    expect(mocks.check).not.toHaveBeenCalled();
-  });
-
-  it("fires the backstop about 6h after the last check, with no wake in between", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    render(<UpdateChecker now={() => Date.now()} />);
-
-    await act(async () => {
-      vi.advanceTimersByTime(UPDATE_INITIAL_CHECK_DELAY_MS);
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(1);
-    mocks.check.mockClear();
-
-    // Steady 60s ticks (never a wake) until the 6h backstop elapses since the check.
-    await act(async () => {
-      vi.advanceTimersByTime(UPDATE_BACKSTOP_INTERVAL_MS + UPDATE_HEARTBEAT_MS);
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(1);
-  });
-
-  it("holds a single in-flight check across overlapping triggers", async () => {
-    vi.useFakeTimers();
-    let resolveCheck: (v: unknown) => void = () => {};
-    mocks.check.mockReturnValue(new Promise((r) => { resolveCheck = r; }));
-    const { now } = makeClock(0);
-    render(<UpdateChecker now={now} />);
-
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-      document.dispatchEvent(new Event("visibilitychange"));
-      vi.advanceTimersByTime(UPDATE_INITIAL_CHECK_DELAY_MS); // the launch trigger too
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(1); // single-flight held
-
-    await act(async () => {
-      resolveCheck(null);
-    });
-  });
-
-  it("removes its listeners and timers on unmount", async () => {
-    vi.useFakeTimers();
-    const removeDoc = vi.spyOn(document, "removeEventListener");
-    const removeWin = vi.spyOn(window, "removeEventListener");
-    const clearInt = vi.spyOn(globalThis, "clearInterval");
-    const clearTo = vi.spyOn(globalThis, "clearTimeout");
-    const { now } = makeClock(0);
-    const { unmount } = render(<UpdateChecker now={now} />);
-
-    unmount();
-    expect(removeDoc).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
-    expect(removeWin).toHaveBeenCalledWith("focus", expect.any(Function));
-    expect(clearInt).toHaveBeenCalled();
-    expect(clearTo).toHaveBeenCalled();
-
-    // No trigger fires anything after teardown.
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-      vi.advanceTimersByTime(UPDATE_BACKSTOP_INTERVAL_MS);
-    });
-    expect(mocks.check).not.toHaveBeenCalled();
+  it("renders NO pill for hidden/idle states, check failures, or after a dismissal", () => {
+    expect(updatePillView(initialUpdateState())).toBeNull();
+    expect(updatePillView(stateAt([{ type: "CHECK_STARTED" }]))).toBeNull();
+    expect(updatePillView(stateAt([{ type: "CHECK_UP_TO_DATE", at: 1 }]))).toBeNull();
+    // CORE-1191: a failed CHECK is never a pill (no update is known to exist).
+    expect(updatePillView(stateAt([{ type: "CHECK_FAILED", offline: false, at: 1 }]))).toBeNull();
+    expect(updatePillView(stateAt([{ type: "CHECK_FAILED", offline: true, at: 1 }]))).toBeNull();
+    expect(updatePillView(stateAt([FOUND, { type: "PILL_DISMISSED" }]))).toBeNull();
   });
 });
 
-describe("UpdateChecker pill (debounce / no re-nag)", () => {
-  it("surfaces Update ready when a check finds an update", async () => {
-    mocks.check.mockResolvedValue({ version: "0.9.0", downloadAndInstall: vi.fn() });
-    render(<UpdateChecker now={() => 0} />);
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
-    expect(await screen.findByRole("button", { name: "Update ready" })).toBeInTheDocument();
+describe("UpdateChecker pill (rendered against a real machine)", () => {
+  it("surfaces Update ready when a check finds an update (auto-download off)", async () => {
+    localStorage.setItem("tl.updateAutoDownload", "0");
+    mocks.check.mockResolvedValue(foundUpdate());
+    const machine = createUpdateMachine({ now: () => 0 });
+    render(<UpdateChecker machine={machine} />);
+    await act(() => machine.autoCheck());
+    expect(screen.getByRole("button", { name: "Update ready" })).toBeInTheDocument();
   });
 
-  it("does not re-animate the pill on a same-version re-check, and never re-shows a dismissed version", async () => {
-    mocks.check.mockResolvedValue({ version: "0.9.0", downloadAndInstall: vi.fn() });
-    const { clock } = makeClock(0);
-    render(<UpdateChecker now={() => clock.value} />);
+  it("acts on the FIRST click: one click starts exactly one download", async () => {
+    localStorage.setItem("tl.updateAutoDownload", "0");
+    const u = foundUpdate();
+    mocks.check.mockResolvedValue(u);
+    const machine = createUpdateMachine({ now: () => 0 });
+    render(<UpdateChecker machine={machine} />);
+    await act(() => machine.autoCheck());
 
+    // The handler reads the MACHINE's phase, not captured React state, so the
+    // first click acts — and a second (double) click cannot start a second run.
+    const pill = screen.getByRole("button", { name: "Update ready" });
     await act(async () => {
-      window.dispatchEvent(new Event("focus"));
+      fireEvent.click(pill);
+      fireEvent.click(pill);
     });
-    const pill = await screen.findByRole("button", { name: "Update ready" });
-
-    // A later, cooldown-clearing trigger leaves the SAME node in place and does not
-    // even re-run the check (a pill is already showing).
-    clock.value = UPDATE_CHECK_COOLDOWN_MS;
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
-    expect(screen.getByRole("button", { name: "Update ready" })).toBe(pill);
-    expect(mocks.check).toHaveBeenCalledTimes(1);
-
-    // Dismiss → hidden; a later same-version check does not bring it back.
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss update" }));
-    expect(screen.queryByRole("button", { name: "Update ready" })).toBeNull();
-
-    clock.value = 3 * UPDATE_CHECK_COOLDOWN_MS;
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(2); // the re-check ran...
-    expect(screen.queryByRole("button", { name: "Update ready" })).toBeNull(); // ...but the version was dismissed
+    expect(u.downloadAndInstall).toHaveBeenCalledTimes(1);
   });
 
-  it("never disturbs the reader's scroll when the pill appears", async () => {
-    // jsdom defines neither; install no-op spies and assert the pill never reaches
-    // for them (the pill is position:fixed and touches no scroll position).
-    const scrollIntoView = vi.fn();
-    const scrollTo = vi.fn();
-    Element.prototype.scrollIntoView = scrollIntoView;
-    window.scrollTo = scrollTo as typeof window.scrollTo;
-    try {
-      mocks.check.mockResolvedValue({ version: "0.9.0", downloadAndInstall: vi.fn() });
-      render(<UpdateChecker now={() => 0} />);
-      await act(async () => {
-        window.dispatchEvent(new Event("focus"));
-      });
-      expect(await screen.findByRole("button", { name: "Update ready" })).toBeInTheDocument();
-      expect(scrollIntoView).not.toHaveBeenCalled();
-      expect(scrollTo).not.toHaveBeenCalled();
-    } finally {
-      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
-    }
-  });
-});
-
-describe("UpdateChecker action flow (unchanged download/install/restart)", () => {
-  // CORE-1191: a failed CHECK means no update is known to exist, so it must never
-  // surface a pill. The classic case is a fresh offline install: the old behavior
-  // showed a phantom "Download update" ~8s after launch, a dead-end pointing at a
-  // download page the reader can't reach.
-  it("a failed launch check (e.g. offline) surfaces NO pill, just a log line", async () => {
-    vi.useFakeTimers();
-    mocks.check.mockRejectedValue(new Error("error sending request for url"));
-    const { now } = makeClock(0);
-    const { container } = render(<UpdateChecker now={now} />);
-
-    await act(async () => {
-      vi.advanceTimersByTime(UPDATE_INITIAL_CHECK_DELAY_MS);
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(1);
-    expect(container).toBeEmptyDOMElement(); // no phantom pill, no error copy
-    expect(screen.queryByText("Download update")).toBeNull();
-    expect(console.warn).toHaveBeenCalledWith(
-      expect.stringContaining("check failed"),
-      expect.any(Error),
-    );
-  });
-
-  // CORE-1191: the phantom pill also FROZE checking — with a pill up, maybeCheck
-  // no-ops, so one transient blip ended real update checks for the session.
-  it("a transient check failure does not freeze later checks", async () => {
-    mocks.check
-      .mockRejectedValueOnce(new Error("timed out"))
-      .mockResolvedValueOnce({ version: "0.9.1", downloadAndInstall: vi.fn() });
-    const { clock, now } = makeClock(0);
-    render(<UpdateChecker now={now} />);
-
-    await act(async () => {
-      window.dispatchEvent(new Event("focus")); // first check: transient failure
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Download update")).toBeNull();
-
-    clock.value = UPDATE_CHECK_COOLDOWN_MS; // cooldown elapsed
-    await act(async () => {
-      window.dispatchEvent(new Event("focus")); // next trigger must really check
-    });
-    expect(mocks.check).toHaveBeenCalledTimes(2);
-    expect(await screen.findByRole("button", { name: "Update ready" })).toBeInTheDocument();
-  });
-
-  it("downloads in place, exposes Updating as busy/live, then offers restart without forcing it", async () => {
+  it("downloads quietly (busy status, no % text), then offers restart without forcing it", async () => {
     let finishDownload: () => void = () => {
       throw new Error("download promise was not started");
     };
@@ -332,162 +148,152 @@ describe("UpdateChecker action flow (unchanged download/install/restart)", () =>
         finishDownload = resolve;
       });
     });
-    mocks.check.mockResolvedValue({ version: "0.8.0", downloadAndInstall });
-    render(<UpdateChecker now={() => 0} />);
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
+    mocks.check.mockResolvedValue(foundUpdate({ downloadAndInstall }));
+    const machine = createUpdateMachine({ now: () => 0 });
+    render(<UpdateChecker machine={machine} />);
+    await act(() => machine.autoCheck()); // auto-download ON by default
 
-    fireEvent.click(await screen.findByRole("button", { name: "Update ready" }));
-    const updating = await screen.findByRole("status");
+    const updating = screen.getByRole("status");
     expect(updating).toHaveAttribute("aria-busy", "true");
     expect(updating).toHaveTextContent("Updating");
-    expect(downloadAndInstall).toHaveBeenCalledTimes(1);
+    expect(updating).not.toHaveTextContent("%"); // the pill never shouts numbers
     expect(mocks.relaunch).not.toHaveBeenCalled();
 
-    finishDownload();
-    const restart = await screen.findByRole("button", { name: "Restart to update" });
+    await act(async () => {
+      finishDownload();
+    });
+    const restart = screen.getByRole("button", { name: "Restart to update" });
     expect(mocks.relaunch).not.toHaveBeenCalled();
 
     fireEvent.click(restart);
-    await waitFor(() => expect(mocks.relaunch).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(mocks.relaunch).toHaveBeenCalledTimes(1);
     expect(mocks.invoke).toHaveBeenCalledWith("cmd_prepare_update_relaunch_focus");
-    const markerCall = mocks.invoke.mock.invocationCallOrder.find((_, i) =>
-      mocks.invoke.mock.calls[i]?.[0] === "cmd_prepare_update_relaunch_focus"
-    );
-    expect(markerCall).toBeLessThan(mocks.relaunch.mock.invocationCallOrder[0]);
   });
 
-  it("falls back to the public download when download/install fails", async () => {
-    const downloadAndInstall = vi.fn(() => Promise.reject(new Error("signature mismatch")));
-    mocks.check.mockResolvedValue({ version: "0.8.0", downloadAndInstall });
-    render(<UpdateChecker now={() => 0} />);
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
+  it("a failed download shows Try again (in-app retry), never an external link", async () => {
+    const downloadAndInstall = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.reject(new Error("signature mismatch")))
+      .mockImplementationOnce(() => Promise.resolve());
+    mocks.check.mockResolvedValue(foundUpdate({ downloadAndInstall }));
+    const machine = createUpdateMachine({ now: () => 0 });
+    render(<UpdateChecker machine={machine} />);
+    await act(() => machine.autoCheck());
 
-    fireEvent.click(await screen.findByRole("button", { name: "Update ready" }));
-    const fallback = await screen.findByRole("button", { name: "Download update" });
-    expect(fallback.closest(".tl-update-pill")?.className).toContain("fallback");
+    const retry = screen.getByRole("button", { name: "Try again" });
+    expect(retry.closest(".tl-update-pill")?.className).toContain("fallback");
+    // Calm copy: no raw error text bleeds into the pill.
     expect(screen.queryByText(/signature|mismatch|error|failed/i)).toBeNull();
-    expect(console.warn).toHaveBeenCalledWith(
-      expect.stringContaining("download failed"),
-      expect.any(Error),
-    );
 
-    fireEvent.click(fallback);
-    expect(window.open).toHaveBeenCalledWith(FALLBACK_DOWNLOAD_URL, "_blank", "noopener,noreferrer");
-  });
-});
-
-// CORE-1160 — critical (security) updates. The app reads severity straight from the
-// manifest (Update.rawJson) and surfaces a calm-but-persistent "Security update"
-// pill that cannot be waved off. Everything parses defensively to routine.
-function criticalUpdate(rawOver: Record<string, unknown> = {}, currentVersion = "0.8.3") {
-  return {
-    version: "0.9.0",
-    currentVersion,
-    rawJson: { severity: "critical", ...rawOver },
-    downloadAndInstall: vi.fn(),
-  };
-}
-
-describe("semverLt (tiny numeric x.y.z compare)", () => {
-  it("compares numerically, ignoring pre-release, missing segments as 0", () => {
-    expect(semverLt("0.8.3", "0.8.4")).toBe(true);
-    expect(semverLt("0.8.4", "0.8.4")).toBe(false);
-    expect(semverLt("0.10.0", "0.9.0")).toBe(false); // 10 > 9
-    expect(semverLt("0.9.0", "0.10.0")).toBe(true);
-    expect(semverLt("0.8.3-beta.1", "0.8.3")).toBe(false); // pre-release ignored
-    expect(semverLt("1.0", "1.0.1")).toBe(true); // missing patch => 0
-  });
-});
-
-describe("isCriticalUpdate (defensive manifest read)", () => {
-  it("is critical when severity=critical and no criticalBelow", () => {
-    expect(isCriticalUpdate({ severity: "critical" }, "0.8.3")).toBe(true);
-  });
-  it("respects criticalBelow as a version floor", () => {
-    expect(isCriticalUpdate({ severity: "critical", criticalBelow: "0.9.0" }, "0.8.3")).toBe(true);
-    expect(isCriticalUpdate({ severity: "critical", criticalBelow: "0.9.0" }, "0.9.0")).toBe(false);
-    expect(isCriticalUpdate({ severity: "critical", criticalBelow: "0.8.3" }, "0.8.3")).toBe(false);
-  });
-  it("fails safe to routine on any malformed/missing field", () => {
-    expect(isCriticalUpdate(undefined, "0.8.3")).toBe(false);
-    expect(isCriticalUpdate(null, "0.8.3")).toBe(false);
-    expect(isCriticalUpdate({}, "0.8.3")).toBe(false); // no severity
-    expect(isCriticalUpdate({ severity: "high" }, "0.8.3")).toBe(false); // other severity
-    expect(isCriticalUpdate({ severity: 1 }, "0.8.3")).toBe(false); // non-string severity
-    expect(isCriticalUpdate({ severity: "critical", criticalBelow: "not-a-version" }, "0.8.3")).toBe(false);
-    expect(isCriticalUpdate({ severity: "critical", criticalBelow: {} }, "0.8.3")).toBe(false);
-    expect(isCriticalUpdate({ severity: "critical", criticalBelow: "0.9.0" }, "garbage")).toBe(false);
-  });
-});
-
-describe("UpdateChecker critical pill", () => {
-  it("renders a persistent Security update pill (no dismiss) for a critical update", async () => {
-    mocks.check.mockResolvedValue(criticalUpdate());
-    render(<UpdateChecker now={() => 0} />);
     await act(async () => {
-      window.dispatchEvent(new Event("focus"));
+      fireEvent.click(retry);
     });
+    expect(downloadAndInstall).toHaveBeenCalledTimes(2);
+    expect(mocks.openUrl).not.toHaveBeenCalled(); // the pill NEVER opens the website
+    expect(screen.getByRole("button", { name: "Restart to update" })).toBeInTheDocument();
+  });
 
-    const pill = await screen.findByRole("button", { name: "Security update" });
+  it("a failed launch check (e.g. offline) surfaces NO pill (CORE-1191)", async () => {
+    mocks.check.mockRejectedValue(new Error("error sending request for url"));
+    const machine = createUpdateMachine({ now: () => 0 });
+    const { container } = render(<UpdateChecker machine={machine} />);
+    await act(() => machine.autoCheck());
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("dismiss hides the pill for the session while the machine keeps its state", async () => {
+    localStorage.setItem("tl.updateAutoDownload", "0");
+    mocks.check.mockResolvedValue(foundUpdate());
+    const machine = createUpdateMachine({ now: () => 0 });
+    render(<UpdateChecker machine={machine} />);
+    await act(() => machine.autoCheck());
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss update" }));
+    expect(screen.queryByRole("button", { name: "Update ready" })).toBeNull();
+    // The machine still knows the update — Settings keeps rendering it.
+    expect(machine.getState().phase).toBe("available");
+    expect(machine.getState().version).toBe("0.9.5");
+  });
+
+  it("renders a Security update pill for a critical update (dismissable, resurfaces once)", async () => {
+    localStorage.setItem("tl.updateAutoDownload", "0");
+    mocks.check.mockResolvedValue(foundUpdate({ rawJson: { severity: "critical" } }));
+    const machine = createUpdateMachine({ now: () => 0 });
+    render(<UpdateChecker machine={machine} />);
+    await act(() => machine.autoCheck());
+
+    const pill = screen.getByRole("button", { name: "Security update" });
     expect(pill.closest(".tl-update-pill")?.className).toContain("critical");
-    // Persistent: no dismiss control at all.
-    expect(screen.queryByRole("button", { name: "Dismiss update" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Update ready" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss update" }));
+    expect(screen.queryByRole("button", { name: "Security update" })).toBeNull();
+
+    // The next check re-finds it: the once-per-launch resurface brings it back.
+    await act(() => machine.manualCheck());
+    expect(screen.getByRole("button", { name: "Security update" })).toBeInTheDocument();
   });
 
-  it("treats criticalBelow as a floor: above the current version is critical, at/below is routine", async () => {
-    // criticalBelow above the installed version → critical.
-    mocks.check.mockResolvedValue(criticalUpdate({ criticalBelow: "0.9.0" })); // currentVersion 0.8.3
-    const { unmount } = render(<UpdateChecker now={() => 0} />);
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
-    expect(await screen.findByRole("button", { name: "Security update" })).toBeInTheDocument();
+  it("respects visible={false} without stopping the machine", async () => {
+    localStorage.setItem("tl.updateAutoDownload", "0");
+    mocks.check.mockResolvedValue(foundUpdate());
+    const machine = createUpdateMachine({ now: () => 0 });
+    const { container } = render(<UpdateChecker visible={false} machine={machine} />);
+    await act(() => machine.autoCheck());
+    expect(container).toBeEmptyDOMElement();
+    expect(machine.getState().phase).toBe("available");
+  });
+
+  it("never disturbs the reader's scroll when the pill appears", async () => {
+    const scrollIntoView = vi.fn();
+    const scrollTo = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    window.scrollTo = scrollTo as typeof window.scrollTo;
+    try {
+      localStorage.setItem("tl.updateAutoDownload", "0");
+      mocks.check.mockResolvedValue(foundUpdate());
+      const machine = createUpdateMachine({ now: () => 0 });
+      render(<UpdateChecker machine={machine} />);
+      await act(() => machine.autoCheck());
+      expect(screen.getByRole("button", { name: "Update ready" })).toBeInTheDocument();
+      expect(scrollIntoView).not.toHaveBeenCalled();
+      expect(scrollTo).not.toHaveBeenCalled();
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it("starts the automatic cadence on mount and tears it down on unmount", async () => {
+    vi.useFakeTimers();
+    const machine = createUpdateMachine({ now: () => 0 });
+    const { unmount } = render(<UpdateChecker machine={machine} />);
     unmount();
-
-    // criticalBelow at/below the installed version → routine "Update ready" with a dismiss.
-    mocks.check.mockResolvedValue(criticalUpdate({ criticalBelow: "0.9.0" }, "0.9.0"));
-    render(<UpdateChecker now={() => 0} />);
+    // No trigger fires anything after teardown.
+    window.dispatchEvent(new Event("focus"));
     await act(async () => {
-      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(UPDATE_BACKSTOP_INTERVAL_MS);
     });
-    expect(await screen.findByRole("button", { name: "Update ready" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Security update" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Dismiss update" })).toBeInTheDocument();
+    expect(mocks.check).not.toHaveBeenCalled();
   });
+});
 
-  it("falls safe to a routine pill when the severity is malformed", async () => {
-    mocks.check.mockResolvedValue(criticalUpdate({ severity: "scary" }));
-    render(<UpdateChecker now={() => 0} />);
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
-    expect(await screen.findByRole("button", { name: "Update ready" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Security update" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Dismiss update" })).toBeInTheDocument();
-  });
+describe("window.open stays banned (CORE-1192)", () => {
+  // The masked-bug pattern: window.open silently no-ops in wry, so a mocked
+  // assertion on it proves nothing. Pin that no update-path source ever
+  // reaches for it again — the opener plugin is the one way out.
+  const sources = import.meta.glob(["../updateMachine.ts", "./UpdateChecker.tsx", "./SoftwareUpdate.tsx"], {
+    eager: true,
+    query: "?raw",
+    import: "default",
+  }) as Record<string, string>;
 
-  it("a critical update is NOT suppressible by a prior routine dismissal of the same version", async () => {
-    const { clock } = makeClock(0);
-    // First the version appears routine and is dismissed.
-    mocks.check.mockResolvedValue({ version: "0.9.0", currentVersion: "0.8.3", downloadAndInstall: vi.fn() });
-    render(<UpdateChecker now={() => clock.value} />);
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
-    fireEvent.click(await screen.findByRole("button", { name: "Dismiss update" }));
-    expect(screen.queryByRole("button", { name: "Update ready" })).toBeNull();
-
-    // Later the manifest marks that same version critical → it surfaces anyway.
-    mocks.check.mockResolvedValue(criticalUpdate({ severity: "critical", criticalBelow: undefined }));
-    clock.value = UPDATE_CHECK_COOLDOWN_MS;
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
-    expect(await screen.findByRole("button", { name: "Security update" })).toBeInTheDocument();
+  it("no update-path source calls window.open", () => {
+    const files = Object.keys(sources);
+    expect(files.length).toBeGreaterThanOrEqual(3);
+    for (const [file, code] of Object.entries(sources)) {
+      expect(code, `${file} must use the opener plugin, not window.open`).not.toMatch(
+        /window\.open\(/,
+      );
+    }
   });
 });

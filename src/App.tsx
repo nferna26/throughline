@@ -24,6 +24,7 @@ import { errorMessage } from "./types";
 import { purgeLegacyBriefings } from "./sectionBriefing";
 import { migrateLegacyLocalStorageKeys } from "./legacyStorage";
 import { focusAfterUpdateRelaunchIfNeeded } from "./updateRelaunchFocus";
+import { updateMachine } from "./updateMachine";
 import {
   adjustFontSize,
   getCachedThemePref,
@@ -241,6 +242,35 @@ export default function App() {
       }
     })();
     return () => unlisten?.();
+  }, []);
+
+  // The macOS app-menu "Check for Updates…" item (CORE-1193). The Rust menu
+  // handler focuses the window and emits this event; we land the reader on the
+  // Settings Software Update section and start a MANUAL check (never gated by
+  // the automatic cooldown — the machine no-ops it if an update is already
+  // mid-download or waiting on a restart). The window event mirrors the Tauri
+  // one for the browser harness (same idiom as tl-company-activated).
+  const [jumpToUpdate, setJumpToUpdate] = useState(false);
+  useEffect(() => {
+    const onCheckForUpdates = () => {
+      setView({ kind: "settings" });
+      setJumpToUpdate(true);
+      void updateMachine.manualCheck();
+    };
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen("tl-menu-check-updates", onCheckForUpdates);
+      } catch {
+        /* not running under Tauri — nothing to listen to */
+      }
+    })();
+    window.addEventListener("tl-menu-check-updates", onCheckForUpdates);
+    return () => {
+      unlisten?.();
+      window.removeEventListener("tl-menu-check-updates", onCheckForUpdates);
+    };
   }, []);
 
   // Phrases land in the background (fire-and-forget upserts after import or a
@@ -868,7 +898,9 @@ export default function App() {
         {view.kind === "discover" && (
           <Discover onBack={() => setView({ kind: "today" })} onPicked={onDiscoverPick} />
         )}
-        {view.kind === "settings" && <Settings />}
+        {view.kind === "settings" && (
+          <Settings jumpToUpdate={jumpToUpdate} onJumpConsumed={() => setJumpToUpdate(false)} />
+        )}
       </main>
       <UpdateChecker visible={view.kind === "today" && (today === null || tab === "today")} />
     </div>

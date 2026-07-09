@@ -1,328 +1,79 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { useEffect } from "react";
+import { useSyncExternalStore } from "react";
 import TLIcon, { type IconName } from "./TLIcon";
+import {
+  updateMachine,
+  updatePillVisible,
+  type UpdateMachine,
+  type UpdateMachineState,
+} from "../updateMachine";
 
-export const FALLBACK_DOWNLOAD_URL = "https://readthroughline.com/download";
-
-// CORE-1159 — event-driven cadence. The old model checked ~24h after launch via a
-// bare setTimeout that paused across sleep, so keep-the-app-open users never got
-// updates. The new model is four triggers funnelling through one cooldown-gated
-// maybeCheck(): a launch check, focus/visibility, a self-correcting wake heartbeat,
-// and a 6h backstop. One timestamp (lastCheckAt) throttles them all.
-export const UPDATE_INITIAL_CHECK_DELAY_MS = 8_000; // launch: check 8s after the today surface mounts
-export const UPDATE_CHECK_COOLDOWN_MS = 30 * 60_000; // min spacing between any two real checks
-export const UPDATE_BACKSTOP_INTERVAL_MS = 6 * 60 * 60_000; // force a check if 6h pass untouched
-export const UPDATE_HEARTBEAT_MS = 60_000; // the metronome that detects wake + backstop
-export const UPDATE_WAKE_GAP_MS = 2 * 60_000; // a heartbeat gap past this means the machine slept/throttled
-
-export type UpdatePillPhase = "hidden" | "ready" | "updating" | "restart" | "fallback";
-type FallbackReason = "check" | "download" | "restart";
+// CORE-1192/1193 — the pill is now a THIN view over the one update state
+// machine (src/updateMachine.ts); the Settings "Software Update" section renders
+// the same store. This component (a) starts the automatic trigger cadence once,
+// for the whole app session, and (b) renders the pill when `visible` (App shows
+// it only on the today surface) AND the machine says a pill belongs on screen.
+// Every click calls straight into the machine, which acts on its CURRENT phase
+// — never stale React state — so the primary action works on the first click.
 
 type PillView = {
-  label: "Update ready" | "Updating" | "Restart to update" | "Download update";
+  label: "Update ready" | "Security update" | "Updating" | "Restart to update" | "Restarting" | "Try again";
   icon: IconName;
   busy: boolean;
   fallback: boolean;
+  action: "download" | "restart" | "retry" | null;
+  dismissable: boolean;
 };
 
-// ── Pure, time-injected cadence helpers (testable without a DOM/clock) ────────
-
-/**
- * The cooldown gate for the maybeCheck() funnel: a real check is allowed only when
- * none has run yet (lastCheckAt === null) or the cooldown has fully elapsed.
- */
-export function updateCheckAllowed(
-  lastCheckAt: number | null,
-  now: number,
-  cooldownMs = UPDATE_CHECK_COOLDOWN_MS,
-): boolean {
-  return lastCheckAt === null || now - lastCheckAt >= cooldownMs;
-}
-
-/**
- * The machine slept (or the timer was throttled) if the observed wall-clock gap
- * since the last heartbeat tick exceeds the wake threshold — far longer than the
- * heartbeat interval, so a normal tick never trips it.
- */
-export function wakeDetected(
-  lastTickAt: number | null,
-  now: number,
-  gapMs = UPDATE_WAKE_GAP_MS,
-): boolean {
-  return lastTickAt !== null && now - lastTickAt > gapMs;
-}
-
-/**
- * The backstop is due when a check has run and the backstop interval has elapsed
- * since — the safety net for a continuously-awake window that never refocuses.
- */
-export function backstopDue(
-  lastCheckAt: number | null,
-  now: number,
-  intervalMs = UPDATE_BACKSTOP_INTERVAL_MS,
-): boolean {
-  return lastCheckAt !== null && now - lastCheckAt >= intervalMs;
-}
-
-// CORE-1160 — read severity straight from the manifest (Update.rawJson is the full
-// parsed latest.json). Critical (security) updates get a calm-but-persistent
-// "Security update" pill that can't be waved off. Everything parses defensively:
-// any malformed or missing field falls safe to routine.
-
-/**
- * A tiny semver "x.y.z" less-than: numeric segment compare, pre-release / build
- * metadata ignored, missing segments treated as 0. No new deps.
- */
-export function semverLt(a: string, b: string): boolean {
-  const parse = (s: string) =>
-    String(s)
-      .split("+")[0] // drop +build metadata
-      .split("-")[0] // drop -prerelease
-      .split(".")
-      .map((n) => parseInt(n, 10));
-  const pa = parse(a);
-  const pb = parse(b);
-  for (let i = 0; i < 3; i++) {
-    const x = Number.isFinite(pa[i]) ? pa[i] : 0;
-    const y = Number.isFinite(pb[i]) ? pb[i] : 0;
-    if (x !== y) return x < y;
+/** The pill's face for a machine state — pure, exported for tests. Returns null
+ *  when no pill should render (updatePillVisible is the single gate). */
+export function updatePillView(s: UpdateMachineState): PillView | null {
+  if (!updatePillVisible(s)) return null;
+  switch (s.phase) {
+    case "available":
+      return {
+        label: s.critical ? "Security update" : "Update ready",
+        icon: "download",
+        busy: false,
+        fallback: false,
+        action: "download",
+        dismissable: true,
+      };
+    case "downloading":
+      return { label: "Updating", icon: "download", busy: true, fallback: false, action: null, dismissable: false };
+    case "readyToRestart":
+      return { label: "Restart to update", icon: "restart", busy: false, fallback: false, action: "restart", dismissable: true };
+    case "relaunching":
+      return { label: "Restarting", icon: "restart", busy: true, fallback: false, action: null, dismissable: false };
+    case "error":
+      // Only download/restart failures reach the pill (updatePillVisible). The
+      // failure state re-runs the step IN-APP — never a dead-end external link.
+      return { label: "Try again", icon: "refresh", busy: false, fallback: true, action: "retry", dismissable: true };
+    default:
+      return null;
   }
-  return false;
-}
-
-const SEMVER_SHAPE = /^\d+\.\d+(\.\d+)?$/;
-
-/**
- * Is this found update critical? True only when the manifest marks
- * `severity: "critical"` AND (no `criticalBelow`, or the installed version is below
- * it). Defensive by construction: a missing/malformed severity or criticalBelow,
- * or an unreadable current version, all resolve to NOT critical (fail safe to calm).
- */
-export function isCriticalUpdate(rawJson: unknown, currentVersion: string): boolean {
-  if (!rawJson || typeof rawJson !== "object") return false;
-  const manifest = rawJson as Record<string, unknown>;
-  if (manifest.severity !== "critical") return false;
-
-  const below = manifest.criticalBelow;
-  if (below === undefined || below === null) return true; // critical with no version floor
-  if (typeof below !== "string" && typeof below !== "number") return false; // malformed => routine
-  const belowStr = String(below);
-  if (!SEMVER_SHAPE.test(belowStr)) return false; // malformed => routine
-  if (typeof currentVersion !== "string" || !SEMVER_SHAPE.test(currentVersion)) return false;
-  return semverLt(currentVersion, belowStr);
-}
-
-export function updatePillView(phase: Exclude<UpdatePillPhase, "hidden">): PillView {
-  switch (phase) {
-    case "ready":
-      return { label: "Update ready", icon: "download", busy: false, fallback: false };
-    case "updating":
-      return { label: "Updating", icon: "download", busy: true, fallback: false };
-    case "restart":
-      return { label: "Restart to update", icon: "restart", busy: false, fallback: false };
-    case "fallback":
-      return { label: "Download update", icon: "download", busy: false, fallback: true };
-  }
-}
-
-function logUpdateFallback(reason: FallbackReason, err: unknown) {
-  const outcome =
-    reason === "check"
-      ? "will retry on a later trigger"
-      : "falling back to the public download";
-  console.warn(`[throughline:update] ${reason} failed; ${outcome}.`, err);
 }
 
 type Props = {
   visible?: boolean;
-  now?: () => number;
+  machine?: UpdateMachine;
 };
 
-const defaultNow = () => Date.now();
+export default function UpdateChecker({ visible = true, machine = updateMachine }: Props) {
+  const state = useSyncExternalStore(machine.subscribe, machine.getState);
 
-export default function UpdateChecker({ visible = true, now = defaultNow }: Props) {
-  const [phase, setPhase] = useState<UpdatePillPhase>("hidden");
-  const [update, setUpdate] = useState<Update | null>(null);
-  const [pct, setPct] = useState(0);
-  // CORE-1160: whether the surfaced update is a critical (security) one. State for
-  // render, ref so the async funnel + dismiss logic read it synchronously.
-  const [isCritical, setIsCritical] = useState(false);
-  const isCriticalRef = useRef(false);
+  // The automatic cadence (launch / focus / wake / backstop — CORE-1159) runs
+  // for the whole session, independent of where the pill happens to render, so
+  // the Settings section is live from any screen.
+  useEffect(() => machine.startTriggers(), [machine]);
 
-  // Single-flight + the one cadence timestamp + the heartbeat's last tick. The
-  // pendingVersion / dismissedVersion refs keep the pill from re-nagging: it
-  // animates in once per version, moves forward only, and a dismissed version is
-  // not re-shown this session. phaseRef mirrors phase so the async funnel can read
-  // it synchronously.
-  const checkingRef = useRef(false);
-  const lastCheckAtRef = useRef<number | null>(null);
-  const lastTickRef = useRef<number | null>(null);
-  const pendingVersionRef = useRef<string | null>(null);
-  const dismissedVersionRef = useRef<string | null>(null);
-  const phaseRef = useRef<UpdatePillPhase>("hidden");
+  if (!visible) return null;
+  const view = updatePillView(state);
+  if (!view) return null;
 
-  const goPhase = useCallback((p: UpdatePillPhase) => {
-    phaseRef.current = p;
-    setPhase(p);
-  }, []);
-
-  const enterFallback = useCallback(
-    (reason: FallbackReason, err: unknown) => {
-      logUpdateFallback(reason, err);
-      // CORE-1191: a failed CHECK never surfaces the pill — no update is known
-      // to exist, so "Download update" would be a phantom (the classic case: a
-      // fresh offline install, ~8s after launch). Staying hidden also keeps the
-      // cooldown-gated funnel alive: a transient blip must not freeze checking
-      // for the session. The fallback pill remains for download/restart
-      // failures, where a real update exists and the updater itself broke.
-      if (reason === "check") return;
-      setUpdate(null);
-      setPct(0);
-      goPhase("fallback");
-    },
-    [goPhase],
-  );
-
-  // A found update surfaces the "ready" pill exactly once per version: not if a
-  // pill is already up (forward-only, no re-mount / progress reset), and not if the
-  // reader already dismissed this version this session.
-  const onUpdateFound = useCallback(
-    (u: Update) => {
-      if (phaseRef.current !== "hidden") return;
-      const critical = isCriticalUpdate(u.rawJson, u.currentVersion);
-      // A routine dismissal suppresses re-show of that version — but a CRITICAL
-      // update overrides it (a security fix can never be waved off this session).
-      if (!critical && dismissedVersionRef.current === u.version) return;
-      isCriticalRef.current = critical;
-      setIsCritical(critical);
-      pendingVersionRef.current = u.version;
-      setUpdate(u);
-      setPct(0);
-      goPhase("ready");
-    },
-    [goPhase],
-  );
-
-  // The single funnel. Every trigger routes here. No-ops if a check is in flight,
-  // if a pill is already showing, or if the cooldown since the last check hasn't
-  // elapsed. A real run stamps lastCheckAt and checks silently.
-  const maybeCheck = useCallback(async () => {
-    if (checkingRef.current) return;
-    if (phaseRef.current !== "hidden") return;
-    const t = now();
-    if (!updateCheckAllowed(lastCheckAtRef.current, t)) return;
-    checkingRef.current = true;
-    lastCheckAtRef.current = t;
-    try {
-      const u = await check();
-      if (u) onUpdateFound(u);
-    } catch (err) {
-      enterFallback("check", err);
-    } finally {
-      checkingRef.current = false;
-    }
-  }, [now, onUpdateFound, enterFallback]);
-
-  // All four triggers live on one effect so they share one teardown. Gated by
-  // `visible` (App.tsx shows the pill only on the today surface).
-  useEffect(() => {
-    if (!visible) return;
-    let disposed = false;
-
-    // 1. Launch: one check a beat after the surface mounts (not on first paint).
-    const launchTimer = setTimeout(() => {
-      if (!disposed) void maybeCheck();
-    }, UPDATE_INITIAL_CHECK_DELAY_MS);
-
-    // 2. Focus / visibility. Prefer visibilitychange; window focus is the noisier
-    //    backstop (covers the Tauri webview regaining native focus too). Both are
-    //    cooldown-gated, so rapid focus/blur cycling never fires repeated checks.
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void maybeCheck();
-    };
-    const onFocus = () => void maybeCheck();
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onFocus);
-
-    // 3 & 4. Wake heartbeat + 6h backstop on one self-correcting interval. Each
-    //    tick records now(); an oversized gap means the machine slept (wake), and
-    //    the same tick forces a check once the backstop interval has elapsed.
-    lastTickRef.current = now();
-    const heartbeat = setInterval(() => {
-      const t = now();
-      const slept = wakeDetected(lastTickRef.current, t);
-      lastTickRef.current = t;
-      if (slept || backstopDue(lastCheckAtRef.current, t)) void maybeCheck();
-    }, UPDATE_HEARTBEAT_MS);
-
-    return () => {
-      disposed = true;
-      clearTimeout(launchTimer);
-      clearInterval(heartbeat);
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [visible, maybeCheck, now]);
-
-  const dismissUpdate = useCallback(() => {
-    // A critical (security) update is persistent: it has no dismiss control, and is
-    // never written to dismissedVersion, so it can never be waved off this session.
-    if (isCriticalRef.current) return;
-    if (pendingVersionRef.current) dismissedVersionRef.current = pendingVersionRef.current;
-    setUpdate(null);
-    setPct(0);
-    goPhase("hidden");
-  }, [goPhase]);
-
-  async function startUpdate() {
-    if (!update || phaseRef.current !== "ready") return;
-    goPhase("updating");
-    setPct(0);
-    try {
-      let total = 0;
-      let got = 0;
-      await update.downloadAndInstall((ev) => {
-        if (ev.event === "Started") total = ev.data.contentLength ?? 0;
-        else if (ev.event === "Progress") {
-          got += ev.data.chunkLength;
-          if (total) setPct(Math.min(100, Math.round((got / total) * 100)));
-        }
-      });
-      setPct(100);
-      goPhase("restart");
-    } catch (err) {
-      enterFallback("download", err);
-    }
-  }
-
-  async function restartToUpdate() {
-    if (phaseRef.current !== "restart") return;
-    let relaunchMarkerPrepared = false;
-    try {
-      await invoke("cmd_prepare_update_relaunch_focus");
-      relaunchMarkerPrepared = true;
-      await relaunch();
-    } catch (err) {
-      if (relaunchMarkerPrepared) {
-        invoke("cmd_consume_update_relaunch_focus").catch(() => {});
-      }
-      enterFallback("restart", err);
-    }
-  }
-
-  function openFallbackDownload() {
-    window.open(FALLBACK_DOWNLOAD_URL, "_blank", "noopener,noreferrer");
-  }
-
-  if (!visible || phase === "hidden") return null;
-
-  const view = updatePillView(phase);
   const className = `tl-update-pill${view.fallback ? " fallback" : ""}${view.busy ? " updating" : ""}${
-    isCritical ? " critical" : ""
+    state.critical ? " critical" : ""
   }`;
-  const progress = Math.max(4, Math.min(100, pct));
 
   // A reset for the inner action button so the wrapping pill keeps its chrome.
   const bareButton = {
@@ -335,7 +86,10 @@ export default function UpdateChecker({ visible = true, now = defaultNow }: Prop
     cursor: "pointer",
   } as const;
 
-  if (phase === "updating") {
+  // Busy states (downloading / relaunching) are a quiet, live status — a thin
+  // indicator, no shouting percentage in the pill (Settings carries the %).
+  if (view.busy) {
+    const progress = Math.max(4, Math.min(100, state.progressPct ?? 4));
     return (
       <div className={className} role="status" aria-live="polite" aria-busy="true">
         <span className="tl-update-pill-main">
@@ -349,41 +103,24 @@ export default function UpdateChecker({ visible = true, now = defaultNow }: Prop
     );
   }
 
-  // The restart pill is a committed, single-action state — no dismiss.
-  if (phase === "restart") {
-    return (
-      <button className={className} type="button" onClick={restartToUpdate}>
-        <span className="tl-update-pill-main">
-          <TLIcon name={view.icon} size={15} />
-          <span>{view.label}</span>
-        </span>
-      </button>
-    );
-  }
+  const onPrimary = () => {
+    if (view.action === "download") void machine.download();
+    else if (view.action === "restart") void machine.restart();
+    else if (view.action === "retry") void machine.retry();
+  };
 
-  // "ready" + "fallback": the primary action plus a quiet dismiss so a version the
-  // reader waves off is not re-shown this session. A CRITICAL "ready" is the
-  // exception: it reads "Security update", carries the `critical` accent, and is
-  // PERSISTENT (no dismiss control). It still only downloads on the reader's click
-  // and never auto-installs or auto-relaunches.
-  const label = phase === "ready" && isCritical ? "Security update" : view.label;
   return (
     <div className={className} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-      <button
-        type="button"
-        className="tl-update-pill-main"
-        style={bareButton}
-        onClick={phase === "ready" ? startUpdate : openFallbackDownload}
-      >
+      <button type="button" className="tl-update-pill-main" style={bareButton} onClick={onPrimary}>
         <TLIcon name={view.icon} size={15} />
-        <span>{label}</span>
+        <span>{view.label}</span>
       </button>
-      {!isCritical && (
+      {view.dismissable && (
         <button
           type="button"
           aria-label="Dismiss update"
           style={{ ...bareButton, padding: 2, lineHeight: 0, opacity: 0.55 }}
-          onClick={dismissUpdate}
+          onClick={() => machine.dismissPill()}
         >
           <TLIcon name="x" size={12} />
         </button>

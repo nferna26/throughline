@@ -7,6 +7,35 @@ documented in [`docs/IPC.md`](./docs/IPC.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The update pill's download button works.** "Download update" opened nothing
+  (window.open is a no-op inside the app shell); the public download page now
+  opens in your browser through the system opener, scoped to
+  readthroughline.com only (CORE-1192).
+- **The first click counts.** Clicking Throughline while another app has focus
+  now registers immediately (acceptFirstMouse), and every update action acts on
+  the live update state, so no click is lost to a stale render (CORE-1192).
+
+### Added
+
+- **Settings › Software Update.** A durable, never-dead-end update home: your
+  version, when we last checked, a manual "Check for updates" that skips the
+  automatic cooldown, live download progress, "Restart now", and calm recovery
+  ("Try again" in app; the website only as a last resort) (CORE-1193).
+- **Throughline › Check for Updates…** in the macOS menu bar, landing on the
+  Software Update section and checking right away (CORE-1193).
+- **Background downloads by default.** A found update downloads quietly and the
+  pill asks one thing: "Restart to update". A Settings toggle ("Download
+  updates automatically") keeps download-on-click available (CORE-1193).
+
+### Changed
+
+- **One update state machine.** The pill and Settings render the same store, so
+  dismissing the pill hides only the pill for the session; a critical security
+  update re-surfaces it once per launch, still never a forced restart
+  (CORE-1193).
+
 ## [0.9.1] - 2026-07-09
 
 ### Fixed

@@ -125,7 +125,7 @@ test("a11y: settings (every rail destination)", async ({ page }) => {
   await page.getByText("A good sitting").waitFor();
   expect(await serious(page)).toEqual([]);
   // Each destination is one screen; axe each pane, including Send feedback.
-  for (const item of ["Appearance", "Assistant", "Privacy", "Files", "Shortcuts", "Send feedback"]) {
+  for (const item of ["Appearance", "Assistant", "Privacy", "Files", "Shortcuts", "Software Update", "Send feedback"]) {
     await rail.getByRole("button", { name: item }).click();
     expect(await serious(page)).toEqual([]);
   }
