@@ -7,30 +7,22 @@ documented in [`docs/IPC.md`](./docs/IPC.md).
 
 ## [Unreleased]
 
-### Changed
-
-- **Settings, redesigned.** One long page became a macOS-style left rail of seven
-  destinations (Reading, Appearance, Assistant, Privacy, Files, Shortcuts, Send
-  feedback), each one screen with no scrolling. Every existing flow is preserved:
-  the sitting-size control, the tutor + session-names switches, the full assistant
-  setup (activation code, your own key, ChatGPT sign-in, on-this-Mac models) now in
-  a sheet behind "Answers come from", the privacy explainer and "Show what was sent"
-  viewer, and the export folder/library actions. Send feedback is its own rail
-  destination with the polished six-state panel; the draft persists until sent.
-- The header theme button was replaced by Settings › Appearance and the ⌘⇧L shortcut.
+## [0.9.0] - 2026-07-09
 
 ### Added
 
-- **Appearance.** Theme (Light / Dark / Auto — follows macOS live, persists across
-  relaunch), reading typeface (Newsreader / Iowan Old Style / Charter), text size
-  stepper, and line spacing — all applying live to the reading view.
-- **Automatic backups you can see.** Settings › Files shows the live "last backup"
-  time with an on/off switch, and "Restore from backup" brings the library back from
-  any kept copy (today's copy is saved aside first). Backups also refresh once a day
-  while the app stays open, not only at launch.
-- **Keyboard shortcuts**, listed in Settings › Shortcuts and all real: ⌘E ask about
-  the selection, ⌘N add a note, ⌘K search your library, ⌘+/⌘− text size, ⌘⇧L toggle
-  theme, ⌘, Settings.
+- **Settings, rebuilt.** A calm left rail of seven places: Reading, Appearance,
+  Assistant, Privacy, Files, Shortcuts, and Send feedback.
+- **Appearance.** Theme (Light, Dark, or Auto), typeface, text size, and line
+  spacing, applied to your reading as you change them.
+- **Automatic backups** with one-click restore from any recent backup.
+- **Keyboard shortcuts** for asking about the selection, notes, library search,
+  text size, theme, and Settings.
+
+### Changed
+
+- **Send feedback** is now its own place in Settings, with a clearer preview of
+  exactly what leaves your Mac before you send.
 
 ## [0.8.4] - 2026-07-08
 
