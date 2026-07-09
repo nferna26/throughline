@@ -7,6 +7,19 @@ documented in [`docs/IPC.md`](./docs/IPC.md).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-09
+
+### Fixed
+
+- **Book imports fail cleaner.** EPUBs with no readable text are refused before
+  Throughline writes a book folder.
+- **Tutor privacy text matches the selected mode.** The margin line now reflects
+  where the answer is coming from instead of using one generic promise.
+- **Update checks recover after a blip.** A failed check no longer shows an
+  update pill or blocks later checks from trying again.
+- **Release metadata stays in sync.** `Cargo.lock` now records the shipped app
+  version during release bumps.
+
 ## [0.9.0] - 2026-07-09
 
 ### Added
