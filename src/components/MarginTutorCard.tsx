@@ -116,6 +116,32 @@ function Prose({ text }: { text: string }) {
   );
 }
 
+/**
+ * The permanent privacy microline at the card's bottom, honest per MODE
+ * (CORE-1190). Local never left the Mac. Company mode went through
+ * Throughline's stateless relay (forward, stream, drop), so "nothing kept" is a
+ * promise we can make. BYO went to the READER'S OWN provider account;
+ * Throughline cannot promise a third party's retention, so those lines name the
+ * provider and claim nothing about what it keeps. Exported for tests.
+ */
+export function tutorPrivacyLine(provider: string | null): string {
+  switch (provider) {
+    case "local":
+      return "Answered on this Mac.";
+    case "company":
+      return "Your selection was sent to the Throughline assistant, nothing kept.";
+    case "openai":
+      return "Your selection was sent to OpenAI using your key.";
+    case "anthropic":
+      return "Your selection was sent to Anthropic using your key.";
+    case "codex":
+      return "Your selection was sent to OpenAI through your ChatGPT sign-in.";
+    default:
+      // Unknown / not-yet-loaded provider: say only what is certain.
+      return "Your selection was sent to your AI provider.";
+  }
+}
+
 // ── header "thinking" indicator: three pulsing dots + "thinking" (handoff).
 //    Replaces the Regenerate icon while the model works. Pure CSS animation; the
 //    dots hold still under prefers-reduced-motion.
@@ -492,13 +518,10 @@ export default function MarginTutorCard(props: {
     typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
 
   // Permanent privacy microline at the card's bottom — honest about WHERE the
-  // answer came from. A local model never left the Mac; a cloud answer went to
-  // the Throughline assistant (the reader never sees the upstream provider's
-  // name). Never imply on-device when the selection went to the cloud.
-  const privacyLine =
-    provider === "local"
-      ? "Answered on this Mac."
-      : "Your selection was sent to the Throughline assistant — nothing kept.";
+  // answer came from, per provider mode (CORE-1190). Never imply on-device when
+  // the selection went to the cloud, and never claim retention on a third
+  // party's behalf (BYO).
+  const privacyLine = tutorPrivacyLine(provider);
 
   return (
     <div

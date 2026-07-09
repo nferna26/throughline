@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
-import MarginTutorCard, { type TutorDraft } from "./MarginTutorCard";
+import MarginTutorCard, { tutorPrivacyLine, type TutorDraft } from "./MarginTutorCard";
 
 // ── Tauri core mock: invoke (by command name) + a drivable Channel ──────────
 // vi.mock's factory is hoisted above the module body, so the mock objects must
@@ -275,6 +275,37 @@ describe("MarginTutorCard: lens-row affordance + header repair (grow-in-flow han
   });
 });
 
+describe("tutorPrivacyLine (mode-aware microcopy, CORE-1190)", () => {
+  it("differs correctly by provider mode", () => {
+    expect(tutorPrivacyLine("local")).toBe("Answered on this Mac.");
+    expect(tutorPrivacyLine("company")).toBe(
+      "Your selection was sent to the Throughline assistant, nothing kept.",
+    );
+    expect(tutorPrivacyLine("openai")).toBe("Your selection was sent to OpenAI using your key.");
+    expect(tutorPrivacyLine("anthropic")).toBe(
+      "Your selection was sent to Anthropic using your key.",
+    );
+    expect(tutorPrivacyLine("codex")).toBe(
+      "Your selection was sent to OpenAI through your ChatGPT sign-in.",
+    );
+    // Unknown / not-yet-loaded: say only what is certain.
+    expect(tutorPrivacyLine(null)).toBe("Your selection was sent to your AI provider.");
+  });
+
+  it("only the company line may claim retention; only local may claim on-device", () => {
+    for (const p of ["openai", "anthropic", "codex", null]) {
+      const line = tutorPrivacyLine(p);
+      expect(line).not.toMatch(/nothing kept/i);
+      expect(line).not.toMatch(/Throughline assistant/i);
+      expect(line).not.toMatch(/on this Mac/i);
+    }
+    // No em dashes anywhere in reader-facing microcopy.
+    for (const p of ["local", "company", "openai", "anthropic", "codex", null]) {
+      expect(tutorPrivacyLine(p)).not.toContain("—");
+    }
+  });
+});
+
 describe("MarginTutorCard — privacy microline honesty (handoff)", () => {
   it("a LOCAL answer reads 'Answered on this Mac.'", async () => {
     localStorage.setItem("tl.tutorEnabled", "true");
@@ -287,27 +318,52 @@ describe("MarginTutorCard — privacy microline honesty (handoff)", () => {
     expect(screen.queryByText(/sent to the Throughline assistant/i)).toBeNull();
   });
 
-  it("a CLOUD answer names the assistant + 'nothing kept', and NEVER shows 'Answered on this Mac'", async () => {
+  // CORE-1190: the microline must be honest per MODE. Company mode goes through
+  // Throughline's stateless relay, so "nothing kept" is a promise we can make.
+  // BYO goes to the READER'S OWN provider account; Throughline cannot promise a
+  // third party's retention, so the line names the provider and claims nothing.
+  function setCloudProvider(provider: string, host: string) {
     localStorage.setItem("tl.tutorEnabled", "true");
     mocks.invoke.mockReset();
     mocks.invoke.mockImplementation((cmd: string) => {
       switch (cmd) {
         case "cmd_get_settings":
-          return Promise.resolve({ export_path: "/x", ai_provider: "openai", ai_model_openai: "gpt-5.5", ai_requests_retention_days: 90 });
+          return Promise.resolve({ export_path: "/x", ai_provider: provider, ai_requests_retention_days: 90 });
         case "cmd_ai_ask":
-          return Promise.resolve({ ai_request_id: "ai_1", prompt_sent: "(hidden)", provider_host: "api.openai.com" });
+          return Promise.resolve({ ai_request_id: "ai_1", prompt_sent: "(hidden)", provider_host: host });
         default:
           return Promise.resolve(null);
       }
     });
+  }
+
+  async function renderToDone() {
     render(card());
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_ai_ask", expect.anything()));
     await pushDelta(lastChannel(), "Cloud gist.");
     await pushDone(lastChannel());
+  }
+
+  it("a COMPANY answer names the Throughline assistant + 'nothing kept', never 'Answered on this Mac'", async () => {
+    setCloudProvider("company", "ai.readthroughline.com");
+    await renderToDone();
     expect(
-      await screen.findByText("Your selection was sent to the Throughline assistant — nothing kept."),
+      await screen.findByText("Your selection was sent to the Throughline assistant, nothing kept."),
     ).toBeInTheDocument();
     // Never imply on-device for a cloud answer.
+    expect(screen.queryByText(/Answered on this Mac/i)).toBeNull();
+  });
+
+  it("a BYO answer names the READER'S OWN provider and makes no retention claim", async () => {
+    setCloudProvider("openai", "api.openai.com");
+    await renderToDone();
+    expect(
+      await screen.findByText("Your selection was sent to OpenAI using your key."),
+    ).toBeInTheDocument();
+    // BYO must not claim Throughline handled it, promise a third party's
+    // retention, or imply on-device.
+    expect(screen.queryByText(/Throughline assistant/i)).toBeNull();
+    expect(screen.queryByText(/nothing kept/i)).toBeNull();
     expect(screen.queryByText(/Answered on this Mac/i)).toBeNull();
   });
 });
