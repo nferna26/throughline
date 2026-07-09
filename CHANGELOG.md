@@ -5,6 +5,15 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 6)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [0.8.4] - 2026-07-08
+
+### Added
+
+- **Send feedback, in the app.** A "Send feedback" panel in Settings shows exactly
+  what will leave your Mac before you send it: your message, the app version, your
+  macOS version, and which tutor mode you're using, nothing else. No account, no
+  third-party tools, and it never includes anything you read.
+
 ## [0.8.3] - 2026-06-23
 
 ### Changed
