@@ -96,6 +96,24 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
         return Err(anyhow!("EPUB has no readable sections"));
     }
 
+    // Extract each spine item to clean plain text (hand-rolled, entity-decoding)
+    // and concatenate into a single `source.txt` body — so EPUBs read through the
+    // SAME plain-text path (cmd_read_section_text → slice_body → TextReader) as
+    // .txt books. Section locators are BYTE offsets into the concatenated body.
+    // Heading/blockquote/emphasis ranges are captured per section (UTF-16 offsets
+    // relative to the section's own text) for offset-safe styling.
+    //
+    // CORE-1187: extraction runs BEFORE any book_dir write, mirroring import_txt's
+    // empty-body guard. An images-only (scanned) EPUB has a spine but yields no
+    // text; committing it would create a library book that can never be opened,
+    // and the SHA dedupe would snap every re-import back to that same broken book.
+    let (body, extracts) = extract_sections(&mut doc, &sections_input)?;
+    if body.trim().is_empty() {
+        return Err(anyhow!(
+            "This EPUB has no readable text to import. It may be a scanned or image-only book."
+        ));
+    }
+
     // Copy source.epub into app data
     let book_id = format!("book_{}", Uuid::new_v4().simple());
     let book_dir = paths::book_dir(&book_id)?;
@@ -120,15 +138,6 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
     let sha = hash_file(&dest)?;
     let now = Utc::now().to_rfc3339();
 
-    // Extract each spine item to clean plain text (hand-rolled, entity-decoding,
-    // never-erroring) and concatenate into a single `source.txt` body — so EPUBs
-    // read through the SAME plain-text path (cmd_read_section_text → slice_body →
-    // TextReader) as .txt books, retiring the epub.js iframe entirely. Section
-    // locators are BYTE offsets into the concatenated body (the slicer is
-    // byte-indexed, matching import_txt). Heading/blockquote/emphasis ranges are
-    // captured per section (UTF-16 offsets relative to the section's own text) for
-    // offset-safe styling. estimated_units stays a char count for reading-time math.
-    let (body, extracts) = extract_sections(&mut doc, &sections_input)?;
     let total_chars: usize = extracts.iter().map(|e| e.char_count).sum();
     let mut structure: HashMap<String, Vec<StyleRange>> = HashMap::new();
     let mut sections: Vec<BookSection> = Vec::with_capacity(sections_input.len());
@@ -309,16 +318,27 @@ fn extract_sections<R: std::io::Read + std::io::Seek>(
     });
     let mut body = String::new();
     let mut out: Vec<SectionExtract> = Vec::with_capacity(entries.len());
-    for entry in entries {
+    for (i, entry) in entries.iter().enumerate() {
         let kind = section_kind_for(entry, nav_href.as_deref());
         // TODO(CORE-1029): `get_resource_str` decompresses a spine member fully
         // into memory BEFORE the accumulated check below can see it, so one
         // multi-GB member still allocates once before being refused. Bounding
         // it up front needs a declared-size API from the `epub` crate.
-        let extracted = doc
-            .get_resource_str(&entry.idref)
-            .map(|(html, _mime)| extract_section_with_kind(&html, kind))
-            .unwrap_or_default();
+        let extracted = match doc.get_resource_str(&entry.idref) {
+            Some((html, _mime)) => extract_section_with_kind(&html, kind),
+            None => {
+                // LOUD skip (was a silent unwrap_or_default): the member extracts
+                // as empty, and if EVERY member does, the empty-body guard in
+                // import_epub refuses the book. Position only — a manifest id or
+                // href is content-adjacent and never logged (invariant 1).
+                tracing::warn!(
+                    "epub import: spine item {} of {} could not be read; extracted as empty",
+                    i + 1,
+                    entries.len()
+                );
+                Default::default()
+            }
+        };
         if !body.is_empty() {
             body.push_str("\n\n");
         }
@@ -1416,6 +1436,114 @@ mod tests {
         for p in [enc, rights, both, neither] {
             let _ = fs::remove_file(p);
         }
+    }
+
+    /// Build a minimal, VALID single-chapter EPUB (mimetype, container.xml, OPF
+    /// with a one-item spine, one XHTML chapter whose <body> is `body_html`) at a
+    /// unique temp path. Just enough structure for `EpubDoc::new` to parse.
+    fn write_minimal_epub(body_html: &str) -> std::path::PathBuf {
+        use zip::write::SimpleFileOptions;
+        let chapter = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+             <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>c1</title></head>\
+             <body>{body_html}</body></html>"
+        );
+        let opf = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fixture Book</dc:title>
+    <dc:identifier id="uid">throughline-test-fixture</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>"#;
+        let container = r#"<?xml version="1.0" encoding="utf-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let opts =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            for (name, bytes) in [
+                ("mimetype", b"application/epub+zip".as_slice()),
+                ("META-INF/container.xml", container.as_bytes()),
+                ("OEBPS/content.opf", opf.as_bytes()),
+                ("OEBPS/c1.xhtml", chapter.as_bytes()),
+            ] {
+                zip.start_file(name, opts).unwrap();
+                zip.write_all(bytes).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let path = std::env::temp_dir().join(format!(
+            "throughline_epub_test_{}.epub",
+            Uuid::new_v4().simple()
+        ));
+        fs::write(&path, buf.into_inner()).unwrap();
+        path
+    }
+
+    /// The book dirs currently on disk in the (test-isolated) books dir, sorted.
+    fn book_dir_names() -> Vec<String> {
+        let dir = match paths::books_dir() {
+            Ok(d) => d,
+            Err(_) => return Vec::new(),
+        };
+        let mut names: Vec<String> = fs::read_dir(&dir)
+            .map(|it| {
+                it.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    // CORE-1187: an images-only (scanned) EPUB extracts NO text. It must be
+    // refused up front like the .txt "no readable text" guard — never committed
+    // as a library book that can't be opened, and never left on disk where the
+    // SHA dedupe would snap every re-import back to the same broken book.
+    #[test]
+    fn import_epub_refuses_a_book_with_no_extractable_text() {
+        let _g = paths::lock_env_for_test();
+        let path = write_minimal_epub(r#"<img src="page1.png"/><img src="page2.png"/>"#);
+        let books_before = book_dir_names();
+        let msg = match import_epub(&path) {
+            Ok(r) => panic!("a text-free EPUB must be refused, got book {:?}", r.book.id),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(
+            msg.contains("no readable text"),
+            "the refusal must say the book has no readable text, got: {msg}"
+        );
+        assert_eq!(
+            book_dir_names(),
+            books_before,
+            "a refused import must leave no book dir behind"
+        );
+        fs::remove_file(&path).ok();
+    }
+
+    // Positive control for the guard above: a chapter with real text still
+    // imports (also proves `write_minimal_epub` builds a parseable EPUB, so the
+    // refusal test can't pass by accident on a malformed fixture).
+    #[test]
+    fn import_epub_accepts_a_chapter_with_real_text() {
+        let _g = paths::lock_env_for_test();
+        let path = write_minimal_epub("<p>In the beginning was the word.</p>");
+        let result = import_epub(&path).expect("a text-bearing EPUB must import");
+        assert_eq!(result.sections.len(), 1);
+        let book_dir = paths::book_dir(&result.book.id).unwrap();
+        assert!(book_dir.join("source.epub").exists());
+        fs::remove_dir_all(&book_dir).ok();
+        fs::remove_file(&path).ok();
     }
 
     #[test]
