@@ -276,23 +276,49 @@ describe("UpdateChecker pill (debounce / no re-nag)", () => {
 });
 
 describe("UpdateChecker action flow (unchanged download/install/restart)", () => {
-  it("turns a check failure into the fallback download pill with no error copy", async () => {
-    mocks.check.mockRejectedValue(new Error("Could not fetch a valid release JSON from the remote"));
-    render(<UpdateChecker now={() => 0} />);
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
+  // CORE-1191: a failed CHECK means no update is known to exist, so it must never
+  // surface a pill. The classic case is a fresh offline install: the old behavior
+  // showed a phantom "Download update" ~8s after launch, a dead-end pointing at a
+  // download page the reader can't reach.
+  it("a failed launch check (e.g. offline) surfaces NO pill, just a log line", async () => {
+    vi.useFakeTimers();
+    mocks.check.mockRejectedValue(new Error("error sending request for url"));
+    const { now } = makeClock(0);
+    const { container } = render(<UpdateChecker now={now} />);
 
-    const fallback = await screen.findByRole("button", { name: "Download update" });
-    expect(fallback.closest(".tl-update-pill")?.className).toContain("fallback");
-    expect(screen.queryByText(/JSON|remote|error|failed|couldn/i)).toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(UPDATE_INITIAL_CHECK_DELAY_MS);
+    });
+    expect(mocks.check).toHaveBeenCalledTimes(1);
+    expect(container).toBeEmptyDOMElement(); // no phantom pill, no error copy
+    expect(screen.queryByText("Download update")).toBeNull();
     expect(console.warn).toHaveBeenCalledWith(
       expect.stringContaining("check failed"),
       expect.any(Error),
     );
+  });
 
-    fireEvent.click(fallback);
-    expect(window.open).toHaveBeenCalledWith(FALLBACK_DOWNLOAD_URL, "_blank", "noopener,noreferrer");
+  // CORE-1191: the phantom pill also FROZE checking — with a pill up, maybeCheck
+  // no-ops, so one transient blip ended real update checks for the session.
+  it("a transient check failure does not freeze later checks", async () => {
+    mocks.check
+      .mockRejectedValueOnce(new Error("timed out"))
+      .mockResolvedValueOnce({ version: "0.9.1", downloadAndInstall: vi.fn() });
+    const { clock, now } = makeClock(0);
+    render(<UpdateChecker now={now} />);
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus")); // first check: transient failure
+    });
+    expect(mocks.check).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Download update")).toBeNull();
+
+    clock.value = UPDATE_CHECK_COOLDOWN_MS; // cooldown elapsed
+    await act(async () => {
+      window.dispatchEvent(new Event("focus")); // next trigger must really check
+    });
+    expect(mocks.check).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("button", { name: "Update ready" })).toBeInTheDocument();
   });
 
   it("downloads in place, exposes Updating as busy/live, then offers restart without forcing it", async () => {
@@ -341,12 +367,16 @@ describe("UpdateChecker action flow (unchanged download/install/restart)", () =>
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "Update ready" }));
-    expect(await screen.findByRole("button", { name: "Download update" })).toBeInTheDocument();
+    const fallback = await screen.findByRole("button", { name: "Download update" });
+    expect(fallback.closest(".tl-update-pill")?.className).toContain("fallback");
     expect(screen.queryByText(/signature|mismatch|error|failed/i)).toBeNull();
     expect(console.warn).toHaveBeenCalledWith(
       expect.stringContaining("download failed"),
       expect.any(Error),
     );
+
+    fireEvent.click(fallback);
+    expect(window.open).toHaveBeenCalledWith(FALLBACK_DOWNLOAD_URL, "_blank", "noopener,noreferrer");
   });
 });
 

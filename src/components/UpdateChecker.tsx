@@ -128,7 +128,11 @@ export function updatePillView(phase: Exclude<UpdatePillPhase, "hidden">): PillV
 }
 
 function logUpdateFallback(reason: FallbackReason, err: unknown) {
-  console.warn(`[throughline:update] ${reason} failed; falling back to the public download.`, err);
+  const outcome =
+    reason === "check"
+      ? "will retry on a later trigger"
+      : "falling back to the public download";
+  console.warn(`[throughline:update] ${reason} failed; ${outcome}.`, err);
 }
 
 type Props = {
@@ -167,9 +171,13 @@ export default function UpdateChecker({ visible = true, now = defaultNow }: Prop
   const enterFallback = useCallback(
     (reason: FallbackReason, err: unknown) => {
       logUpdateFallback(reason, err);
-      // Only surface the fallback from a clean slate; never knock a forward pill
-      // (ready/updating/restart) backwards on a later silent check.
-      if (reason === "check" && phaseRef.current !== "hidden") return;
+      // CORE-1191: a failed CHECK never surfaces the pill — no update is known
+      // to exist, so "Download update" would be a phantom (the classic case: a
+      // fresh offline install, ~8s after launch). Staying hidden also keeps the
+      // cooldown-gated funnel alive: a transient blip must not freeze checking
+      // for the session. The fallback pill remains for download/restart
+      // failures, where a real update exists and the updater itself broke.
+      if (reason === "check") return;
       setUpdate(null);
       setPct(0);
       goPhase("fallback");
