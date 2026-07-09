@@ -115,6 +115,122 @@ fn is_backup_file(path: &Path) -> bool {
     name.starts_with(BACKUP_PREFIX) && name.ends_with(&format!(".{BACKUP_EXT}"))
 }
 
+/// Filename prefix for the one-shot safety snapshot written just before a
+/// reader-initiated restore. Deliberately does NOT start with [`BACKUP_PREFIX`],
+/// so it is invisible to the rolling list/prune logic — restoring can never
+/// prune away the very backup being restored.
+const PRE_RESTORE_PREFIX: &str = "pre-restore-";
+
+/// When the backup at `path` was taken, parsed from its own filename
+/// (`reading-YYYYMMDD-HHMMSS.db`, local time). None for a name that doesn't
+/// carry a well-formed timestamp.
+pub fn backup_taken_at(path: &Path) -> Option<chrono::DateTime<chrono::Local>> {
+    use chrono::TimeZone;
+    let name = path.file_name()?.to_str()?;
+    let stamp = name
+        .strip_prefix(BACKUP_PREFIX)?
+        .strip_suffix(&format!(".{BACKUP_EXT}"))?;
+    let naive = chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%d-%H%M%S").ok()?;
+    chrono::Local.from_local_datetime(&naive).single()
+}
+
+/// RFC3339 timestamp of the newest rolling backup, or None when there isn't
+/// one yet. This is what the Files pane shows as "last backup …".
+pub fn newest_backup_taken_at() -> Result<Option<String>> {
+    let dir = paths::backups_dir()?;
+    let backups = list_backups(&dir)?;
+    Ok(backups
+        .last()
+        .and_then(|p| backup_taken_at(p))
+        .map(|t| t.to_rfc3339()))
+}
+
+/// How stale the newest backup may get while the app stays open before the
+/// in-app schedule writes a fresh one. One day: the launch backup already
+/// covers normal open-daily use; this catches the always-open Mac.
+pub const BACKUP_INTERVAL: chrono::Duration = chrono::Duration::hours(24);
+
+/// Whether the schedule should write a backup now. Pure, so the schedule's
+/// decision is testable without a filesystem: due when backups are enabled and
+/// there is no backup yet, or the newest is at least [`BACKUP_INTERVAL`] old.
+pub fn backup_due(
+    enabled: bool,
+    newest: Option<chrono::DateTime<chrono::Local>>,
+    now: chrono::DateTime<chrono::Local>,
+) -> bool {
+    if !enabled {
+        return false;
+    }
+    match newest {
+        None => true,
+        Some(t) => now.signed_duration_since(t) >= BACKUP_INTERVAL,
+    }
+}
+
+/// Resolve a reader-picked backup id (a bare rolling-backup file name) to its
+/// path under the backups dir. Refuses anything that isn't a single, plain
+/// backup-scheme file name — an id flows in from IPC, so a path separator or
+/// an off-scheme name must never reach the filesystem join.
+pub fn resolve_backup_by_id(id: &str) -> Result<PathBuf> {
+    let mut comps = Path::new(id).components();
+    let single = matches!(
+        (comps.next(), comps.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    );
+    let candidate = paths::backups_dir()?.join(id);
+    if !single || !is_backup_file(&candidate) {
+        anyhow::bail!("not a backup name: {id:?}");
+    }
+    if !candidate.is_file() {
+        anyhow::bail!("backup not found: {id:?}");
+    }
+    Ok(candidate)
+}
+
+/// Prove a reader-picked backup is genuinely restorable (opens, integrity-checks,
+/// migrates). Public face of [`backup_is_usable`] for the restore command.
+pub fn validate_backup(candidate: &Path) -> Result<bool> {
+    backup_is_usable(candidate)
+}
+
+/// Snapshot the CURRENT live DB right before a restore replaces it, so a
+/// mistaken restore is itself undoable. Named outside the rolling scheme (see
+/// [`PRE_RESTORE_PREFIX`]); only the newest pre-restore snapshot is kept.
+pub fn write_pre_restore_snapshot(conn: &Connection) -> Result<PathBuf> {
+    let dir = paths::backups_dir()?;
+    std::fs::create_dir_all(&dir).context("create backups dir")?;
+    let dest = dir.join(format!(
+        "{}{}.{}",
+        PRE_RESTORE_PREFIX,
+        timestamp_slug(),
+        BACKUP_EXT
+    ));
+    if dest.exists() {
+        let _ = std::fs::remove_file(&dest);
+    }
+    conn.execute("VACUUM INTO ?1", [dest.to_string_lossy().as_ref()])
+        .context("VACUUM INTO pre-restore snapshot")?;
+    // Keep only this one: older pre-restore snapshots are strictly worse.
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.starts_with(PRE_RESTORE_PREFIX) && p != dest {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+    Ok(dest)
+}
+
+/// Copy a validated backup over the live DB (the reader-initiated restore).
+/// The caller must have closed every live connection first; this only moves
+/// files. Atomic-rename semantics come from [`restore_into_place`].
+pub fn restore_backup_file(candidate: &Path) -> Result<()> {
+    let live = paths::db_path()?;
+    restore_into_place(candidate, &live)
+}
+
 /// Try to restore the live DB from the newest usable backup. Returns:
 /// - `Ok(Some(path))` — a backup was validated and copied into place as the
 ///   live `reading.db`; the caller can re-open and proceed with recovered rows.
@@ -402,6 +518,156 @@ mod tests {
             })
             .unwrap();
         assert_eq!(n, 1);
+        drop(conn2);
+        cleanup(&data);
+        drop(g);
+    }
+
+    #[test]
+    fn taken_at_parses_the_filename_timestamp_and_rejects_garbage() {
+        use chrono::{Datelike, Timelike};
+        let t = backup_taken_at(Path::new("/x/backups/reading-20260703-091205.db"))
+            .expect("well-formed name parses");
+        assert_eq!(
+            (t.year(), t.month(), t.day(), t.hour(), t.minute()),
+            (2026, 7, 3, 9, 12)
+        );
+        for bad in [
+            "reading-.db",
+            "reading-2026.db",
+            "pre-restore-20260703-091205.db",
+            "notes.txt",
+            "reading-20261399-991205.db", // impossible date
+        ] {
+            assert!(
+                backup_taken_at(Path::new(bad)).is_none(),
+                "{bad} must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn backup_due_is_enabled_gated_and_24h_bounded() {
+        use chrono::TimeZone;
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 7, 3, 12, 0, 0)
+            .unwrap();
+        // Disabled → never due, even with no backup at all.
+        assert!(!backup_due(false, None, now));
+        // Enabled + no backup yet → due.
+        assert!(backup_due(true, None, now));
+        // Fresh backup → not due; a day-old one → due.
+        let fresh = now - chrono::Duration::hours(1);
+        let stale = now - chrono::Duration::hours(25);
+        assert!(!backup_due(true, Some(fresh), now));
+        assert!(backup_due(true, Some(stale), now));
+    }
+
+    #[test]
+    fn resolve_backup_by_id_refuses_traversal_and_off_scheme_names() {
+        let (g, conn, data) = isolated_open();
+        let dest = write_rolling_backup(&conn).expect("backup");
+        let id = dest.file_name().unwrap().to_str().unwrap().to_string();
+        // The genuine id resolves to the file that was written.
+        assert_eq!(resolve_backup_by_id(&id).unwrap(), dest);
+        // IPC-shaped hostile ids never reach the filesystem join.
+        for bad in [
+            "../reading.db",
+            "/etc/passwd",
+            "reading-20260101-000000.db/..",
+            "nested/reading-20260101-000000.db",
+            "notes.txt",
+            "pre-restore-20260101-000000.db",
+            "",
+            "reading-99999999-999999.db", // scheme-shaped but nonexistent
+        ] {
+            assert!(
+                resolve_backup_by_id(bad).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+        drop(conn);
+        cleanup(&data);
+        drop(g);
+    }
+
+    #[test]
+    fn newest_backup_taken_at_reports_the_newest_or_none() {
+        let (g, conn, data) = isolated_open();
+        assert_eq!(
+            newest_backup_taken_at().expect("call"),
+            None,
+            "no backups yet → None"
+        );
+        let dir = paths::backups_dir().unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        for stamp in ["20260101-000000", "20260301-120000"] {
+            std::fs::write(
+                dir.join(format!("{BACKUP_PREFIX}{stamp}.{BACKUP_EXT}")),
+                b"x",
+            )
+            .unwrap();
+        }
+        let newest = newest_backup_taken_at().expect("call").expect("some");
+        assert!(
+            newest.starts_with("2026-03-01T12:00:00"),
+            "newest must win, got {newest}"
+        );
+        drop(conn);
+        cleanup(&data);
+        drop(g);
+    }
+
+    #[test]
+    fn restore_by_id_round_trips_and_pre_restore_snapshot_survives_pruning() {
+        let (g, conn, data) = isolated_open();
+        seed_book(&conn, "b_keep");
+        let dest = write_rolling_backup(&conn).expect("backup");
+        let id = dest.file_name().unwrap().to_str().unwrap().to_string();
+
+        // Diverge the live DB after the backup, then snapshot it pre-restore.
+        seed_book(&conn, "b_after_backup");
+        let snap = write_pre_restore_snapshot(&conn).expect("snapshot");
+        assert!(snap.exists());
+        assert!(
+            !is_backup_file(&snap),
+            "the safety snapshot must be invisible to the rolling scheme"
+        );
+        assert!(
+            !list_backups(&paths::backups_dir().unwrap())
+                .unwrap()
+                .contains(&snap),
+            "list_backups must not offer the snapshot for restore-pruning"
+        );
+
+        // Restore: close the live connection first (the command layer's job).
+        drop(conn);
+        let candidate = resolve_backup_by_id(&id).expect("resolve");
+        assert!(validate_backup(&candidate).expect("validate"));
+        restore_backup_file(&candidate).expect("restore");
+
+        let conn2 = crate::db::open_and_migrate().expect("reopen");
+        let count = |id: &str| -> i64 {
+            conn2
+                .query_row("SELECT COUNT(*) FROM books WHERE id=?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(count("b_keep"), 1, "the backed-up row is back");
+        assert_eq!(
+            count("b_after_backup"),
+            0,
+            "post-backup divergence is gone (that's what restore means)"
+        );
+        // …but not lost: the pre-restore snapshot still holds it.
+        let sconn = Connection::open(&snap).unwrap();
+        let n: i64 = sconn
+            .query_row(
+                "SELECT COUNT(*) FROM books WHERE id='b_after_backup'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "the safety snapshot preserves the pre-restore state");
         drop(conn2);
         cleanup(&data);
         drop(g);

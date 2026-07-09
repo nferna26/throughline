@@ -500,3 +500,53 @@ describe("titlebar brand mark", () => {
     expect(mark).toHaveAttribute("fill", "currentColor");
   });
 });
+
+// ── Global keyboard shortcuts (Settings › Shortcuts is their reference) ─────
+describe("global keyboard shortcuts", () => {
+  beforeEach(() => {
+    cleanup();
+    localStorage.clear();
+    document.documentElement.removeAttribute("data-theme");
+  });
+
+  it("⌘, opens Settings", async () => {
+    setAppImpl();
+    render(<App />);
+    await screen.findByText(/Begin with a book you mean to finish/i);
+    fireEvent.keyDown(window, { key: ",", metaKey: true });
+    // The Settings rail is on screen.
+    expect(
+      await screen.findByRole("navigation", { name: /settings sections/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("⌘⇧L flips the resolved theme and persists the explicit choice", async () => {
+    setAppImpl();
+    render(<App />);
+    await screen.findByText(/Begin with a book you mean to finish/i);
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    fireEvent.keyDown(window, { key: "L", metaKey: true, shiftKey: true });
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+    expect(localStorage.getItem("tl.themePref")).toBe("dark");
+    fireEvent.keyDown(window, { key: "L", metaKey: true, shiftKey: true });
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+  });
+
+  it("⌘+ / ⌘− nudge the shared reading text size within its clamp", async () => {
+    setAppImpl();
+    render(<App />);
+    await screen.findByText(/Begin with a book you mean to finish/i);
+    fireEvent.keyDown(window, { key: "=", metaKey: true });
+    expect(localStorage.getItem("tl.fontSize")).toBe("19");
+    fireEvent.keyDown(window, { key: "-", metaKey: true });
+    expect(localStorage.getItem("tl.fontSize")).toBe("18");
+  });
+
+  it("the legacy tl.theme value survives the redesign (no forced theme reset)", async () => {
+    localStorage.setItem("tl.theme", "dark"); // a pre-redesign install
+    setAppImpl();
+    render(<App />);
+    await screen.findByText(/Begin with a book you mean to finish/i);
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+  });
+});

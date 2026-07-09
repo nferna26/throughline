@@ -548,12 +548,14 @@ test("export-warning", async ({ page }) => {
 });
 
 test("model-picker-with-price-chip", async ({ page }) => {
-  // The picker moved behind Settings -> Reading assistant -> "Use your own AI
-  // instead"; the model select and its price chip are unchanged once reached.
+  // The picker lives behind Settings -> Assistant -> the "Answers come from"
+  // setup sheet; the model select and its price chip are unchanged once reached.
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  // The fake's saved provider is local, so the expander is already open on
-  // "On this Mac only" — switch to the key path.
+  await page.getByRole("button", { name: "Assistant" }).click();
+  // The fake's saved provider is local, so the row offers "Set up" — the sheet
+  // opens on "On this Mac only"; switch to the key path.
+  await page.getByRole("button", { name: "Set up" }).click();
   await page.getByRole("button", { name: "Your own key" }).click();
   await expect(page.getByLabel("Which service")).toHaveValue("anthropic");
   const modelSel = page.getByLabel("AI model");
@@ -569,6 +571,7 @@ test("cloud-trust-copy", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_CLOUD__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Privacy" }).click();
   await expect(page.getByText("Everything stays on this Mac")).toBeVisible();
   await expect(page.getByText(/your own Anthropic/)).toBeVisible();
   await expect(page.getByText(/are sent there to be answered/)).toBeVisible();
@@ -582,6 +585,7 @@ test("company-activation", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_COMPANY_UNLICENSED__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Assistant" }).click();
   await expect(page.getByText("Already bought Throughline AI?")).toBeVisible();
   const code = page.getByLabel("Activation code");
   await expect(code).toHaveAttribute("placeholder", "XXXX-XXXX-XXXX");
@@ -623,10 +627,11 @@ test("company-fuel-gauge", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_COMPANY_ACTIVE__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Assistant" }).click();
   // Calm qualitative status — NO bar, NO number, NO percent (the no-counter rule).
   await expect(page.getByText("Throughline AI is active.")).toBeVisible();
   await expect(page.getByText("Included tutoring")).toBeVisible();
-  await expect(page.getByText(/Plenty remaining for your reading/i)).toBeVisible();
+  await expect(page.getByText("On · plenty remaining")).toBeVisible();
   await expect(page.getByRole("progressbar")).toHaveCount(0);
   await expect(page.locator(".meter")).toHaveCount(0);
   await shoot(page, "19-company-fuel");
@@ -640,7 +645,8 @@ test("company-fuel-gauge-dark", async ({ page }) => {
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByText(/Plenty remaining for your reading/i)).toBeVisible();
+  await page.getByRole("button", { name: "Assistant" }).click();
+  await expect(page.getByText("On · plenty remaining")).toBeVisible();
   await shoot(page, "19b-company-fuel-dark");
 });
 
@@ -652,6 +658,7 @@ test("settings-tutoring-low", async ({ page }) => {
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Assistant" }).click();
   await expect(page.getByText(/Your included tutoring is running low/i)).toBeVisible();
   await expect(page.getByRole("progressbar")).toHaveCount(0);
   await shoot(page, "19c-settings-low");
@@ -666,6 +673,7 @@ test("settings-tutoring-low-dark", async ({ page }) => {
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Assistant" }).click();
   await expect(page.getByText(/Your included tutoring is running low/i)).toBeVisible();
   await shoot(page, "19d-settings-low-dark");
 });
@@ -676,7 +684,8 @@ test("included-tutoring-status-no-counter", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_COMPANY_ACTIVE__ = true; });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByText(/Plenty remaining for your reading/i)).toBeVisible();
+  await page.getByRole("button", { name: "Assistant" }).click();
+  await expect(page.getByText("On · plenty remaining")).toBeVisible();
   await expect(page.getByText(/\d+\s*questions/i)).toHaveCount(0);
   await expect(page.getByText(/spend cap/i)).toHaveCount(0);
   await expect(page.getByText(/token/i)).toHaveCount(0);
@@ -774,6 +783,7 @@ test("activation-door-reachable-from-any-mode", async ({ page }) => {
   // mode (the fake's default provider is local).
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Assistant" }).click();
   await expect(page.getByText("Already bought Throughline AI?")).toBeVisible();
   await expect(page.getByLabel("Activation code")).toBeVisible();
 });
@@ -782,6 +792,7 @@ test("session-names-toggle-in-settings", async ({ page }) => {
   // The phrases on/off switch round-trips through cmd_set_ai_settings.
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Assistant" }).click();
   const toggle = page.getByRole("switch", { name: "Session names" });
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await toggle.click();
@@ -790,10 +801,61 @@ test("session-names-toggle-in-settings", async ({ page }) => {
 });
 
 test("settings", async ({ page }) => {
+  // The redesigned frame: a quiet left rail of seven destinations, the pane
+  // opening on Reading, and the promise lines pinned to the rail's foot.
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByText(/export|AI|provider/i).first()).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Settings sections" })).toBeVisible();
+  for (const item of ["Reading", "Appearance", "Assistant", "Privacy", "Files", "Shortcuts", "Send feedback"]) {
+    await expect(page.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name: item })).toBeVisible();
+  }
+  await expect(page.getByText("A good sitting")).toBeVisible();
+  await expect(page.getByText("No accounts. No tracking.")).toBeVisible();
   await shoot(page, "05-settings");
+});
+
+test("settings-appearance-and-files", async ({ page }) => {
+  // Appearance: theme segmented + typeface + text size + line spacing, all live.
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Appearance" }).click();
+  await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
+  await page.getByRole("button", { name: "Dark" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Light" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByLabel("Typeface").selectOption("charter");
+  await expect(page.locator("html")).toHaveAttribute("data-typeface", "charter");
+  await page.getByRole("button", { name: "Larger text" }).click();
+  await expect(page.getByText("19 pt")).toBeVisible();
+  await shoot(page, "05b-settings-appearance");
+  // Files: the live last-backup line, the toggle, and the restore picker.
+  await page.getByRole("button", { name: "Files" }).click();
+  await expect(page.getByText(/last backup/i)).toBeVisible();
+  await page.getByRole("button", { name: "Choose a backup" }).click();
+  await expect(page.getByRole("dialog", { name: "Restore from backup" })).toBeVisible();
+  await expect(page.getByRole("radio").first()).toBeVisible();
+  await shoot(page, "05c-settings-restore");
+  await page.getByRole("button", { name: "Cancel" }).click();
+});
+
+test("settings-send-feedback-destination", async ({ page }) => {
+  // Send feedback is its own rail destination (CORE-1094 → redesign): the six
+  // states' idle form with the literal preview and the verbatim honest line.
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name: "Send feedback" }).click();
+  await expect(page.getByRole("heading", { name: "Send feedback" })).toBeVisible();
+  await expect(page.getByText(/Throughline never sends anything on its own/)).toBeVisible();
+  // Empty state: Send disabled, preview echoes the placeholder + live diagnostics.
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+  await expect(page.getByText("(your message above)")).toBeVisible();
+  await page.getByLabel("Your message").fill("The margin tutor covers the last line sometimes.");
+  await expect(page.getByTestId("preview-message")).toHaveText(
+    "The margin tutor covers the last line sometimes.",
+  );
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+  await shoot(page, "05d-settings-feedback");
 });
 
 test("browse-library-shelves", async ({ page }) => {

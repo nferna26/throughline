@@ -48,6 +48,10 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
   ];
 
   let AI_PHRASES_ON = true;
+  // Settings redesign: appearance prefs + automatic backups (Files pane).
+  const APPEARANCE = { ui_theme: "", reading_typeface: "newsreader", reading_line_spacing: "comfortable" };
+  let BACKUPS_ON = true;
+  const LAST_BACKUP_AT = "2026-07-08T09:12:00-07:00";
   const SETTINGS = {
     ai_phrases: true,
     export_path: "/Users/demo/GBrain/Reading", export_path_is_default: true,
@@ -216,7 +220,7 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
           : card;
       }
       case "cmd_get_settings": {
-        const base = Object.assign({}, SETTINGS, { ai_phrases: AI_PHRASES_ON });
+        const base = Object.assign({}, SETTINGS, { ai_phrases: AI_PHRASES_ON }, APPEARANCE);
         if (window.__TL_FAKE_COMPANY_ACTIVE__ || window.__TL_FAKE_COMPANY_UNLICENSED__)
           return Object.assign(base, { ai_provider: "company", ai_remote_allowed: true, ai_local_only: false, ai_posture: "Sends your selection to ai.readthroughline.com", ai_model_anthropic: "claude-sonnet-4-6" });
         return window.__TL_FAKE_CLOUD__
@@ -390,6 +394,27 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_set_ai_settings":
         if (args && typeof args.aiPhrases === "boolean") AI_PHRASES_ON = args.aiPhrases;
         return handle("cmd_get_settings", {});
+      // ── Settings redesign: appearance + backups + rail-footer version ──
+      case "cmd_set_appearance":
+        if (args && args.theme) APPEARANCE.ui_theme = args.theme;
+        if (args && args.typeface) APPEARANCE.reading_typeface = args.typeface;
+        if (args && args.lineSpacing) APPEARANCE.reading_line_spacing = args.lineSpacing;
+        return handle("cmd_get_settings", {});
+      case "cmd_feedback_diagnostics":
+        return { app_version: "0.8.4", macos_version: "15.5", mode: "included" };
+      case "cmd_backup_status":
+        return { enabled: BACKUPS_ON, last_backup_at: BACKUPS_ON ? LAST_BACKUP_AT : null };
+      case "cmd_set_backups_enabled":
+        BACKUPS_ON = !!(args && args.enabled);
+        return { enabled: BACKUPS_ON, last_backup_at: BACKUPS_ON ? LAST_BACKUP_AT : null };
+      case "cmd_list_backups":
+        return [
+          { id: "reading-20260708-091200.db", taken_at: LAST_BACKUP_AT },
+          { id: "reading-20260707-181500.db", taken_at: "2026-07-07T18:15:00-07:00" },
+        ];
+      case "cmd_restore_backup":
+        window.__TL_FAKE_RESTORED__ = args && args.id;
+        return null;
       case "cmd_set_ai_key": case "cmd_clear_ai_key":
       case "cmd_set_export_path": case "cmd_forget_ai_history": case "cmd_codex_logout":
         return null;

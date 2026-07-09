@@ -8,6 +8,7 @@
 //! `tauri::generate_handler!` macro referencing `commands::<module>::<fn>`.
 
 pub mod ai;
+pub mod backups;
 pub mod books;
 pub mod db_helpers;
 pub mod discover;

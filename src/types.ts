@@ -288,6 +288,29 @@ export interface SettingsDto {
   ai_codex_creds_present: boolean;
   /** AI session phrases on/off (Stage 3). Off = zero phrase network calls. */
   ai_phrases: boolean;
+  // ── Appearance (settings redesign; additive) ──
+  /** "light" | "dark" | "auto" | "" — empty means never chosen here (the
+   *  frontend migrates the legacy tl.theme value once, else uses "auto"). */
+  ui_theme: string;
+  /** "newsreader" | "iowan" | "charter" (default newsreader). */
+  reading_typeface: string;
+  /** "comfortable" | "compact" | "open" (default comfortable). */
+  reading_line_spacing: string;
+}
+
+/** Settings › Files: the automatic-backups toggle + "last backup …" line. */
+export interface BackupStatus {
+  enabled: boolean;
+  /** RFC3339 timestamp of the newest backup, or null when none exists yet. */
+  last_backup_at: string | null;
+}
+
+/** One restorable backup in the "Choose a backup" picker. */
+export interface BackupEntry {
+  /** Bare backup file name — round-trips into cmd_restore_backup. */
+  id: string;
+  /** RFC3339 timestamp parsed from the backup's filename. */
+  taken_at: string;
 }
 
 /** Human label + privacy disclosure for a provider, used by onboarding + cards. */

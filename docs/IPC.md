@@ -539,6 +539,10 @@ type SettingsDto = {
   ai_key_present_anthropic: boolean;
   ai_codex_creds_present: boolean;
   ai_phrases: boolean;
+  // Appearance (settings redesign; additive)
+  ui_theme: "light" | "dark" | "auto" | "";   // "" = never chosen here (frontend migrates legacy tl.theme once, else Auto)
+  reading_typeface: "newsreader" | "iowan" | "charter";
+  reading_line_spacing: "comfortable" | "compact" | "open";
 };
 ```
 
@@ -578,6 +582,67 @@ Stores a BYO provider key in the OS Keychain. The key is never returned; only th
 - errors: `Config` (Keychain failure), `Db`
 
 Deletes a stored BYO provider key idempotently and refreshes the non-secret presence flag.
+
+#### `cmd_set_appearance`
+- args: `{ theme?: "light" | "dark" | "auto"; typeface?: "newsreader" | "iowan" | "charter"; lineSpacing?: "comfortable" | "compact" | "open" }`
+- returns: `SettingsDto` (updated)
+- errors: `Validation` (unknown value), `Db`
+
+Settings › Appearance (redesign). Each arg can be set independently; unknown values are refused, never stored. Reading text size is deliberately NOT here — it stays the frontend `tl.fontSize` preference the reader toolbar always used. Additive; `COMMAND_API_VERSION` stays `6`. Settings keys: `ui_theme`, `reading_typeface`, `reading_line_spacing`.
+
+#### `cmd_get_reading_pace` / `cmd_set_reading_pace`
+- `cmd_get_reading_pace` — args: none · returns: `{ minutes: number; chosen: boolean }` · errors: `Db`
+- `cmd_set_reading_pace` — args: `{ minutes: number }` (clamped 5..=120) · returns: `{ minutes: number; chosen: true }` · errors: `Db`
+
+The global sitting size (`reading_rhythm_minutes`). The reader only ever sees the reading-term labels; the minutes stay backstage and are never a timer.
+
+---
+
+### Backups (Settings › Files; built on the launch-time rolling backup)
+
+All local: files live under `{app_support}/backups/`, never the export tree, never the network.
+
+#### `cmd_backup_status`
+- args: none
+- returns: `{ enabled: boolean; last_backup_at: string | null }` (RFC3339, from the newest backup's filename timestamp)
+- errors: `Db`
+
+#### `cmd_set_backups_enabled`
+- args: `{ enabled: boolean }`
+- returns: the updated `cmd_backup_status` shape
+- errors: `Db`
+
+Gates the launch-time rolling backup AND the in-app daily schedule (settings key `backups_enabled`, default on). Enabling writes a backup immediately so the "last backup" line is instant proof; disabling keeps existing backups.
+
+#### `cmd_list_backups`
+- args: none
+- returns: `Array<{ id: string; taken_at: string }>` — newest first; `id` is the bare backup file name
+- errors: `Io`
+
+#### `cmd_restore_backup`
+- args: `{ id: string }` — an id from `cmd_list_backups`, validated (single plain backup-scheme file name; no path can reach the filesystem join)
+- returns: `void`
+- errors: `Validation` (bad id), `Io` (unusable backup / restore failure — the library is unchanged), `Internal`
+
+Restores the library from a chosen backup: the candidate is proven restorable first (opens, integrity-checks, migrates), the CURRENT live DB is snapshotted aside (`pre-restore-*.db`, outside the rolling scheme, newest kept), then the backup is moved into place atomically and the live connection reopens on it. The frontend reloads afterward — every screen's state is stale once the library changed underneath it.
+
+---
+
+### Feedback (CORE-1094; the single deliberate local-only exemption — CLAUDE.md 2b)
+
+#### `cmd_feedback_diagnostics`
+- args: none
+- returns: `{ app_version: string; macos_version: string; mode: "included" | "own_key" | "local" }`
+- errors: `Db`
+
+The exact 3 diagnostics the feedback panel previews (and that `cmd_send_feedback` sends) — sourced in Rust so the preview is byte-identical to the payload. Also feeds the quiet version line in the Settings rail footer.
+
+#### `cmd_send_feedback`
+- args: `{ message: string; email?: string | null }`
+- returns: `void`
+- errors: `Validation` (empty / over-length message), `Ai` (transport failure, reader-voiced)
+
+Posts the ALLOWLISTED payload (message + 3 diagnostics + optional reply email, nothing else) to the relay's `/v1/feedback` in ALL modes, including local-only. Separate path that never touches `validate_base_url`; see CLAUDE.md invariant 2b.
 
 ---
 

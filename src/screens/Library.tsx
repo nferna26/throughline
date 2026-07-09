@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import Cover from "../components/Cover";
 import TLIcon from "../components/TLIcon";
@@ -37,6 +37,9 @@ interface Props {
   onBrowse: () => void;
   /** "Import a file" → the local .txt/.epub picker. */
   onImport: () => void;
+  /** Bumped by ⌘K (App): summon the search field (even on a small shelf) and
+   *  move focus into it. 0 = never pressed. */
+  searchFocusKey?: number;
 }
 
 /** Fetch the embedded cover (a data: URI) for every entry that has one, cached
@@ -79,10 +82,22 @@ export default function Library({
   onRequestRemove,
   onBrowse,
   onImport,
+  searchFocusKey = 0,
 }: Props) {
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
   const [query, setQuery] = useState("");
   const [menu, setMenu] = useState<{ entry: LibraryEntry; x: number; y: number } | null>(null);
+  // ⌘K: the search field normally joins the header only past a large library;
+  // summoning it by shortcut shows it on any shelf and moves focus into it.
+  const [summonedSearch, setSummonedSearch] = useState(false);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (!searchFocusKey) return;
+    setSummonedSearch(true);
+    // The field may mount this render; focus after paint.
+    const t = window.setTimeout(() => searchRef.current?.focus(), 0);
+    return () => window.clearTimeout(t);
+  }, [searchFocusKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,7 +132,7 @@ export default function Library({
   // 6-up wall and titles drop away (the cover carries identity); a single search
   // field joins the header only once even the dense wall outgrows a screen.
   const dense = total > 16;
-  const canSearch = total > 48;
+  const canSearch = total > 48 || summonedSearch;
   const q = query.trim().toLowerCase();
   const searching = canSearch && q.length > 0;
   const matches = (e: LibraryEntry) =>
@@ -155,6 +170,7 @@ export default function Library({
             <TLIcon name="search" size={15} />
             <input
               type="search"
+              ref={searchRef}
               className="tl-library-search-input"
               placeholder="Find a book in your library"
               aria-label="Find a book in your library"

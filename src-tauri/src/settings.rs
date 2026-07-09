@@ -36,6 +36,26 @@ pub const KEY_AI_MODEL_CODEX: &str = "ai_model_codex";
 /// AI session phrases on/off ("true"/"false", default ON). Off = zero phrase
 /// network calls — the gate lives in phrases::plan_batch, before any wire code.
 pub const KEY_AI_PHRASES: &str = "ai_phrases";
+// ── Appearance (Settings › Appearance, CORE settings redesign) ──
+/// Reader-chosen window theme: "light" | "dark" | "auto" (follow macOS).
+/// Unset means the reader has never chosen here — the frontend migrates the
+/// pre-redesign `tl.theme` localStorage value once, then defaults to "auto".
+pub const KEY_UI_THEME: &str = "ui_theme";
+pub const UI_THEMES: [&str; 3] = ["light", "dark", "auto"];
+/// Reading-view serif. "newsreader" is the app's existing default stack (it
+/// falls back to Iowan Old Style when Newsreader isn't installed — the Google
+/// Fonts import was deliberately dropped, local-first). The other two name
+/// serifs that ship with macOS.
+pub const KEY_READING_TYPEFACE: &str = "reading_typeface";
+pub const READING_TYPEFACES: [&str; 3] = ["newsreader", "iowan", "charter"];
+pub const DEFAULT_READING_TYPEFACE: &str = "newsreader";
+/// Reading-view line spacing. "comfortable" is the shipped 1.72 leading.
+pub const KEY_READING_LINE_SPACING: &str = "reading_line_spacing";
+pub const READING_LINE_SPACINGS: [&str; 3] = ["comfortable", "compact", "open"];
+pub const DEFAULT_READING_LINE_SPACING: &str = "comfortable";
+/// Automatic reading.db backups on/off ("true"/"false", default ON — the
+/// launch-time rolling backup predates this key, so ON preserves behavior).
+pub const KEY_BACKUPS_ENABLED: &str = "backups_enabled";
 pub const KEY_AI_KEY_PRESENT_OPENAI: &str = "ai_key_present_openai";
 pub const KEY_AI_KEY_PRESENT_ANTHROPIC: &str = "ai_key_present_anthropic";
 pub const KEY_CODEX_CREDS_PRESENT: &str = "ai_codex_creds_present";
@@ -183,6 +203,14 @@ pub struct SettingsDto {
     pub ai_codex_creds_present: bool,
     /// AI session phrases on/off (Stage 3). Off = zero phrase network calls.
     pub ai_phrases: bool,
+    // ── Appearance (additive; IPC minor) ──
+    /// "light" | "dark" | "auto" | "" (empty = never chosen here; the frontend
+    /// migrates the legacy tl.theme localStorage value once, else uses "auto").
+    pub ui_theme: String,
+    /// "newsreader" | "iowan" | "charter" (default newsreader).
+    pub reading_typeface: String,
+    /// "comfortable" | "compact" | "open" (default comfortable).
+    pub reading_line_spacing: String,
 }
 
 pub fn get_export_path(conn: &Connection) -> Result<PathBuf> {
@@ -459,6 +487,74 @@ pub fn set_reading_rhythm_minutes(conn: &Connection, minutes: i64) -> Result<i64
     Ok(clamped)
 }
 
+/// The chosen window theme, or "" when the reader has never chosen one here.
+/// "" is deliberate (not a default): the frontend uses it to migrate the
+/// pre-redesign `tl.theme` localStorage value exactly once, so an existing
+/// install keeps the theme it already had while a fresh install lands on Auto.
+pub fn get_ui_theme(conn: &Connection) -> String {
+    match get_string(conn, KEY_UI_THEME) {
+        Some(v) if UI_THEMES.contains(&v.as_str()) => v,
+        _ => String::new(),
+    }
+}
+
+/// Persist the window theme. Rejects anything but light | dark | auto.
+pub fn set_ui_theme(conn: &Connection, value: &str) -> Result<()> {
+    let v = value.trim();
+    if !UI_THEMES.contains(&v) {
+        return Err(anyhow!("unknown theme: {v:?}"));
+    }
+    set_string(conn, KEY_UI_THEME, v)
+}
+
+/// Reading-view typeface. Unrecognised stored values fall back to the default.
+pub fn get_reading_typeface(conn: &Connection) -> String {
+    match get_string(conn, KEY_READING_TYPEFACE) {
+        Some(v) if READING_TYPEFACES.contains(&v.as_str()) => v,
+        _ => DEFAULT_READING_TYPEFACE.to_string(),
+    }
+}
+
+/// Persist the reading-view typeface. Rejects unknown values.
+pub fn set_reading_typeface(conn: &Connection, value: &str) -> Result<()> {
+    let v = value.trim();
+    if !READING_TYPEFACES.contains(&v) {
+        return Err(anyhow!("unknown typeface: {v:?}"));
+    }
+    set_string(conn, KEY_READING_TYPEFACE, v)
+}
+
+/// Reading-view line spacing. Unrecognised stored values fall back to the default.
+pub fn get_reading_line_spacing(conn: &Connection) -> String {
+    match get_string(conn, KEY_READING_LINE_SPACING) {
+        Some(v) if READING_LINE_SPACINGS.contains(&v.as_str()) => v,
+        _ => DEFAULT_READING_LINE_SPACING.to_string(),
+    }
+}
+
+/// Persist the reading-view line spacing. Rejects unknown values.
+pub fn set_reading_line_spacing(conn: &Connection, value: &str) -> Result<()> {
+    let v = value.trim();
+    if !READING_LINE_SPACINGS.contains(&v) {
+        return Err(anyhow!("unknown line spacing: {v:?}"));
+    }
+    set_string(conn, KEY_READING_LINE_SPACING, v)
+}
+
+/// Automatic backups on/off. Default ON: the launch-time rolling backup has
+/// always run; this key only exists so the Files pane toggle can turn it off.
+pub fn get_backups_enabled(conn: &Connection) -> bool {
+    !matches!(
+        get_string(conn, KEY_BACKUPS_ENABLED).as_deref(),
+        Some("false")
+    )
+}
+
+/// Persist the automatic-backups choice.
+pub fn set_backups_enabled(conn: &Connection, on: bool) -> Result<()> {
+    set_string(conn, KEY_BACKUPS_ENABLED, if on { "true" } else { "false" })
+}
+
 /// Margin-help preference ("quiet" | "guided" | "deep_study"). Defaults to
 /// `DEFAULT_MARGIN_HELP`. Any unrecognised stored value falls back to the
 /// default rather than erroring.
@@ -557,6 +653,9 @@ pub fn build_dto(conn: &Connection) -> Result<SettingsDto> {
             crate::keystore::has_codex_creds()
         }) || crate::ai_providers::codex_cli_auth_present(),
         ai_phrases: get_ai_phrases(conn),
+        ui_theme: get_ui_theme(conn),
+        reading_typeface: get_reading_typeface(conn),
+        reading_line_spacing: get_reading_line_spacing(conn),
     })
 }
 
@@ -685,6 +784,71 @@ mod tests {
         let stored = set_reading_rhythm_minutes(&conn, 10).unwrap();
         assert_eq!(stored, 10, "a few pages round-trips");
         assert!(reading_rhythm_chosen(&conn));
+    }
+
+    #[test]
+    fn ui_theme_unset_reads_empty_then_round_trips_and_validates() {
+        let conn = mem();
+        // Unset is "" — NOT a default — so the frontend can run its one-time
+        // legacy tl.theme migration before falling back to "auto".
+        assert_eq!(get_ui_theme(&conn), "");
+        for v in UI_THEMES {
+            set_ui_theme(&conn, v).unwrap();
+            assert_eq!(get_ui_theme(&conn), v);
+        }
+        assert!(
+            set_ui_theme(&conn, "sepia").is_err(),
+            "unknown theme refused"
+        );
+        assert_eq!(get_ui_theme(&conn), "auto", "a refused set changes nothing");
+        // Garbage planted directly in the table reads as unset, never echoed.
+        set_string(&conn, KEY_UI_THEME, "blorp").unwrap();
+        assert_eq!(get_ui_theme(&conn), "");
+    }
+
+    #[test]
+    fn reading_typeface_defaults_round_trips_and_validates() {
+        let conn = mem();
+        assert_eq!(get_reading_typeface(&conn), DEFAULT_READING_TYPEFACE);
+        for v in READING_TYPEFACES {
+            set_reading_typeface(&conn, v).unwrap();
+            assert_eq!(get_reading_typeface(&conn), v);
+        }
+        assert!(set_reading_typeface(&conn, "comic-sans").is_err());
+        // Garbage falls back to the default rather than reaching the reader.
+        set_string(&conn, KEY_READING_TYPEFACE, "papyrus").unwrap();
+        assert_eq!(get_reading_typeface(&conn), DEFAULT_READING_TYPEFACE);
+    }
+
+    #[test]
+    fn reading_line_spacing_defaults_round_trips_and_validates() {
+        let conn = mem();
+        assert_eq!(
+            get_reading_line_spacing(&conn),
+            DEFAULT_READING_LINE_SPACING
+        );
+        for v in READING_LINE_SPACINGS {
+            set_reading_line_spacing(&conn, v).unwrap();
+            assert_eq!(get_reading_line_spacing(&conn), v);
+        }
+        assert!(set_reading_line_spacing(&conn, "double").is_err());
+        set_string(&conn, KEY_READING_LINE_SPACING, "0").unwrap();
+        assert_eq!(
+            get_reading_line_spacing(&conn),
+            DEFAULT_READING_LINE_SPACING
+        );
+    }
+
+    #[test]
+    fn backups_enabled_defaults_on_and_round_trips() {
+        let conn = mem();
+        // Default ON: the rolling launch backup predates the toggle, so an
+        // install that never touched Settings keeps exactly today's behavior.
+        assert!(get_backups_enabled(&conn));
+        set_backups_enabled(&conn, false).unwrap();
+        assert!(!get_backups_enabled(&conn));
+        set_backups_enabled(&conn, true).unwrap();
+        assert!(get_backups_enabled(&conn));
     }
 
     #[test]
@@ -891,6 +1055,9 @@ mod tests {
             ai_key_present_anthropic: false,
             ai_codex_creds_present: false,
             ai_phrases: true,
+            ui_theme: String::new(),
+            reading_typeface: DEFAULT_READING_TYPEFACE.into(),
+            reading_line_spacing: DEFAULT_READING_LINE_SPACING.into(),
         };
         let v = serde_json::to_value(&dto).unwrap();
         assert!(

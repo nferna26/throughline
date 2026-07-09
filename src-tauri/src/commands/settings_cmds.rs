@@ -295,6 +295,33 @@ pub fn cmd_set_ai_settings(
     settings::build_dto(&conn).map_err(AppError::from)
 }
 
+/// Set any subset of the Appearance preferences (Settings › Appearance). Each
+/// value is validated against its closed list in `settings.rs`; an unknown
+/// value is refused with a plain message rather than stored. Text size is NOT
+/// here — it stays a frontend preference (`tl.fontSize`), matching the reader.
+#[tauri::command]
+pub fn cmd_set_appearance(
+    theme: Option<String>,
+    typeface: Option<String>,
+    line_spacing: Option<String>,
+    state: State<DbState>,
+) -> Result<settings::SettingsDto, AppError> {
+    let conn = state.0.lock()?;
+    if let Some(t) = theme.as_deref() {
+        settings::set_ui_theme(&conn, t)
+            .map_err(|_| AppError::validation(format!("unknown theme: {t:?}")))?;
+    }
+    if let Some(f) = typeface.as_deref() {
+        settings::set_reading_typeface(&conn, f)
+            .map_err(|_| AppError::validation(format!("unknown typeface: {f:?}")))?;
+    }
+    if let Some(s) = line_spacing.as_deref() {
+        settings::set_reading_line_spacing(&conn, s)
+            .map_err(|_| AppError::validation(format!("unknown line spacing: {s:?}")))?;
+    }
+    settings::build_dto(&conn).map_err(AppError::from)
+}
+
 /// Store a cloud provider's API key in the OS Keychain. The key is NEVER echoed
 /// back, logged, written to the DB, or returned by any command — only the
 /// resulting `ai_key_present_*` boolean reaches the frontend.

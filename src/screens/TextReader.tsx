@@ -15,6 +15,7 @@ import { locatorHint } from "../locatorHint";
 import { endReached } from "../sectionCompletion";
 import { reduceMargin, initialMarginState, marginVisible } from "../marginPanel";
 import { registerQuitFlush } from "../sessionQuitFlush";
+import { clampFontSize, readFontSize, FONT_SIZE_EVENT } from "../appearance";
 
 interface Props {
   today: TodayCard;
@@ -140,9 +141,7 @@ export default function TextReader({ today, onExit }: Props) {
   // after a section's text paints so a section that fits one screen — which
   // never fires a scroll event — can still be finished by reading it.
   const [reachedEnd, setReachedEnd] = useState<Set<string>>(new Set());
-  const [fontSize, setFontSize] = useState<number>(
-    () => parseInt(localStorage.getItem("tl.fontSize") || "18", 10)
-  );
+  const [fontSize, setFontSize] = useState<number>(readFontSize);
   const [lineWidth, setLineWidth] = useState<number>(
     () => parseInt(localStorage.getItem("tl.lineWidth") || "640", 10)
   );
@@ -236,6 +235,13 @@ export default function TextReader({ today, onExit }: Props) {
 
   useEffect(() => { localStorage.setItem("tl.fontSize", String(fontSize)); }, [fontSize]);
   useEffect(() => { localStorage.setItem("tl.lineWidth", String(lineWidth)); }, [lineWidth]);
+  // ⌘+/⌘− (App) and the Appearance stepper announce size changes on window —
+  // adopt them live so an open reader resizes under the shortcut.
+  useEffect(() => {
+    const onSize = (e: Event) => setFontSize(clampFontSize(Number((e as CustomEvent).detail)));
+    window.addEventListener(FONT_SIZE_EVENT, onSize);
+    return () => window.removeEventListener(FONT_SIZE_EVENT, onSize);
+  }, []);
   // Persist the reader's open-preference (the pin) under the long-standing key.
   useEffect(() => { localStorage.setItem("tl.panelOpen", String(pinned)); }, [pinned]);
 
@@ -898,6 +904,28 @@ export default function TextReader({ today, onExit }: Props) {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [sel, dismissSelection]);
+
+  // Reader shortcuts (Settings › Shortcuts): ⌘E asks about the selection (the
+  // Explain lens — a DRAFT card, nothing sent), ⌘N opens the note composer.
+  // Chords only, so typing in the composer is never intercepted; ⌘E is
+  // meaningful only while a selection is active, matching the toolbar.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if ((e.key === "e" || e.key === "E") && sel) {
+        e.preventDefault();
+        spawnTutorDraft("explain");
+      } else if (e.key === "n" || e.key === "N") {
+        e.preventDefault();
+        setShowNote(true);
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // spawnTutorDraft is a fresh closure per render; re-subscribing on sel
+    // keeps it current exactly when the shortcut's precondition changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sel]);
 
   // Capture a selection inside the reading column → show the action toolbar.
   function onTextMouseUp() {

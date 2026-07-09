@@ -30,6 +30,8 @@ function sendCalls() {
 beforeEach(() => {
   cleanup();
   setImpl("ok");
+  // The draft persists in localStorage by design; isolate each test.
+  localStorage.clear();
   // jsdom is "online" by default; make it explicit for the offline test to flip.
   Object.defineProperty(navigator, "onLine", { value: true, configurable: true, writable: true });
 });
@@ -132,6 +134,77 @@ describe("honeypot", () => {
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
     });
     expect(sendCalls().length).toBe(0);
+  });
+});
+
+// ── Six-state spec (settings redesign): sending, success, failure, draft ────
+describe("six states", () => {
+  it("success replaces the pane with the serif thank-you and a Close action", async () => {
+    render(panel());
+    await screen.findByTestId("preview-app-version");
+    fireEvent.change(screen.getByLabelText("Your message"), { target: { value: "lovely" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+    expect(screen.getByRole("heading", { name: "Thank you." })).toBeInTheDocument();
+    expect(screen.getByText("Your feedback is on its way.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+    // The Cancel/Send footer is gone with the fields.
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+  });
+
+  it("failure keeps the footer as Cancel + 'Send again' (enabled)", async () => {
+    setImpl("fail");
+    render(panel());
+    await screen.findByTestId("preview-app-version");
+    fireEvent.change(screen.getByLabelText("Your message"), { target: { value: "words" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+    const again = screen.getByRole("button", { name: "Send again" });
+    expect(again).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  });
+
+  it("the empty state disables Send and previews '(your message above)' with live diagnostics", async () => {
+    render(panel());
+    await screen.findByTestId("preview-app-version");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByTestId("preview-message")).toHaveTextContent("(your message above)");
+    // The reply-email preview row appears ONLY when an email is given.
+    expect(screen.queryByTestId("preview-email")).toBeNull();
+    fireEvent.change(screen.getByLabelText(/Reply email/i), { target: { value: "me@x.com" } });
+    expect(screen.getByTestId("preview-email")).toHaveTextContent("me@x.com");
+  });
+
+  it("the draft (message + email) survives unmount and remount until sent", async () => {
+    const first = render(panel());
+    await screen.findByTestId("preview-app-version");
+    fireEvent.change(screen.getByLabelText("Your message"), { target: { value: "keep me" } });
+    fireEvent.change(screen.getByLabelText(/Reply email/i), { target: { value: "me@x.com" } });
+    first.unmount();
+
+    render(panel());
+    await screen.findByTestId("preview-app-version");
+    expect((screen.getByLabelText("Your message") as HTMLTextAreaElement).value).toBe("keep me");
+    expect((screen.getByLabelText(/Reply email/i) as HTMLInputElement).value).toBe("me@x.com");
+
+    // …and is cleared once the feedback actually sends.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+    expect(localStorage.getItem("tl.feedbackDraft")).toBeNull();
+    expect(localStorage.getItem("tl.feedbackDraftEmail")).toBeNull();
+  });
+
+  it("Escape returns to the previous pane via onClose, preserving the draft", async () => {
+    const onClose = vi.fn();
+    render(<FeedbackPanel mode="included" onClose={onClose} />);
+    await screen.findByTestId("preview-app-version");
+    fireEvent.change(screen.getByLabelText("Your message"), { target: { value: "draft" } });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem("tl.feedbackDraft")).toBe("draft");
   });
 });
 

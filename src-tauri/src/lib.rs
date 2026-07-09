@@ -113,11 +113,16 @@ fn open_db_resilient() -> rusqlite::Connection {
             // failure must never break launch, and we log without any content.
             // The backup path is intentionally not logged in full (it embeds
             // the data dir); only the fact + retention count is recorded.
-            match backup::write_rolling_backup(&c) {
-                Ok(_) => {
-                    tracing::info!("reading.db backup written ({} kept)", backup::KEEP_BACKUPS)
+            // Readers can turn this off (Settings › Files › Automatic backups).
+            if settings::get_backups_enabled(&c) {
+                match backup::write_rolling_backup(&c) {
+                    Ok(_) => {
+                        tracing::info!("reading.db backup written ({} kept)", backup::KEEP_BACKUPS)
+                    }
+                    Err(e) => tracing::warn!("reading.db backup skipped: {e:#}"),
                 }
-                Err(e) => tracing::warn!("reading.db backup skipped: {e:#}"),
+            } else {
+                tracing::info!("reading.db backup skipped: automatic backups are off");
             }
             // Stage 3: installs that predate the phrases disclosure default the
             // toggle OFF; fresh installs default ON (best-effort, never fatal).
@@ -259,6 +264,32 @@ pub fn run() {
                     }
                 });
             }
+            // In-app backup schedule: the launch backup already covers the
+            // open-daily reader; this hourly check covers the Mac that stays
+            // open for days, writing a fresh rolling backup once the newest is
+            // a day old (backup::backup_due). Local disk only — never network,
+            // never content in logs — and OFF with the same toggle as launch.
+            {
+                use tauri::Manager;
+                let handle = app.handle().clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(60 * 60));
+                    let state = handle.state::<DbState>();
+                    let Ok(conn) = state.0.lock() else { continue };
+                    let enabled = settings::get_backups_enabled(&conn);
+                    let newest = backup::newest_backup_taken_at()
+                        .ok()
+                        .flatten()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|t| t.with_timezone(&chrono::Local));
+                    if backup::backup_due(enabled, newest, chrono::Local::now()) {
+                        match backup::write_rolling_backup(&conn) {
+                            Ok(_) => tracing::info!("scheduled reading.db backup written"),
+                            Err(e) => tracing::warn!("scheduled backup failed: {e:#}"),
+                        }
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -342,6 +373,11 @@ pub fn run() {
             commands::settings_cmds::cmd_clear_ai_key,
             commands::settings_cmds::cmd_get_reading_pace,
             commands::settings_cmds::cmd_set_reading_pace,
+            commands::settings_cmds::cmd_set_appearance,
+            commands::backups::cmd_backup_status,
+            commands::backups::cmd_set_backups_enabled,
+            commands::backups::cmd_list_backups,
+            commands::backups::cmd_restore_backup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

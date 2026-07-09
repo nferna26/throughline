@@ -851,10 +851,21 @@
    line-width control caps max-width inline. */
 .tl-readcol {
   margin: 0 auto; width: 100%; box-sizing: border-box;
-  font-family: var(--tl-serif);
+  font-family: var(--tl-reading-serif, var(--tl-serif));
   font-size: clamp(17px, calc(16px + 0.25vw), 20px);
-  line-height: 1.72; color: var(--tl-ink);
+  line-height: var(--tl-reading-leading, 1.72); color: var(--tl-ink);
 }
+
+/* ── Reading typeface + line spacing (Settings › Appearance) ──
+   App stamps data-typeface / data-linespacing on <html>; only the reading
+   column consumes these — app chrome and headings keep the house --tl-serif.
+   "newsreader" is the default stack above (no override). Iowan Old Style and
+   Charter ship with macOS; Newsreader applies only where it's installed
+   (the Google-Fonts import stays out — local-first, no network). */
+:root[data-typeface="iowan"]   { --tl-reading-serif: "Iowan Old Style", Georgia, serif; }
+:root[data-typeface="charter"] { --tl-reading-serif: "Charter", Georgia, serif; }
+:root[data-linespacing="compact"] { --tl-reading-leading: 1.55; }
+:root[data-linespacing="open"]    { --tl-reading-leading: 1.9; }
 .tl-readcol p { margin: 0; text-wrap: pretty; white-space: pre-wrap; }
 /* True serif italics + weight for inline emphasis (em/strong from the sidecar). */
 .tl-readcol em { font-style: italic; font-synthesis: none; }

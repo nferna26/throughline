@@ -109,6 +109,30 @@ scheduled AI, mobile, PDF/OCR, local embeddings, OpenClaw integration (none, not
 stub), dashboard-first UX — the app opens to Today. If a genuine fix appears to require
 crossing any line in this section, stop and ask in plain text first.
 
+## Settings surface (left-rail redesign, 2026-07)
+
+Settings is a macOS System Settings-style left rail of seven destinations — Reading,
+Appearance, Assistant, Privacy, Files, Shortcuts, then Send feedback below a divider
+(CORE-1094's panel became its own destination; its behavior, allowlisted payload, and
+honest line are unchanged, and the draft persists until sent). The deep provider setup
+(activation code, BYO key, Codex sign-in, local server) lives in a sheet opened from
+the Assistant pane's "Answers come from" row; nothing switches providers until "Use
+this" commits, and provider flows still never write consent (CORE-1177).
+
+New settings keys: `ui_theme` (light | dark | auto; unset means the frontend migrates
+the legacy `tl.theme` localStorage value once — existing installs keep their theme,
+fresh installs follow the system), `reading_typeface`, `reading_line_spacing`, and
+`backups_enabled` (default on; gates the rolling launch backup in `backup.rs` plus an
+hourly-checked in-app schedule that backs up once the newest copy is a day old).
+Restore-from-backup reuses `backup.rs`'s validated restore path and snapshots the
+current library aside first. Reading text size stays the frontend `tl.fontSize` key.
+
+Recorded decision (About/version): there is no About destination — the app version is
+a quiet tabular-nums line in the rail footer, under the promise lines. The keyboard
+shortcuts listed in the Shortcuts pane are all real and wired: ⌘E ask about the
+selection, ⌘N add a note, ⌘K search the library, ⌘+/⌘− text size, ⌘⇧L toggle theme,
+⌘, Settings.
+
 ## The golden loop (regression spine)
 
 Discover or drag in a book → Today shows the right section → read → select a passage and ask

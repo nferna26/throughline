@@ -1,14 +1,36 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import ModelSelect from "../components/ModelSelect";
 import CodexLogin from "../components/CodexLogin";
 import FeedbackPanel from "../components/FeedbackPanel";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
+import { useDialog } from "../hooks/useDialog";
+import {
+  adjustFontSize,
+  applyLineSpacing,
+  applyTypeface,
+  clampFontSize,
+  getCachedThemePref,
+  normalizeLineSpacing,
+  normalizeThemePref,
+  normalizeTypeface,
+  readFontSize,
+  setThemePref,
+  FONT_SIZE_EVENT,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
+  THEME_PREF_EVENT,
+  type LineSpacing,
+  type ThemePref,
+  type Typeface,
+} from "../appearance";
 import {
   AI_PROVIDERS,
   aiProviderLabel,
   type AiRequest,
+  type BackupEntry,
+  type BackupStatus,
   type CompanyCredits,
   CompanyStatus,
   type ConnTestResult,
@@ -17,8 +39,9 @@ import {
 } from "../types";
 import "../tl-settings.css";
 
-/* ── Icons (Lucide-style, 20-grid, currentColor) — authored inline so the
-   redesign carries the handoff's exact glyphs without a new dependency. */
+/* ── Icons (Lucide-style, 20-grid, currentColor) — the redesigned Settings is
+   text-first (the rail carries no icons), but a few controls keep their glyphs:
+   the folder chip, the export arrow, the fallback segmented, and the audit log. */
 function Icon({ d, size = 16, className }: { d: string; size?: number; className?: string }) {
   return (
     <svg
@@ -38,16 +61,8 @@ function Icon({ d, size = 16, className }: { d: string; size?: number; className
   );
 }
 const ICON = {
-  sparkle: "M10 2.5l1.7 4.6 4.6 1.7-4.6 1.7L10 15.1 8.3 10.5 3.7 8.8l4.6-1.7z",
   key: "M8.5 8.5a3 3 0 1 0-3 3 3 3 0 0 0 3-3zM8.5 8.5l4 4 1.5-1.5 1.5 1.5 1.5-1.5-3-3z",
   monitor: "M3 4.5h14v9.5H3zM7 17h6M10 14v3",
-  info: "M10 2.4a7.6 7.6 0 1 0 0 15.2A7.6 7.6 0 0 0 10 2.4zM10 9.2v4M10 6.6v.1",
-  shield: "M10 2.2l6 2.3v4.2c0 3.7-2.5 6.6-6 8-3.5-1.4-6-4.3-6-8V4.5zM7.3 9.8l1.9 1.9 3.5-3.7",
-  check: "M3.5 10.5 8 15l8.5-9.5",
-  clock: "M10 2.6a7.4 7.4 0 1 0 0 14.8 7.4 7.4 0 0 0 0-14.8zM10 6.4v4.2l2.6 1.6",
-  gauge: "M3 12a7 7 0 0 1 14 0M10 12l3.4-3",
-  disk: "M3 6.5C3 5 6.1 4 10 4s7 1 7 2.5M3 6.5v7C3 15 6.1 16 10 16s7-1 7-2.5v-7M3 10c0 1.5 3.1 2.5 7 2.5s7-1 7-2.5",
-  chevron: "M7 5l5 5-5 5",
   up: "M10 15V5M6 9l4-4 4 4",
   trash: "M4 6h12M8 6V4.5h4V6M6 6l.6 9.5h6.8L15 6",
   folder:
@@ -95,6 +110,20 @@ function fmtWhen(iso: string): string {
   });
 }
 
+/** "today at 9:12" / "yesterday at 9:12" / "Jun 30 at 9:12" — the Files pane's
+ *  last-backup line and the restore picker's row labels. Exported for tests. */
+export function fmtBackupWhen(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const day = (x: Date) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
+  if (day(d) === day(now)) return `today at ${time}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (day(d) === day(yesterday)) return `yesterday at ${time}`;
+  return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} at ${time}`;
+}
+
 /** The stored model id for a provider, from a settings DTO. */
 function modelForProvider(s: SettingsDto, prov: string): string {
   switch (prov) {
@@ -115,14 +144,87 @@ function modeForProvider(prov: string): Mode {
 
 const KEY_PROVIDERS = AI_PROVIDERS.filter((p) => p.id === "anthropic" || p.id === "openai" || p.id === "codex");
 
+/** The rail's seven destinations, in design order. */
+type Section = "reading" | "appearance" | "assistant" | "privacy" | "files" | "shortcuts" | "feedback";
+const SECTIONS: Array<{ id: Exclude<Section, "feedback">; label: string }> = [
+  { id: "reading", label: "Reading" },
+  { id: "appearance", label: "Appearance" },
+  { id: "assistant", label: "Assistant" },
+  { id: "privacy", label: "Privacy" },
+  { id: "files", label: "Files" },
+  { id: "shortcuts", label: "Shortcuts" },
+];
+
+/** Shared modal shell for the Settings sheets (provider setup, audit, restore).
+ *  Escape closes; focus is trapped; clicking the scrim closes. */
+function SettingsSheet({
+  label,
+  onClose,
+  children,
+}: {
+  label: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useDialog(ref, onClose);
+  return (
+    <div className="tl-scrim" onClick={onClose}>
+      <div
+        className="set-sheet"
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export default function Settings() {
   const [dto, setDto] = useState<SettingsDto | null>(null);
-  // CORE-1094: the feedback panel opens from the About section.
-  const [showFeedback, setShowFeedback] = useState(false);
 
-  // Reading pace — the global sitting size the first-journey pace step sets, also
-  // editable here ("changeable anytime"). Reading terms only on screen; the
-  // minutes are the backstage mapping (10 / 25 / 60), never a timer.
+  // ── Rail navigation. "feedback" is a destination like any other; Cancel and
+  // Close return to the pane the reader was on before (spec).
+  const [active, setActive] = useState<Section>("reading");
+  const prevSection = useRef<Exclude<Section, "feedback">>("reading");
+  function goTo(section: Section) {
+    if (section !== "feedback") prevSection.current = section;
+    setActive(section);
+  }
+  function onRailKeyDown(e: React.KeyboardEvent<HTMLElement>) {
+    const keys = ["ArrowDown", "ArrowUp", "Home", "End"];
+    if (!keys.includes(e.key)) return;
+    const items = Array.from(
+      e.currentTarget.querySelectorAll<HTMLButtonElement>("button.set-rail-item"),
+    );
+    if (items.length === 0) return;
+    e.preventDefault();
+    const idx = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next =
+      e.key === "Home" || idx === -1
+        ? 0
+        : e.key === "End"
+          ? items.length - 1
+          : (idx + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+    items[next].focus();
+  }
+
+  // App version for the rail footer (the About decision: a quiet version line).
+  // Sourced from the same Rust diagnostics the feedback preview shows.
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  useEffect(() => {
+    invoke<{ app_version: string }>("cmd_feedback_diagnostics")
+      .then((d) => setAppVersion(d?.app_version ?? null))
+      .catch(() => setAppVersion(null));
+  }, []);
+
+  // ── Reading pace — the global sitting size the first-journey pace step sets,
+  // also editable here. Reading terms only on screen; the minutes are the
+  // backstage mapping (10 / 25 / 60), never a timer.
   const [paceMinutes, setPaceMinutes] = useState<number | null>(null);
   useEffect(() => {
     invoke<{ minutes: number; chosen: boolean }>("cmd_get_reading_pace")
@@ -139,46 +241,124 @@ export default function Settings() {
     }
   }
 
-  // Files
+  // ── Appearance ──
+  const [themePref, setThemePrefLocal] = useState<ThemePref>(getCachedThemePref);
+  useEffect(() => {
+    const onPref = (e: Event) => {
+      const p = normalizeThemePref((e as CustomEvent).detail);
+      if (p) setThemePrefLocal(p);
+    };
+    window.addEventListener(THEME_PREF_EVENT, onPref);
+    return () => window.removeEventListener(THEME_PREF_EVENT, onPref);
+  }, []);
+  const [fontSize, setFontSize] = useState<number>(readFontSize);
+  useEffect(() => {
+    const onSize = (e: Event) => setFontSize(clampFontSize(Number((e as CustomEvent).detail)));
+    window.addEventListener(FONT_SIZE_EVENT, onSize);
+    return () => window.removeEventListener(FONT_SIZE_EVENT, onSize);
+  }, []);
+  const typeface: Typeface = normalizeTypeface(dto?.reading_typeface);
+  const lineSpacing: LineSpacing = normalizeLineSpacing(dto?.reading_line_spacing);
+  async function changeTypeface(v: string) {
+    applyTypeface(normalizeTypeface(v)); // live in the reading view
+    try {
+      setDto(await invoke<SettingsDto>("cmd_set_appearance", { typeface: v }));
+    } catch {
+      /* the applied value still shows; refresh reconciles */
+    }
+  }
+  async function changeLineSpacing(v: string) {
+    applyLineSpacing(normalizeLineSpacing(v)); // live in the reading view
+    try {
+      setDto(await invoke<SettingsDto>("cmd_set_appearance", { lineSpacing: v }));
+    } catch {
+      /* as above */
+    }
+  }
+
+  // ── Files ──
   const [savingExport, setSavingExport] = useState(false);
   const [exportMsg, setExportMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-  // Export your library (one Markdown file per book under the chosen folder).
   const [exportingLib, setExportingLib] = useState(false);
   const [libExportMsg, setLibExportMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  // Automatic backups + restore (built on the launch-time rolling backup).
+  const [backup, setBackup] = useState<BackupStatus | null>(null);
+  useEffect(() => {
+    invoke<BackupStatus>("cmd_backup_status")
+      .then(setBackup)
+      .catch(() => setBackup(null));
+  }, []);
+  async function toggleBackups() {
+    if (!backup) return;
+    try {
+      setBackup(await invoke<BackupStatus>("cmd_set_backups_enabled", { enabled: !backup.enabled }));
+    } catch {
+      /* leave the switch; the status read reconciles */
+    }
+  }
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [backupsList, setBackupsList] = useState<BackupEntry[] | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<BackupEntry | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreMsg, setRestoreMsg] = useState<string | null>(null);
+  function openRestore() {
+    setRestoreOpen(true);
+    setRestoreTarget(null);
+    setRestoreMsg(null);
+    setBackupsList(null);
+    invoke<BackupEntry[]>("cmd_list_backups")
+      .then(setBackupsList)
+      .catch(() => setBackupsList([]));
+  }
+  async function doRestore() {
+    if (!restoreTarget || restoring) return;
+    setRestoring(true);
+    setRestoreMsg(null);
+    try {
+      await invoke("cmd_restore_backup", { id: restoreTarget.id });
+      setRestoreMsg("Library restored. Reopening…");
+      // Every screen's state is stale once the library underneath changed.
+      window.setTimeout(() => window.location.reload(), 600);
+    } catch (e: any) {
+      setRestoreMsg(String(e?.message ?? e));
+      setRestoring(false);
+    }
+  }
 
-  // Allowance meter (real, from cmd_company_credits)
+  // ── Assistant: allowance meter + company status + activation door ──
   const [credits, setCredits] = useState<CompanyCredits | null>(null);
   const [companyStatus, setCompanyStatus] = useState<CompanyStatus | null>(null);
-  // Activation-code entry (the in-Settings door the failure banner points at).
   const [codeDraft, setCodeDraft] = useState("");
   const [activating, setActivating] = useState(false);
   const [activateMsg, setActivateMsg] = useState<string | null>(null);
 
-  // BYO / on-this-Mac controls (draft, mirrors current Settings flow)
+  // BYO / on-this-Mac controls (draft, inside the setup sheet)
   const [baseUrlDraft, setBaseUrlDraft] = useState("");
   const [modelDraft, setModelDraft] = useState("");
   const [savingAi, setSavingAi] = useState(false);
   const [aiMsg, setAiMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [conn, setConn] = useState<ConnTestResult | null>(null);
   const [testing, setTesting] = useState(false);
-  // providerDraft is the FALLBACK provider chosen inside the expander
+  // providerDraft is the FALLBACK provider chosen inside the sheet
   // (anthropic | openai | codex | local). Defaults to anthropic for "own key".
   const [providerDraft, setProviderDraft] = useState<string>("anthropic");
   const [keyDraft, setKeyDraft] = useState("");
   const [models, setModels] = useState<string[] | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
+  // The deep provider setup opens as a sheet from the "Answers come from" row.
+  // NOTHING switches until "Use this" commits inside it — selecting a fallback
+  // option in the row only opens its controls (the curious-click guard).
+  const [sourceSheet, setSourceSheet] = useState<null | { target: "own_key" | "local" }>(null);
 
   // Tutor consent (localStorage, shared with the in-margin card)
   const [tutorOn, setTutorOn] = useState(isTutorEnabled);
 
-  // The fallback expander is open when the saved provider isn't the included one.
-  const [byoOpen, setByoOpen] = useState(false);
-
-  // Audit (reframed history) — loaded inline
+  // ── Privacy: audit (reframed history) — shown in a sheet from the pane row
   const [requests, setRequests] = useState<AiRequest[] | null>(null);
   const [retentionDraft, setRetentionDraft] = useState<number>(90);
   const [forgetMsg, setForgetMsg] = useState<string | null>(null);
   const [forgetting, setForgetting] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
 
   const provider = dto?.ai_provider ?? "";
   const mode: Mode = modeForProvider(provider);
@@ -192,9 +372,7 @@ export default function Settings() {
         : false;
   // "Use this" may only commit a fallback that will actually answer: local and
   // Codex (own sign-in) are always committable; a key-provider needs a key
-  // typed or already saved. This is what keeps a curious click off the working
-  // included assistant — selecting a segment only reveals its controls; nothing
-  // switches until the reader commits here.
+  // typed or already saved.
   const canCommitFallback =
     providerDraft === "local" ||
     providerDraft === "codex" ||
@@ -203,15 +381,17 @@ export default function Settings() {
 
   async function refresh() {
     const s = await invoke<SettingsDto>("cmd_get_settings");
+    if (!s) return; // outside Tauri (harness) the read can come back empty
     setDto(s);
     setBaseUrlDraft(s.ai_base_url);
     setRetentionDraft(s.ai_requests_retention_days);
+    const storedTheme = normalizeThemePref(s.ui_theme);
+    if (storedTheme) setThemePrefLocal(storedTheme);
     // Seed the fallback draft from the saved provider when it's a fallback one;
-    // otherwise leave the reader's last in-expander choice intact.
+    // otherwise leave the reader's last in-sheet choice intact.
     if (s.ai_provider && s.ai_provider !== "company" && s.ai_provider !== "none") {
       setProviderDraft(s.ai_provider);
       setModelDraft(modelForProvider(s, s.ai_provider));
-      setByoOpen(true);
     } else {
       setModelDraft(modelForProvider(s, providerDraft));
     }
@@ -219,6 +399,7 @@ export default function Settings() {
 
   useEffect(() => {
     refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Real allowance, only meaningful in the included (company) mode.
@@ -275,14 +456,16 @@ export default function Settings() {
     };
     window.addEventListener("tl-company-activated", onActivated);
     return () => window.removeEventListener("tl-company-activated", onActivated);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Detect local models when the local mode + its base URL change (debounced).
+  // Detect local models while the setup sheet shows the local mode (debounced).
   useEffect(() => {
-    if (providerDraft !== "local") return;
+    if (!sourceSheet || providerDraft !== "local") return;
     const h = setTimeout(() => refreshModels(baseUrlDraft), 250);
     return () => clearTimeout(h);
-  }, [providerDraft, baseUrlDraft]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceSheet, providerDraft, baseUrlDraft]);
 
   async function refreshModels(baseUrl: string) {
     setLoadingModels(true);
@@ -371,8 +554,8 @@ export default function Settings() {
     }
   }
 
-  // ── "Where answers come from" mode switching ──────────────────────
-  async function selectIncluded() {
+  // ── "Answers come from" mode switching ──────────────────────
+  async function selectIncluded(): Promise<boolean> {
     setAiMsg(null);
     setConn(null);
     try {
@@ -381,8 +564,10 @@ export default function Settings() {
         model: modelForProvider(dto!, "company"),
       });
       setDto(s);
+      return true;
     } catch (e: any) {
       setAiMsg({ kind: "err", text: String(e?.message ?? e) });
+      return false;
     }
   }
 
@@ -393,7 +578,30 @@ export default function Settings() {
     if (dto) setModelDraft(modelForProvider(dto, prov));
   }
 
-  async function saveFallback(targetProvider: string) {
+  /** Open the deep setup sheet seeded to a fallback family. Nothing switches
+   *  here — committing happens inside via "Use this". */
+  function openSourceSheet(target: "own_key" | "local") {
+    setAiMsg(null);
+    setConn(null);
+    if (target === "local") {
+      onFallbackProvider("local");
+    } else if (providerDraft === "local") {
+      onFallbackProvider("anthropic");
+    }
+    setSourceSheet({ target });
+  }
+
+  /** The "Answers come from" select. "Throughline AI" commits directly (it is
+   *  zero-setup); a fallback option opens its setup sheet instead. */
+  function onSourceChange(v: string) {
+    if (v === "included") {
+      void selectIncluded();
+      return;
+    }
+    if (v === "own_key" || v === "local") openSourceSheet(v);
+  }
+
+  async function saveFallback(targetProvider: string): Promise<boolean> {
     setSavingAi(true);
     setAiMsg(null);
     try {
@@ -407,8 +615,10 @@ export default function Settings() {
       const s = await invoke<SettingsDto>("cmd_set_ai_settings", args);
       setDto(s);
       setAiMsg({ kind: "ok", text: "Saved." });
+      return true;
     } catch (e: any) {
       setAiMsg({ kind: "err", text: String(e?.message ?? e) });
+      return false;
     } finally {
       setSavingAi(false);
     }
@@ -474,8 +684,6 @@ export default function Settings() {
 
   // ── Allowance derivation: a qualitative on/low signal ONLY. The fraction stays
   //    internal; no number, percent, or bar is ever rendered (the no-counter rule).
-  //    The "low" boundary (<=0.33) mirrors the in-margin note so the two surfaces
-  //    agree about when to gently flag "running low".
   const allowance = useMemo(() => {
     if (!credits || credits.status !== "active") return null;
     const frac = Math.max(0, Math.min(1, credits.remaining_fraction));
@@ -496,587 +704,712 @@ export default function Settings() {
     return { groups: Array.from(groups.entries()), sentCount, localOnly };
   }, [requests]);
 
-  // Display name for the export folder (FT: a chip shows the folder's name,
-  // not a full path).
   const exportFolderName = useMemo(
     () => folderDisplayName(dto?.export_path) || "Reading",
     [dto?.export_path],
   );
 
-  return (
-    <div className="tl-body tl-settings2">
-      <div className="col2">
-        <h2 className="page-title">Settings</h2>
-        <p className="page-sub">Throughline · a calm place to read</p>
+  // The select's face: a pending sheet target shows optimistically; cancelling
+  // the sheet snaps it back to the real committed mode.
+  const sourceValue: Mode = sourceSheet ? (sourceSheet.target as Mode) : mode;
 
-        {/* ═══════════════ READING PACE ═══════════════ */}
-        <section className="section">
-          <h3 className="section-h">Reading pace</h3>
-          <div className="card">
-            <div className="row row-flex">
-              <div className="row-main">
-                <p className="row-title">What feels like a good sitting</p>
-                <p className="row-desc">
-                  This just sizes each day's reading — there's no timer, and you can change it
-                  anytime.
-                </p>
-              </div>
-              <div className="row-control">
-                <select
-                  className="select"
-                  aria-label="Reading pace"
-                  value={String([10, 25, 60].includes(paceMinutes ?? 25) ? (paceMinutes ?? 25) : 25)}
-                  onChange={(e) => void changePace(Number(e.target.value))}
-                  disabled={paceMinutes == null}
-                >
-                  <option value="10">A few pages</option>
-                  <option value="25">A chapter</option>
-                  <option value="60">A long read</option>
-                </select>
-              </div>
-            </div>
+  const lastBackupLine = backup
+    ? backup.last_backup_at
+      ? `last backup ${fmtBackupWhen(backup.last_backup_at)}`
+      : "no backup yet"
+    : "";
+
+  /* ═══════════════════════════ PANES ═══════════════════════════ */
+
+  const readingPane = (
+    <>
+      <h3 className="set-pane-title">Reading</h3>
+      <div className="set-rows">
+        <div className="set-row">
+          <div className="set-row-label">
+            A good sitting <span className="set-row-detail">· sizes each day's reading, no timer</span>
           </div>
-        </section>
-
-        {/* ═══════════════ 1 · READING ASSISTANT ═══════════════ */}
-        <section className="section">
-          <h3 className="section-h">Reading assistant</h3>
-          <div className="card">
-            {/* Tutor on/off */}
-            <div className="row row-flex">
-              <div className="row-main">
-                <p className="row-title">Tutor in the margin</p>
-                <p className="row-desc">
-                  Select a passage and choose Explain, Context, or Define to get a short answer
-                  beside what you're reading.
-                </p>
-              </div>
-              <div className="row-control">
-                <button
-                  className="toggle"
-                  role="switch"
-                  aria-checked={tutorOn}
-                  aria-label="Tutor in the margin"
-                  onClick={toggleTutor}
-                />
-              </div>
-            </div>
-
-            {/* Session names on/off (Stage 3 phrases). */}
-            <div className="row row-flex">
-              <div className="row-main">
-                <p className="row-title">Session names</p>
-                <p className="row-desc">
-                  Each day's reading gets a short, evocative name drawn from the chapter's
-                  opening lines — only those lines are sent, never the full text.
-                </p>
-              </div>
-              <div className="row-control">
-                <button
-                  className="toggle"
-                  role="switch"
-                  aria-checked={dto?.ai_phrases ?? true}
-                  aria-label="Session names"
-                  onClick={togglePhrases}
-                />
-              </div>
-            </div>
-
-            {/* Where answers come from — paid-primary + quiet fallback expander */}
-            <div className="row">
-              <p className="row-title">Where answers come from</p>
-              <p className="row-desc">Choose who answers your questions. You can change this anytime.</p>
-
-              {/* The included assistant is the calm default. */}
-              <p className="primary-note">
-                <Icon d={ICON.sparkle} size={15} />
-                <span>
-                  Answers come from Throughline's included assistant. No setup — it just works.
-                  Only the passage you select is sent to get an answer.
-                </span>
-              </p>
-
-              {/* Company status: active → say so; not activated → the code door
-                  the activation-failure banner points readers at. The door
-                  renders from EVERY mode (a failed throughline://activate can
-                  arrive while the reader is on local or their own key). */}
-              {mode === "included" && companyStatus?.has_license && (
-                <p className="company-active" role="status">Throughline AI is active.</p>
-              )}
-              {companyStatus && !companyStatus.has_license && (
-                  <div className="field">
-                    <span className="field-label">Already bought Throughline AI?</span>
-                    <p className="field-desc">Enter your activation code; the email receipt carries it.</p>
-                    <div className="field-row">
-                      <input
-                        className="input"
-                        value={codeDraft}
-                        onChange={(e) => setCodeDraft(e.target.value)}
-                        placeholder="XXXX-XXXX-XXXX"
-                        autoComplete="off"
-                        spellCheck={false}
-                        aria-label="Activation code"
-                      />
-                      <button
-                        type="button"
-                        className="btn"
-                        disabled={activating || !codeDraft.trim()}
-                        onClick={activateWithCode}
-                      >
-                        {activating ? "Activating…" : "Activate"}
-                      </button>
-                    </div>
-                    {activateMsg && <p className="byo-warn" role="alert">{activateMsg}</p>}
-                  </div>
-              )}
-
-              {/* Included-tutoring status — calm + qualitative. No bar, no number,
-                  no percent (the no-counter rule): the included allowance is
-                  generous and exists as an abuse bound, not a ration. */}
-              {mode === "included" && allowance && (
-                <div className={`allowance${allowance.low ? " low" : ""}`}>
-                  <div className="allowance-top">
-                    <span className="allowance-label">
-                      <Icon d={ICON.gauge} size={16} />
-                      Included tutoring
-                    </span>
-                    <span className="allowance-state">{allowance.low ? "Running low" : "On"}</span>
-                  </div>
-                  <p className="allowance-foot">
-                    {allowance.low
-                      ? "Your included tutoring is running low. When it runs out, the tutor keeps working with your own API key or a local model, free."
-                      : "Plenty remaining for your reading."}
-                  </p>
-                </div>
-              )}
-
-              {/* Quiet fallback expander */}
-              <details className="byo" open={byoOpen} onToggle={(e) => setByoOpen((e.target as HTMLDetailsElement).open)}>
-                <summary>
-                  <Icon d={ICON.chevron} size={15} className="chev" />
-                  Use your own AI instead
-                </summary>
-
-                {/* Body is rendered only when the disclosure is open, so the
-                    key/local controls are genuinely absent (not just hidden)
-                    until the reader asks for them. */}
-                {byoOpen && (
-                <div className="byo-body">
-                  {/* Two fallback modes: own key · on this Mac only */}
-                  <div className="segmented" role="group" aria-label="Use your own AI">
-                    <button
-                      type="button"
-                      className="seg"
-                      aria-pressed={providerDraft !== "local"}
-                      onClick={() =>
-                        onFallbackProvider(providerDraft === "local" ? "anthropic" : providerDraft)
-                      }
-                    >
-                      <Icon d={ICON.key} size={18} />
-                      Your own key
-                    </button>
-                    <button
-                      type="button"
-                      className="seg"
-                      aria-pressed={providerDraft === "local"}
-                      onClick={() => onFallbackProvider("local")}
-                    >
-                      <Icon d={ICON.monitor} size={18} />
-                      On this Mac only
-                    </button>
-                  </div>
-
-                  {providerDraft !== "local" && (
-                    <>
-                      <div className="field">
-                        <span className="field-label">Which service</span>
-                        <select
-                          className="select"
-                          aria-label="Which service"
-                          value={providerDraft}
-                          onChange={(e) => onFallbackProvider(e.target.value)}
-                        >
-                          {KEY_PROVIDERS.map((p) => (
-                            <option key={p.id} value={p.id}>{p.label}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {needsKey && (
-                        <>
-                          <div className="field">
-                            <span className="field-label">{aiProviderLabel(providerDraft)} key</span>
-                            <p className="field-desc">
-                              {(providerDraft === "openai" ? dto?.ai_key_present_openai : dto?.ai_key_present_anthropic)
-                                ? "A key is saved in your Keychain. Enter a new one to replace it, or remove it."
-                                : "Stored in your macOS Keychain — never written to disk or exports."}
-                            </p>
-                            <div className="field-row">
-                              <input
-                                className="input"
-                                type="password"
-                                value={keyDraft}
-                                onChange={(e) => setKeyDraft(e.target.value)}
-                                autoComplete="off"
-                                spellCheck={false}
-                                placeholder={providerDraft === "openai" ? "sk-…" : "sk-ant-…"}
-                                aria-label={`${aiProviderLabel(providerDraft)} key`}
-                              />
-                              {(providerDraft === "openai" ? dto?.ai_key_present_openai : dto?.ai_key_present_anthropic) ? (
-                                <button type="button" className="btn" onClick={clearKey}>Remove</button>
-                              ) : null}
-                            </div>
-                            {!(providerDraft === "openai" ? dto?.ai_key_present_openai : dto?.ai_key_present_anthropic) && (
-                              <p className="byo-warn">
-                                <Icon d={ICON.warn} size={15} />
-                                <span>Add a key to start answering. Until then, the included assistant keeps working.</span>
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="field">
-                            <span className="field-label">Model</span>
-                            <p className="field-desc">The chip shows the going rate for heavier vs. lighter models.</p>
-                            <ModelSelect provider={providerDraft} value={modelDraft} onChange={setModelDraft} />
-                          </div>
-                        </>
-                      )}
-
-                      {providerDraft === "codex" && (
-                        <div className="field">
-                          <span className="field-label">ChatGPT sign-in</span>
-                          <p className="field-desc">
-                            Sign in once with your ChatGPT account — no key needed. Stored in your Keychain.
-                          </p>
-                          <CodexLogin
-                            present={!!dto?.ai_codex_creds_present}
-                            onComplete={refresh}
-                            onSignedOut={refresh}
-                          />
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {providerDraft === "local" && (
-                    <>
-                      <div className="field">
-                        <span className="field-label">Server address</span>
-                        <p className="field-desc">
-                          Where your local model listens on this Mac (LM Studio's default works as-is).
-                        </p>
-                        <input
-                          className="input"
-                          type="text"
-                          value={baseUrlDraft}
-                          onChange={(e) => setBaseUrlDraft(e.target.value)}
-                          spellCheck={false}
-                          placeholder="http://localhost:1234/v1"
-                          aria-label="Server address"
-                        />
-                      </div>
-                      <div className="field">
-                        <span className="field-label">Model</span>
-                        <p className="field-desc">Pick a detected one or type it.</p>
-                        <div className="field-row">
-                          <select
-                            className="select"
-                            aria-label="Local model"
-                            value={models?.includes(modelDraft) ? modelDraft : ""}
-                            onChange={(e) => { if (e.target.value) setModelDraft(e.target.value); }}
-                            disabled={!models || models.length === 0}
-                          >
-                            <option value="">
-                              {loadingModels ? "Loading…" : models && models.length > 0 ? "Pick a detected model…" : "No models detected"}
-                            </option>
-                            {(models ?? []).map((m) => <option key={m} value={m}>{m}</option>)}
-                          </select>
-                          <input
-                            className="input"
-                            type="text"
-                            value={modelDraft}
-                            onChange={(e) => setModelDraft(e.target.value)}
-                            spellCheck={false}
-                            placeholder="e.g. qwen2.5-7b-instruct"
-                            aria-label="Local model name"
-                          />
-                        </div>
-                      </div>
-                    </>
-                  )}
-
-                  {/* Test + save for the chosen fallback */}
-                  <div className="field-row">
-                    <button type="button" className="btn" disabled={testing} onClick={testConnection}>
-                      {testing ? "Testing…" : "Test"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-accent"
-                      disabled={savingAi || !canCommitFallback}
-                      onClick={() => saveFallback(providerDraft)}
-                    >
-                      {savingAi ? "Saving…" : "Use this"}
-                    </button>
-                    {/* Return to the included assistant */}
-                    {mode !== "included" && (
-                      <button type="button" className="btn" onClick={selectIncluded}>
-                        Back to included assistant
-                      </button>
-                    )}
-                  </div>
-                  {(aiMsg || conn) && (
-                    <p className={`set-msg ${conn ? (conn.reachable ? "ok" : "err") : aiMsg?.kind}`}>
-                      {conn ? conn.message : aiMsg?.text}
-                    </p>
-                  )}
-                </div>
-                )}
-              </details>
-            </div>
+          <select
+            className="select"
+            aria-label="Reading pace"
+            value={String([10, 25, 60].includes(paceMinutes ?? 25) ? (paceMinutes ?? 25) : 25)}
+            onChange={(e) => void changePace(Number(e.target.value))}
+            disabled={paceMinutes == null}
+          >
+            {/* The app's three sitting sizes keep their long-standing names
+                (they match the first-journey pace step) — see the redesign
+                notes for the deviation from the handoff's option copy. */}
+            <option value="10">A few pages</option>
+            <option value="25">A chapter</option>
+            <option value="60">A long read</option>
+          </select>
+        </div>
+        <div className="set-row">
+          <div className="set-row-label">
+            Quoting <span className="set-row-detail">· short quotes for private study, never a block</span>
           </div>
-        </section>
-
-        {/* ═══════════════ 2 · PRIVACY ═══════════════ */}
-        <section className="section">
-          <h3 className="section-h">Privacy</h3>
-
-          {/* Trust card — one calm statement (FT-21) */}
-          <div className="card">
-            <div className="trust">
-              <div className="trust-head">
-                <span className="shield">
-                  <Icon d={ICON.shield} size={17} />
-                </span>
-                <h3>Everything stays on this Mac</h3>
-              </div>
-              <p className="trust-body">
-                Your books never leave this computer. When you ask about a passage, only that one
-                passage is sent to get an answer — never the whole book. Nothing is saved unless you
-                choose to keep it as a note.
-              </p>
-              <ul className="trust-points">
-                <li><Icon d={ICON.check} size={16} /> Book files stay here — never uploaded.</li>
-                <li><Icon d={ICON.check} size={16} /> Exports hold your own words — notes, reflections, and short quotes.</li>
-                <li><Icon d={ICON.check} size={16} /> An answer becomes a note only when you save it.</li>
-              </ul>
-              <p className="trust-mode">
-                <Icon d={ICON.clock} size={15} />
-                {mode === "local" ? (
-                  <span>
-                    You're using <b>On this Mac only</b>, so nothing is sent — every answer is worked
-                    out here and stays on this Mac.
-                  </span>
-                ) : mode === "own_key" ? (
-                  <span>
-                    You're using <b>your own {aiProviderLabel(provider)}</b>, so the passages you ask
-                    about are sent there to be answered. To keep everything on this Mac, switch to{" "}
-                    <b>On this Mac only</b> above.
-                  </span>
-                ) : (
-                  <span>
-                    You're using the <b>included assistant</b>, so the passages you ask about are sent
-                    to be answered. To keep everything on this Mac, switch to <b>On this Mac only</b>{" "}
-                    above.
-                  </span>
-                )}
-              </p>
-            </div>
-          </div>
-
-          {/* What's left this Mac — reframed audit (FT-12) */}
-          <div className="card">
-            <div className="audit-summary">
-              <div className="audit-lead">
-                <span className="ico"><Icon d={ICON.disk} size={16} /></span>
-                <div>
-                  <h3>What's left this Mac</h3>
-                  <p>
-                    {grouped.sentCount === 0
-                      ? "Nothing has been sent. When you ask about a passage, the single passage you selected is recorded here."
-                      : `${grouped.sentCount} passage${grouped.sentCount === 1 ? " was" : "s were"} sent to answer your questions. Each was a single passage you selected — never a whole book.`}
-                  </p>
-                </div>
-              </div>
-
-              <details className="audit">
-                <summary>
-                  <Icon d={ICON.chevron} size={15} className="chev" />
-                  Show what was sent
-                </summary>
-
-                {grouped.sentCount === 0 ? (
-                  <p className="audit-empty">Nothing has been sent.</p>
-                ) : (
-                  <div className="log">
-                    <div className="log-head">
-                      <span>What you asked</span>
-                      <span>Left this Mac</span>
-                    </div>
-                    {grouped.groups.map(([title, rows]) => (
-                      <div key={title}>
-                        <div className="log-group">
-                          {title} <span className="ct">· {rows.length}</span>
-                        </div>
-                        {rows.map((r) => (
-                          <div className="log-row" key={r.id}>
-                            <span className="log-what">
-                              {lensLabel(r.mode)} <span className="when">· {fmtWhen(r.created_at)}</span>
-                              {r.wrote_to_memory ? <span className="saved"> · saved as note</span> : null}
-                            </span>
-                            <span className="log-sent">
-                              <Icon d={ICON.up} size={14} /> Sent to assistant
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ))}
-                    {grouped.localOnly > 0 && (
-                      <p className="log-more">
-                        {grouped.localOnly} more never left this Mac — previews you didn't send.
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                <div className="audit-controls">
-                  <span className="retain">
-                    Keep this list for
-                    <span className="stepper">
-                      <span className="num">{retentionDraft}</span>
-                      <span className="arrows">
-                        <button type="button" aria-label="Keep longer" onClick={() => saveRetention(retentionDraft + 30)}>
-                          <Icon d={ICON.caretUp} size={11} />
-                        </button>
-                        <button type="button" aria-label="Keep shorter" onClick={() => saveRetention(Math.max(0, retentionDraft - 30))}>
-                          <Icon d={ICON.caretDown} size={11} />
-                        </button>
-                      </span>
-                    </span>
-                    days
-                  </span>
-                  <button type="button" className="btn" disabled={forgetting} onClick={forgetNow}>
-                    <Icon d={ICON.trash} size={15} /> {forgetting ? "Forgetting…" : "Forget now"}
-                  </button>
-                </div>
-                {forgetMsg && <p className="set-msg ok" style={{ padding: "0 20px 16px" }}>{forgetMsg}</p>}
-              </details>
-            </div>
-          </div>
-        </section>
-
-        {/* ═══════════════ 3 · FILES ═══════════════ */}
-        <section className="section">
-          <h3 className="section-h">Files</h3>
-          <div className="card">
-            <div className="row row-flex">
-              <div className="row-main">
-                <p className="row-title">Export folder</p>
-                <p className="row-desc">Where your notes and exported books are saved.</p>
-                {exportMsg && <p className={`set-msg ${exportMsg.kind}`}>{exportMsg.text}</p>}
-              </div>
-              <div className="row-control">
-                <button
-                  type="button"
-                  className="path-chip"
-                  disabled={savingExport}
-                  onClick={pickAndSaveFolder}
-                  aria-label="Change export folder"
-                >
-                  <Icon d={ICON.folder} size={15} />
-                  <span className="name">{exportFolderName}</span>
-                </button>
-              </div>
-            </div>
-            <div className="row row-flex">
-              <div className="row-main">
-                <p className="row-title">Export your library</p>
-                <p className="row-desc">
-                  Save a clean Markdown copy of every book's notes — your reflections and short
-                  quotes — to your export folder. Run it again anytime; your own edits are kept.
-                </p>
-                {libExportMsg && <p className={`set-msg ${libExportMsg.kind}`}>{libExportMsg.text}</p>}
-              </div>
-              <div className="row-control">
-                <button
-                  type="button"
-                  className="btn btn-accent"
-                  disabled={exportingLib}
-                  onClick={exportLibrary}
-                >
-                  <Icon d={ICON.up} size={15} />
-                  {exportingLib ? "Exporting…" : "Export your library"}
-                </button>
-              </div>
-            </div>
-            <div className="row row-flex">
-              <div className="row-main">
-                <p className="row-title">Your library</p>
-                <p className="row-desc">
-                  Your books live on this Mac and stay here, backed up automatically so you never
-                  lose your place.
-                </p>
-              </div>
-              <div className="row-control">
-                <span className="quiet-line">
-                  <Icon d={ICON.shield} size={15} /> Kept on this Mac
-                </span>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* ═══════════════ 4 · ABOUT ═══════════════ */}
-        <section className="section">
-          <h3 className="section-h">About</h3>
-          <div className="card">
-            <div className="row row-flex">
-              <div className="row-main">
-                <p className="row-title">Quoting</p>
-                <p className="row-desc">
-                  Throughline keeps quotes short, for private study. You'll see a gentle note above
-                  about {dto?.quote_warn_chars ?? 300} characters — never a block.
-                </p>
-              </div>
-              <div className="row-control">
-                {/* The short-quote note is a fixed protection in this build
-                    (counsel-reviewed copyright posture) — always on, nothing to
-                    toggle — so it reads as a plain informational line, never a
-                    dead no-op switch. */}
-                <span className="quiet-line">
-                  <Icon d={ICON.check} size={15} /> Always on
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* CORE-1094: unobtrusive feedback affordance. The panel shows exactly what will
-              leave the Mac before Send; all egress is built in Rust (cmd_send_feedback). */}
-          <div className="card">
-            <div className="row row-flex">
-              <div className="row-main">
-                <p className="row-title">Send feedback</p>
-                <p className="row-desc">
-                  A note goes straight to the people building Throughline. You'll see exactly
-                  what leaves your Mac before it does.
-                </p>
-              </div>
-              <div className="row-control">
-                {!showFeedback && (
-                  <button className="btn" onClick={() => setShowFeedback(true)}>
-                    Send feedback
-                  </button>
-                )}
-              </div>
-            </div>
-            {showFeedback && (
-              <FeedbackPanel mode={mode} onClose={() => setShowFeedback(false)} />
-            )}
-          </div>
-        </section>
-
-        <p className="meta footer-meta">No accounts. No tracking. Your reading is yours.</p>
+          <span className="set-row-status">Always on</span>
+        </div>
       </div>
+    </>
+  );
+
+  const appearancePane = (
+    <>
+      <h3 className="set-pane-title">Appearance</h3>
+      <div className="set-rows">
+        <div className="set-row">
+          <div className="set-row-label">Theme</div>
+          <div className="set-seg" role="group" aria-label="Theme">
+            {(["light", "dark", "auto"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                className="set-seg-opt"
+                aria-pressed={themePref === t}
+                onClick={() => setThemePref(t)}
+              >
+                {t === "light" ? "Light" : t === "dark" ? "Dark" : "Auto"}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="set-row">
+          <div className="set-row-label">Typeface</div>
+          <select
+            className="select"
+            aria-label="Typeface"
+            value={typeface}
+            onChange={(e) => void changeTypeface(e.target.value)}
+          >
+            <option value="newsreader">Newsreader</option>
+            <option value="iowan">Iowan Old Style</option>
+            <option value="charter">Charter</option>
+          </select>
+        </div>
+        <div className="set-row">
+          <div className="set-row-label">Text size</div>
+          <div className="set-stepper">
+            <button
+              type="button"
+              aria-label="Smaller text"
+              disabled={fontSize <= FONT_SIZE_MIN}
+              onClick={() => setFontSize(adjustFontSize(-1))}
+            >
+              −
+            </button>
+            <span className="set-stepper-val">{fontSize} pt</span>
+            <button
+              type="button"
+              aria-label="Larger text"
+              disabled={fontSize >= FONT_SIZE_MAX}
+              onClick={() => setFontSize(adjustFontSize(+1))}
+            >
+              +
+            </button>
+          </div>
+        </div>
+        <div className="set-row">
+          <div className="set-row-label">Line spacing</div>
+          <select
+            className="select"
+            aria-label="Line spacing"
+            value={lineSpacing}
+            onChange={(e) => void changeLineSpacing(e.target.value)}
+          >
+            <option value="comfortable">Comfortable</option>
+            <option value="compact">Compact</option>
+            <option value="open">Open</option>
+          </select>
+        </div>
+      </div>
+    </>
+  );
+
+  const assistantPane = (
+    <>
+      <h3 className="set-pane-title">Assistant</h3>
+      <div className="set-rows">
+        <div className="set-row">
+          <div className="set-row-label">
+            Tutor in the margin{" "}
+            <span className="set-row-detail">· Explain, Context, or Define beside the text</span>
+          </div>
+          <button
+            className="toggle"
+            role="switch"
+            aria-checked={tutorOn}
+            aria-label="Tutor in the margin"
+            onClick={toggleTutor}
+          />
+        </div>
+        <div className="set-row">
+          <div className="set-row-label">
+            Session names <span className="set-row-detail">· only a chapter's opening lines are sent</span>
+          </div>
+          <button
+            className="toggle"
+            role="switch"
+            aria-checked={dto?.ai_phrases ?? true}
+            aria-label="Session names"
+            onClick={togglePhrases}
+          />
+        </div>
+        <div className="set-row">
+          <div className="set-row-label">Answers come from</div>
+          <div className="set-row-controls">
+            {mode !== "included" && (
+              <button type="button" className="btn btn-small" onClick={() => openSourceSheet(mode)}>
+                Set up
+              </button>
+            )}
+            <select
+              className="select"
+              aria-label="Answers come from"
+              value={sourceValue}
+              onChange={(e) => onSourceChange(e.target.value)}
+            >
+              <option value="included">Throughline AI</option>
+              <option value="own_key">Your own AI</option>
+              <option value="local">On this Mac only</option>
+            </select>
+          </div>
+        </div>
+        {mode === "included" && companyStatus?.has_license && (
+          <div className="set-row">
+            <div className="set-row-label">Included tutoring</div>
+            <span className="set-row-status" role="status">
+              {allowance ? (allowance.low ? "Running low" : "On · plenty remaining") : "On"}
+            </span>
+          </div>
+        )}
+      </div>
+      {mode === "included" && allowance?.low && (
+        <p className="set-note">
+          Your included tutoring is running low. When it runs out, the tutor keeps working with your
+          own API key or a local model, free.
+        </p>
+      )}
+      {aiMsg && !sourceSheet && (
+        <p className={`set-msg ${aiMsg.kind}`}>{aiMsg.text}</p>
+      )}
+      {/* Activation door — renders from EVERY mode (a failed throughline://activate
+          can land here while the reader is on local or their own key). */}
+      {companyStatus && !companyStatus.has_license && (
+        <div className="set-activation">
+          <span className="field-label">Already bought Throughline AI?</span>
+          <p className="field-desc">Enter your activation code; the email receipt carries it.</p>
+          <div className="field-row">
+            <input
+              className="input"
+              value={codeDraft}
+              onChange={(e) => setCodeDraft(e.target.value)}
+              placeholder="XXXX-XXXX-XXXX"
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="Activation code"
+            />
+            <button
+              type="button"
+              className="btn"
+              disabled={activating || !codeDraft.trim()}
+              onClick={activateWithCode}
+            >
+              {activating ? "Activating…" : "Activate"}
+            </button>
+          </div>
+          {activateMsg && <p className="byo-warn" role="alert">{activateMsg}</p>}
+        </div>
+      )}
+      {mode === "included" && companyStatus?.has_license && (
+        <p className="company-active" role="status">Throughline AI is active.</p>
+      )}
+    </>
+  );
+
+  const privacyPane = (
+    <>
+      <h3 className="set-pane-title">Privacy</h3>
+      <div className="set-rows">
+        <div className="set-row set-row-stack">
+          <div className="set-row-top">
+            <div className="set-row-label">Everything stays on this Mac</div>
+            <span className="set-row-always">Always</span>
+          </div>
+          <p className="set-row-explain">
+            Books never leave this computer. When you ask about a passage, only that passage is
+            sent, never the whole book. Nothing is saved unless you keep it as a note.
+          </p>
+          {/* Mode-aware honesty (kept from the trust card): what "sent" means
+              right now, in the reader's own configuration. */}
+          <p className="set-row-explain">
+            {mode === "local" ? (
+              <>
+                You're using <b>On this Mac only</b>, so nothing is sent. Every answer is worked
+                out here and stays on this Mac.
+              </>
+            ) : mode === "own_key" ? (
+              <>
+                You're using <b>your own {aiProviderLabel(provider)}</b>, so the passages you ask
+                about are sent there to be answered.
+              </>
+            ) : (
+              <>
+                You're using the <b>included assistant</b>, so the passages you ask about are sent
+                to be answered.
+              </>
+            )}
+          </p>
+        </div>
+        <div className="set-row">
+          <div className="set-row-label">What's left this Mac</div>
+          <button type="button" className="set-link" onClick={() => setAuditOpen(true)}>
+            {grouped.sentCount} passage{grouped.sentCount === 1 ? "" : "s"} · Show what was sent
+          </button>
+        </div>
+      </div>
+    </>
+  );
+
+  const filesPane = (
+    <>
+      <h3 className="set-pane-title">Files</h3>
+      <div className="set-rows">
+        <div className="set-row">
+          <div className="set-row-label">
+            Export folder <span className="set-row-detail">· notes and exported books</span>
+          </div>
+          <button
+            type="button"
+            className="path-chip"
+            disabled={savingExport}
+            onClick={pickAndSaveFolder}
+            aria-label="Change export folder"
+          >
+            <Icon d={ICON.folder} size={15} />
+            <span className="name">{exportFolderName}</span>
+          </button>
+        </div>
+        {exportMsg && <p className={`set-msg ${exportMsg.kind}`}>{exportMsg.text}</p>}
+        <div className="set-row">
+          <div className="set-row-label">
+            Export your library{" "}
+            <span className="set-row-detail">· clean Markdown, your edits are kept</span>
+          </div>
+          <button
+            type="button"
+            className="btn btn-accent btn-small"
+            disabled={exportingLib}
+            onClick={exportLibrary}
+          >
+            <Icon d={ICON.up} size={15} />
+            {exportingLib ? "Exporting…" : "Export"}
+          </button>
+        </div>
+        {libExportMsg && <p className={`set-msg ${libExportMsg.kind}`}>{libExportMsg.text}</p>}
+        <div className="set-row">
+          <div className="set-row-label">
+            Automatic backups{" "}
+            {lastBackupLine && <span className="set-row-detail">· {lastBackupLine}</span>}
+          </div>
+          <button
+            className="toggle"
+            role="switch"
+            aria-checked={backup?.enabled ?? true}
+            aria-label="Automatic backups"
+            disabled={!backup}
+            onClick={toggleBackups}
+          />
+        </div>
+        <div className="set-row">
+          <div className="set-row-label">Restore from backup</div>
+          <button type="button" className="btn btn-small" onClick={openRestore}>
+            Choose a backup
+          </button>
+        </div>
+      </div>
+    </>
+  );
+
+  const SHORTCUTS: Array<[string, string]> = [
+    ["Ask about the selection", "⌘ E"],
+    ["Add a note", "⌘ N"],
+    ["Search your library", "⌘ K"],
+    ["Bigger or smaller text", "⌘ + / ⌘ −"],
+    ["Toggle theme", "⌘ ⇧ L"],
+    ["Settings", "⌘ ,"],
+  ];
+  const shortcutsPane = (
+    <>
+      <h3 className="set-pane-title">Shortcuts</h3>
+      <div className="set-rows">
+        {SHORTCUTS.map(([what, keys]) => (
+          <div className="set-row set-row-tight" key={what}>
+            <span className="set-shortcut-what">{what}</span>
+            <kbd className="set-kbd">{keys}</kbd>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+
+  /* ═══════════════════════════ SHEETS ═══════════════════════════ */
+
+  const sourceSheetEl = sourceSheet && (
+    <SettingsSheet label="Answers come from" onClose={() => setSourceSheet(null)}>
+      <h3 className="set-sheet-title">Answers come from</h3>
+      <p className="set-sheet-sub">
+        Choose who answers your questions. Nothing switches until you tap “Use this”.
+      </p>
+
+      {/* Two fallback families: own key · on this Mac only */}
+      <div className="segmented" role="group" aria-label="Use your own AI">
+        <button
+          type="button"
+          className="seg"
+          aria-pressed={providerDraft !== "local"}
+          onClick={() =>
+            onFallbackProvider(providerDraft === "local" ? "anthropic" : providerDraft)
+          }
+        >
+          <Icon d={ICON.key} size={18} />
+          Your own key
+        </button>
+        <button
+          type="button"
+          className="seg"
+          aria-pressed={providerDraft === "local"}
+          onClick={() => onFallbackProvider("local")}
+        >
+          <Icon d={ICON.monitor} size={18} />
+          On this Mac only
+        </button>
+      </div>
+
+      {providerDraft !== "local" && (
+        <>
+          <div className="field">
+            <span className="field-label">Which service</span>
+            <select
+              className="select"
+              aria-label="Which service"
+              value={providerDraft}
+              onChange={(e) => onFallbackProvider(e.target.value)}
+            >
+              {KEY_PROVIDERS.map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {needsKey && (
+            <>
+              <div className="field">
+                <span className="field-label">{aiProviderLabel(providerDraft)} key</span>
+                <p className="field-desc">
+                  {keyPresent
+                    ? "A key is saved in your Keychain. Enter a new one to replace it, or remove it."
+                    : "Stored in your macOS Keychain — never written to disk or exports."}
+                </p>
+                <div className="field-row">
+                  <input
+                    className="input"
+                    type="password"
+                    value={keyDraft}
+                    onChange={(e) => setKeyDraft(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder={providerDraft === "openai" ? "sk-…" : "sk-ant-…"}
+                    aria-label={`${aiProviderLabel(providerDraft)} key`}
+                  />
+                  {keyPresent ? (
+                    <button type="button" className="btn" onClick={clearKey}>Remove</button>
+                  ) : null}
+                </div>
+                {!keyPresent && (
+                  <p className="byo-warn">
+                    <Icon d={ICON.warn} size={15} />
+                    <span>Add a key to start answering. Until then, the included assistant keeps working.</span>
+                  </p>
+                )}
+              </div>
+
+              <div className="field">
+                <span className="field-label">Model</span>
+                <p className="field-desc">The chip shows the going rate for heavier vs. lighter models.</p>
+                <ModelSelect provider={providerDraft} value={modelDraft} onChange={setModelDraft} />
+              </div>
+            </>
+          )}
+
+          {providerDraft === "codex" && (
+            <div className="field">
+              <span className="field-label">ChatGPT sign-in</span>
+              <p className="field-desc">
+                Sign in once with your ChatGPT account — no key needed. Stored in your Keychain.
+              </p>
+              <CodexLogin
+                present={!!dto?.ai_codex_creds_present}
+                onComplete={refresh}
+                onSignedOut={refresh}
+              />
+            </div>
+          )}
+        </>
+      )}
+
+      {providerDraft === "local" && (
+        <>
+          <div className="field">
+            <span className="field-label">Server address</span>
+            <p className="field-desc">
+              Where your local model listens on this Mac (LM Studio's default works as-is).
+            </p>
+            <input
+              className="input"
+              type="text"
+              value={baseUrlDraft}
+              onChange={(e) => setBaseUrlDraft(e.target.value)}
+              spellCheck={false}
+              placeholder="http://localhost:1234/v1"
+              aria-label="Server address"
+            />
+          </div>
+          <div className="field">
+            <span className="field-label">Model</span>
+            <p className="field-desc">Pick a detected one or type it.</p>
+            <div className="field-row">
+              <select
+                className="select"
+                aria-label="Local model"
+                value={models?.includes(modelDraft) ? modelDraft : ""}
+                onChange={(e) => { if (e.target.value) setModelDraft(e.target.value); }}
+                disabled={!models || models.length === 0}
+              >
+                <option value="">
+                  {loadingModels ? "Loading…" : models && models.length > 0 ? "Pick a detected model…" : "No models detected"}
+                </option>
+                {(models ?? []).map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <input
+                className="input"
+                type="text"
+                value={modelDraft}
+                onChange={(e) => setModelDraft(e.target.value)}
+                spellCheck={false}
+                placeholder="e.g. qwen2.5-7b-instruct"
+                aria-label="Local model name"
+              />
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Test + commit for the chosen fallback */}
+      <div className="field-row">
+        <button type="button" className="btn" disabled={testing} onClick={testConnection}>
+          {testing ? "Testing…" : "Test"}
+        </button>
+        <button
+          type="button"
+          className="btn btn-accent"
+          disabled={savingAi || !canCommitFallback}
+          onClick={() => {
+            void saveFallback(providerDraft).then((ok) => {
+              if (ok) setSourceSheet(null);
+            });
+          }}
+        >
+          {savingAi ? "Saving…" : "Use this"}
+        </button>
+        {mode !== "included" && (
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              void selectIncluded().then((ok) => {
+                if (ok) setSourceSheet(null);
+              });
+            }}
+          >
+            Back to included assistant
+          </button>
+        )}
+      </div>
+      {(aiMsg || conn) && (
+        <p className={`set-msg ${conn ? (conn.reachable ? "ok" : "err") : aiMsg?.kind}`}>
+          {conn ? conn.message : aiMsg?.text}
+        </p>
+      )}
+    </SettingsSheet>
+  );
+
+  const auditSheetEl = auditOpen && (
+    <SettingsSheet label="What's left this Mac" onClose={() => setAuditOpen(false)}>
+      <h3 className="set-sheet-title">What's left this Mac</h3>
+      <p className="set-sheet-sub">
+        {grouped.sentCount === 0
+          ? "Nothing has been sent. When you ask about a passage, the single passage you selected is recorded here."
+          : `${grouped.sentCount} passage${grouped.sentCount === 1 ? " was" : "s were"} sent to answer your questions. Each was a single passage you selected — never a whole book.`}
+      </p>
+
+      {grouped.sentCount > 0 && (
+        <div className="log">
+          <div className="log-head">
+            <span>What you asked</span>
+            <span>Left this Mac</span>
+          </div>
+          {grouped.groups.map(([title, rows]) => (
+            <div key={title}>
+              <div className="log-group">
+                {title} <span className="ct">· {rows.length}</span>
+              </div>
+              {rows.map((r) => (
+                <div className="log-row" key={r.id}>
+                  <span className="log-what">
+                    {lensLabel(r.mode)} <span className="when">· {fmtWhen(r.created_at)}</span>
+                    {r.wrote_to_memory ? <span className="saved"> · saved as note</span> : null}
+                  </span>
+                  <span className="log-sent">
+                    <Icon d={ICON.up} size={14} /> Sent to assistant
+                  </span>
+                </div>
+              ))}
+            </div>
+          ))}
+          {grouped.localOnly > 0 && (
+            <p className="log-more">
+              {grouped.localOnly} more never left this Mac — previews you didn't send.
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="audit-controls">
+        <span className="retain">
+          Keep this list for
+          <span className="stepper">
+            <span className="num">{retentionDraft}</span>
+            <span className="arrows">
+              <button type="button" aria-label="Keep longer" onClick={() => saveRetention(retentionDraft + 30)}>
+                <Icon d={ICON.caretUp} size={11} />
+              </button>
+              <button type="button" aria-label="Keep shorter" onClick={() => saveRetention(Math.max(0, retentionDraft - 30))}>
+                <Icon d={ICON.caretDown} size={11} />
+              </button>
+            </span>
+          </span>
+          days
+        </span>
+        <button type="button" className="btn" disabled={forgetting} onClick={forgetNow}>
+          <Icon d={ICON.trash} size={15} /> {forgetting ? "Forgetting…" : "Forget now"}
+        </button>
+      </div>
+      {forgetMsg && <p className="set-msg ok">{forgetMsg}</p>}
+    </SettingsSheet>
+  );
+
+  const restoreSheetEl = restoreOpen && (
+    <SettingsSheet
+      label="Restore from backup"
+      onClose={() => {
+        if (!restoring) setRestoreOpen(false);
+      }}
+    >
+      <h3 className="set-sheet-title">Restore from backup</h3>
+      <p className="set-sheet-sub">
+        Your library goes back to how it was when the backup was made. Today's copy is kept safe
+        first, so nothing is lost.
+      </p>
+      {backupsList === null ? (
+        <p className="set-sheet-sub">Looking for backups…</p>
+      ) : backupsList.length === 0 ? (
+        <p className="set-sheet-sub">
+          No backups yet. Turn on Automatic backups and one is made right away.
+        </p>
+      ) : (
+        <div className="set-backups" role="radiogroup" aria-label="Choose a backup">
+          {backupsList.map((b) => (
+            <button
+              key={b.id}
+              type="button"
+              role="radio"
+              aria-checked={restoreTarget?.id === b.id}
+              className={restoreTarget?.id === b.id ? "set-backup-row selected" : "set-backup-row"}
+              onClick={() => setRestoreTarget(b)}
+            >
+              From {fmtBackupWhen(b.taken_at)}
+            </button>
+          ))}
+        </div>
+      )}
+      {restoreMsg && <p className="set-msg ok" role="status">{restoreMsg}</p>}
+      <div className="field-row set-sheet-foot">
+        <button type="button" className="btn" disabled={restoring} onClick={() => setRestoreOpen(false)}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn btn-accent"
+          disabled={!restoreTarget || restoring}
+          onClick={() => void doRestore()}
+        >
+          {restoring ? "Restoring…" : "Restore"}
+        </button>
+      </div>
+    </SettingsSheet>
+  );
+
+  /* ═══════════════════════════ FRAME ═══════════════════════════ */
+
+  return (
+    <div className="tl-settings2 set-window">
+      <nav className="set-rail" aria-label="Settings sections" onKeyDown={onRailKeyDown}>
+        {SECTIONS.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            className={active === s.id ? "set-rail-item active" : "set-rail-item"}
+            aria-current={active === s.id ? "page" : undefined}
+            onClick={() => goTo(s.id)}
+          >
+            {s.label}
+          </button>
+        ))}
+        <div className="set-rail-divider" role="presentation" />
+        <button
+          type="button"
+          className={active === "feedback" ? "set-rail-item active" : "set-rail-item"}
+          aria-current={active === "feedback" ? "page" : undefined}
+          onClick={() => goTo("feedback")}
+        >
+          Send feedback
+        </button>
+        <div className="set-rail-foot">
+          <p>
+            No accounts. No tracking.
+            <br />
+            Your reading is yours.
+          </p>
+          {appVersion && <p className="set-rail-version">Throughline {appVersion}</p>}
+        </div>
+      </nav>
+
+      <div className="set-pane">
+        {active === "reading" && readingPane}
+        {active === "appearance" && appearancePane}
+        {active === "assistant" && assistantPane}
+        {active === "privacy" && privacyPane}
+        {active === "files" && filesPane}
+        {active === "shortcuts" && shortcutsPane}
+        {active === "feedback" && (
+          <FeedbackPanel mode={mode} onClose={() => setActive(prevSection.current)} />
+        )}
+      </div>
+
+      {sourceSheetEl}
+      {auditSheetEl}
+      {restoreSheetEl}
     </div>
   );
 }

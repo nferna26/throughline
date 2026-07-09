@@ -117,11 +117,18 @@ test("a11y: book chosen + reading pace (two separate screens)", async ({ page })
   expect(await serious(page)).toEqual([]);
 });
 
-test("a11y: settings", async ({ page }) => {
+test("a11y: settings (every rail destination)", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByText(/export|provider|AI/i).first().waitFor();
+  const rail = page.getByRole("navigation", { name: "Settings sections" });
+  await rail.waitFor();
+  await page.getByText("A good sitting").waitFor();
   expect(await serious(page)).toEqual([]);
+  // Each destination is one screen; axe each pane, including Send feedback.
+  for (const item of ["Appearance", "Assistant", "Privacy", "Files", "Shortcuts", "Send feedback"]) {
+    await rail.getByRole("button", { name: item }).click();
+    expect(await serious(page)).toEqual([]);
+  }
 });
 
 test("a11y: plans view (frontispiece + back-matter)", async ({ page }) => {

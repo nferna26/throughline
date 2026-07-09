@@ -5,6 +5,33 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 6)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [Unreleased]
+
+### Changed
+
+- **Settings, redesigned.** One long page became a macOS-style left rail of seven
+  destinations (Reading, Appearance, Assistant, Privacy, Files, Shortcuts, Send
+  feedback), each one screen with no scrolling. Every existing flow is preserved:
+  the sitting-size control, the tutor + session-names switches, the full assistant
+  setup (activation code, your own key, ChatGPT sign-in, on-this-Mac models) now in
+  a sheet behind "Answers come from", the privacy explainer and "Show what was sent"
+  viewer, and the export folder/library actions. Send feedback is its own rail
+  destination with the polished six-state panel; the draft persists until sent.
+- The header theme button was replaced by Settings › Appearance and the ⌘⇧L shortcut.
+
+### Added
+
+- **Appearance.** Theme (Light / Dark / Auto — follows macOS live, persists across
+  relaunch), reading typeface (Newsreader / Iowan Old Style / Charter), text size
+  stepper, and line spacing — all applying live to the reading view.
+- **Automatic backups you can see.** Settings › Files shows the live "last backup"
+  time with an on/off switch, and "Restore from backup" brings the library back from
+  any kept copy (today's copy is saved aside first). Backups also refresh once a day
+  while the app stays open, not only at launch.
+- **Keyboard shortcuts**, listed in Settings › Shortcuts and all real: ⌘E ask about
+  the selection, ⌘N add a note, ⌘K search your library, ⌘+/⌘− text size, ⌘⇧L toggle
+  theme, ⌘, Settings.
+
 ## [0.8.4] - 2026-07-08
 
 ### Added

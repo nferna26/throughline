@@ -24,6 +24,17 @@ import { errorMessage } from "./types";
 import { purgeLegacyBriefings } from "./sectionBriefing";
 import { migrateLegacyLocalStorageKeys } from "./legacyStorage";
 import { focusAfterUpdateRelaunchIfNeeded } from "./updateRelaunchFocus";
+import {
+  adjustFontSize,
+  getCachedThemePref,
+  loadAppearance,
+  normalizeThemePref,
+  resolveTheme,
+  systemPrefersDark,
+  toggleResolvedTheme,
+  THEME_PREF_EVENT,
+  type ThemePref,
+} from "./appearance";
 
 type BookTab = "today" | "library" | "notes";
 
@@ -85,9 +96,32 @@ export default function App() {
   // re-fetch is cheap and never changes which book is active.)
   const [libraryKey, setLibraryKey] = useState(0);
   const bumpLibrary = () => setLibraryKey((k) => k + 1);
-  const [theme, setTheme] = useState<"light" | "dark">(
-    () => (localStorage.getItem("tl.theme") as "light" | "dark") || "light"
-  );
+  // Theme preference (light | dark | auto). The cached pref paints the first
+  // frame; the backend value (source of truth, loadAppearance) reconciles right
+  // after. Auto follows macOS live via prefers-color-scheme.
+  const [themePref, setThemePref] = useState<ThemePref>(getCachedThemePref);
+  const [systemDark, setSystemDark] = useState<boolean>(systemPrefersDark);
+  const theme = resolveTheme(themePref, systemDark);
+
+  // Theme changes announced from anywhere (the Appearance pane, ⌘⇧L) — the
+  // appearance module owns persistence; App owns applying the resolved theme.
+  useEffect(() => {
+    const onPref = (e: Event) => {
+      const p = normalizeThemePref((e as CustomEvent).detail);
+      if (p) setThemePref(p);
+    };
+    window.addEventListener(THEME_PREF_EVENT, onPref);
+    return () => window.removeEventListener(THEME_PREF_EVENT, onPref);
+  }, []);
+
+  // Follow the system while on Auto (live, not just at launch).
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
 
   // Instant theme flip (brand rule: no crossfade). Suppress every transition for
   // one frame when data-theme changes — this also fixes the WKWebView quirk where
@@ -97,7 +131,6 @@ export default function App() {
   const themeFirstRun = useRef(true);
   useEffect(() => {
     const root = document.documentElement;
-    localStorage.setItem("tl.theme", theme);
     if (themeFirstRun.current) {
       themeFirstRun.current = false;
       root.dataset.theme = theme;
@@ -141,6 +174,41 @@ export default function App() {
     // One-time rename shim (CORE-1031): carry pre-rename preference keys (tutor
     // consent, font size, panel state) over to their tl.* twins, then drop them.
     migrateLegacyLocalStorageKeys();
+    // Appearance: adopt the backend's stored theme (or seed it from the legacy
+    // key, once) and apply the reading typeface + line spacing.
+    void loadAppearance().then(setThemePref);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Global keyboard shortcuts (Settings › Shortcuts is their reference) ──
+  // ⌘, Settings · ⌘⇧L toggle theme · ⌘K search the library · ⌘+/⌘− text size.
+  // ⌘E and ⌘N are reader-scoped and live in TextReader. Chords only — plain
+  // keys are never intercepted, so typing is untouched.
+  const [searchFocusKey, setSearchFocusKey] = useState(0);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === ",") {
+        e.preventDefault();
+        setView({ kind: "settings" });
+      } else if (e.shiftKey && (e.key === "l" || e.key === "L")) {
+        e.preventDefault();
+        toggleResolvedTheme();
+      } else if (e.key === "k" || e.key === "K") {
+        e.preventDefault();
+        setView({ kind: "today" });
+        setTab("library");
+        setSearchFocusKey((k) => k + 1);
+      } else if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        adjustFontSize(+1);
+      } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        adjustFontSize(-1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   // Activation feedback (CORE-1009): the deep link is the buyer's
@@ -616,14 +684,6 @@ export default function App() {
         >
           <TLIcon name="settings" size={18} />
         </button>
-        <button
-          className="tl-iconbtn"
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-          title={theme === "dark" ? "Light theme" : "Dark theme"}
-        >
-          <TLIcon name={theme === "dark" ? "sun" : "moon"} size={18} />
-        </button>
       </header>
 
       {activation && (
@@ -728,6 +788,7 @@ export default function App() {
                   <Library
                     today={today}
                     refreshKey={libraryKey}
+                    searchFocusKey={searchFocusKey}
                     pendingRemovalId={pendingRemoval?.id ?? null}
                     onContinueReading={() => startReading(today)}
                     onOpenBook={openLibraryBook}
