@@ -10,8 +10,57 @@ import { describe, it, expect } from "vitest";
 // were overwritten before any verification; actions floated on mutable tags.
 // The workflow now fails CLOSED, and these tests keep it that way.
 import workflow from "../.github/workflows/release.yml?raw";
+import candidateWorkflow from "../.github/workflows/release-candidate.yml?raw";
 import ci from "../.github/workflows/ci.yml?raw";
 import stageRelease from "../scripts/stage-release.mjs?raw";
+
+describe("release candidate workflow — verified artifact with no publication authority", () => {
+  it("is manual-only and requires exact-SHA green CI on main", () => {
+    expect(candidateWorkflow).toContain("workflow_dispatch:");
+    expect(candidateWorkflow).not.toMatch(/^\s*push:/m);
+    expect(candidateWorkflow).toContain('GITHUB_REF" != "refs/heads/main"');
+    expect(candidateWorkflow).toContain("actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}");
+    expect(candidateWorkflow).toMatch(/conclusion=="success"/);
+  });
+
+  it("has read-only permissions and no production publication path", () => {
+    expect(candidateWorkflow).toMatch(/permissions:\s*\n\s*contents: read\s*\n\s*actions: read/);
+    expect(candidateWorkflow).not.toMatch(/contents:\s*write/);
+    expect(candidateWorkflow).not.toMatch(/actions:\s*write/);
+    expect(candidateWorkflow).not.toContain("secrets.CLOUDFLARE");
+    expect(candidateWorkflow).not.toContain("scripts/stage-release.mjs");
+    expect(candidateWorkflow).not.toContain("gh release create");
+    expect(candidateWorkflow).not.toMatch(/^\s*(npx\s+)?wrangler\b/m);
+  });
+
+  it("applies the same signed/notarized/universal/minisign gates as a release", () => {
+    for (const gate of [
+      "codesign --verify --deep --strict",
+      "Authority=Developer ID Application",
+      "lipo -archs",
+      "CFBundleShortVersionString",
+      "stapler validate",
+      "spctl --assess",
+      "--example verify_minisign",
+      "--local-payload",
+    ]) {
+      expect(candidateWorkflow, `${gate} must gate the candidate artifact`).toContain(gate);
+    }
+  });
+
+  it("encrypts before upload and never uploads the plaintext candidate directory", () => {
+    const encrypt = candidateWorkflow.indexOf("openssl cms -encrypt");
+    const removePlaintext = candidateWorkflow.indexOf('rm -rf "$PLAIN" "$TAR"');
+    const upload = candidateWorkflow.indexOf("actions/upload-artifact@");
+    expect(encrypt).toBeGreaterThan(-1);
+    expect(removePlaintext).toBeGreaterThan(encrypt);
+    expect(upload).toBeGreaterThan(removePlaintext);
+    expect(candidateWorkflow).toContain(".github/rc-artifact-encryption.crt");
+    expect(candidateWorkflow.slice(upload)).not.toContain("candidate-output/private-artifact");
+    expect(candidateWorkflow.slice(upload)).toContain("steps.encrypted.outputs.ciphertext");
+    expect(candidateWorkflow.slice(upload)).toMatch(/retention-days:\s*1/);
+  });
+});
 
 describe("release gate — nothing publishes without green CI on the exact tag SHA (REL-008)", () => {
   it("requires the tag commit to be an ancestor of main", () => {
