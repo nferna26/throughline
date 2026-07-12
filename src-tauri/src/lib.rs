@@ -52,8 +52,6 @@ pub mod relaunch_focus;
 pub mod settings;
 pub mod sittings;
 
-use std::sync::Mutex;
-
 use crate::db::DbState;
 
 /// **Tauri command API version.**
@@ -91,22 +89,111 @@ use crate::db::DbState;
 ///   note's `exported_markdown_path` points at it), delete-note re-merges rather
 ///   than removing a file, and the new `cmd_export_library` regenerates every
 ///   book file. The on-disk export contract a JS caller observes changed.
-pub const COMMAND_API_VERSION: u32 = 6;
+/// - 6 → 7: failure-honest typed outcomes (audit DATA-004/005) + PRIV-001
+///   removal of unsolicited phrase generation. `cmd_save_note` /
+///   `cmd_update_note` / `cmd_save_ai_*` return `SavedNote { note, export }`;
+///   `cmd_delete_note` returns the `ExportOutcome`; `cmd_end_session` returns
+///   `SessionEnd { session, export }`, validates before mutating, transacts the
+///   whole end, and is idempotent on repeat; `cmd_export_library` adds
+///   `failed: string[]`; `cmd_set_ai_settings` dropped `ai_phrases` and
+///   `SettingsDto` dropped `ai_phrases`.
+/// - 7 → 8: first-cloud consent is bound to the exact ask (R6-1 / CORE-1177).
+///   `cmd_confirm_cloud_send` is REMOVED — a global consent write that raced
+///   the send it authorized. `cmd_outbound_envelope` now returns `provider`
+///   and `fingerprint` alongside the envelope, and `cmd_ai_ask` takes an
+///   optional `consent: { provider, host, fingerprint }` validated at the send
+///   boundary against what that very call resolves to; the matching binding is
+///   the ONLY writer of `KEY_FIRST_CLOUD_CONFIRMED_AT`.
+pub const COMMAND_API_VERSION: u32 = 8;
 
 /// Open the database, recovering from a CORRUPT file rather than crash-looping on
 /// launch (a permanently-unusable app — the worst outcome for a paying user).
 ///
 /// On a clean open we write a rolling backup (kept to the last few launches) so
-/// corruption is survivable. On corruption we try to RESTORE from the newest
-/// good backup BEFORE renaming-aside + starting fresh — so the reader loses only
-/// since-last-backup, not their entire library ("the first paying reader's
-/// reading.db is forever"). Only when no backup is usable do we fall through to
-/// the legacy behavior: preserve the corrupt file as `reading.corrupt-<pid>.db`
-/// and start on a fresh DB.
+/// corruption is survivable. On corruption the damaged DB + its WAL/SHM are
+/// FIRST preserved under unique fsynced names (REQUIRED — a preservation
+/// failure aborts loudly with nothing replaced, REC-011), then we try to
+/// RESTORE from the newest backup that passes the shared coherence preflight —
+/// so the reader loses only since-last-backup, not their entire library ("the
+/// first paying reader's reading.db is forever"). Only when no backup passes
+/// do we start on a fresh DB (the corrupt original stays preserved).
 ///
 /// Environmental failures (permissions, full disk) are NOT "recovered" — wiping
 /// data wouldn't help — so they still fail loudly with a clear, non-cryptic message.
 fn open_db_resilient() -> rusqlite::Connection {
+    // R10-2: INTERPROCESS exclusion first — before the marker read, any
+    // preservation, recovery, or open below. A second launch must stop here,
+    // having touched nothing.
+    db::acquire_process_lock().unwrap_or_else(|e| {
+        panic!(
+            "Throughline could not secure exclusive access to its data folder ({e:#}). \
+             Nothing was changed — fix permissions on the data folder (or quit the \
+             other copy of Throughline), then relaunch."
+        );
+    });
+    // R5: an INTERRUPTED fresh-start transition must never be mistaken for an
+    // ordinary missing DB (which would silently mint an empty library with
+    // none of the recovery context). The durable marker written by
+    // begin_fresh_start brackets the transition; resume it here first.
+    if let Ok(dbp) = paths::db_path() {
+        // R7-1: an UNREADABLE marker is not an absent one — proceeding as if
+        // no transition were interrupted could mint a silent empty library.
+        let marker_present = backup::fresh_start_marker_present(&dbp).unwrap_or_else(|e| {
+            panic!(
+                "Throughline could not determine whether a recovery was interrupted ({e:#}). \
+                 Nothing was changed — fix permissions on the data folder, then relaunch."
+            )
+        });
+        if marker_present {
+            tracing::error!(
+                "resuming an INTERRUPTED fresh-start transition (durable marker present)"
+            );
+            match db::open_and_migrate() {
+                Ok(healthy) => {
+                    // The fresh DB was already created; the crash may have hit
+                    // anywhere between its creation and the marker removal —
+                    // INCLUDING before the generation rotation (R6-4). Rotate
+                    // (idempotent for a fresh library: no reader interaction
+                    // could have produced drafts against it mid-launch) before
+                    // lifting the marker, so the bracket never closes around a
+                    // stale token.
+                    settings::rotate_library_generation(&healthy).unwrap_or_else(|e| {
+                        panic!(
+                            "could not stamp the fresh library's generation ({e:#}); relaunch to retry"
+                        )
+                    });
+                    backup::finish_fresh_start(&dbp).unwrap_or_else(|e| {
+                        panic!("could not clear the fresh-start marker ({e:#}); relaunch to retry")
+                    });
+                }
+                Err(_) => {
+                    // Mid-clear crash: finish clearing the (already-preserved)
+                    // triple, create the fresh DB, then lift the marker.
+                    backup::clear_live_db_after_preservation(&dbp).unwrap_or_else(|e| {
+                        panic!(
+                            "could not finish the interrupted fresh start ({e:#}). Nothing was lost — relaunch to retry."
+                        )
+                    });
+                    let conn = db::open_and_migrate().expect(
+                        "could not create a fresh database resuming an interrupted fresh start",
+                    );
+                    // R6-4: rotation happens INSIDE the marker bracket — a
+                    // failure panics with the marker still down, so the next
+                    // launch resumes (and retries the rotation) instead of
+                    // running a replaced library under a stale token.
+                    settings::rotate_library_generation(&conn).unwrap_or_else(|e| {
+                        panic!(
+                            "could not stamp the fresh library's generation ({e:#}). Nothing was lost — relaunch to retry."
+                        )
+                    });
+                    if let Err(e) = backup::finish_fresh_start(&dbp) {
+                        tracing::warn!("fresh-start marker not cleared ({e:#}); next launch re-resumes harmlessly");
+                    }
+                    return conn;
+                }
+            }
+        }
+    }
     match db::open_and_migrate() {
         Ok(c) => {
             // Clean startup: refresh the rolling backup. Best-effort — a backup
@@ -123,11 +210,6 @@ fn open_db_resilient() -> rusqlite::Connection {
                 }
             } else {
                 tracing::info!("reading.db backup skipped: automatic backups are off");
-            }
-            // Stage 3: installs that predate the phrases disclosure default the
-            // toggle OFF; fresh installs default ON (best-effort, never fatal).
-            if let Err(e) = settings::seed_ai_phrases_default(&c) {
-                tracing::warn!("ai_phrases default seed skipped: {e:#}");
             }
             c
         }
@@ -147,36 +229,134 @@ fn open_db_resilient() -> rusqlite::Connection {
             }
             tracing::error!("database appears corrupt; attempting recovery from backup: {e:#}");
 
-            // RESTORE-BEFORE-FRESH: prefer the reader's most recent good backup
-            // over an empty DB. Only if no backup is usable do we fall through.
-            match backup::try_restore_newest_backup() {
-                Ok(Some(_path)) => {
-                    tracing::info!("restored reading.db from a verified backup");
-                    if let Ok(c) = db::open_and_migrate() {
-                        return c;
-                    }
-                    // The restored file failed to re-open (should not happen — it
-                    // was validated). Fall through to fresh rather than crash.
-                    tracing::error!("restored backup unexpectedly failed to open; starting fresh");
+            // REC-011 REQUIRED PRECONDITION: preserve the corrupt DB + every
+            // WAL/SHM sidecar (unique names, fsynced) BEFORE any recovery may
+            // replace anything. If preservation fails, we replace NOTHING and
+            // fail loudly — a fresh or restored DB written over unsaved corrupt
+            // bytes would destroy the only salvageable copy of the library.
+            let dbp = paths::db_path()
+                .expect("Throughline could not resolve its database path during recovery");
+            match backup::preserve_corrupt_live(&dbp) {
+                Ok(Some(kept)) => {
+                    tracing::info!("corrupt reading.db preserved as {:?}", kept.file_name())
                 }
-                Ok(None) => {
-                    tracing::error!(
-                        "no usable backup found; preserving corrupt DB and starting fresh"
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("backup restore attempt failed ({e:#}); preserving corrupt DB and starting fresh");
-                }
+                Ok(None) => tracing::info!("no live reading.db to preserve"),
+                Err(pe) => panic!(
+                    "Throughline could not secure the damaged library file before recovery ({pe:#}). \
+                     Nothing was changed. Free up disk space or fix permissions on the data folder, then relaunch."
+                ),
             }
 
-            if let Ok(dbp) = paths::db_path() {
-                let bak = dbp.with_file_name(format!("reading.corrupt-{}.db", std::process::id()));
-                let _ = std::fs::rename(&dbp, &bak);
-                let _ = std::fs::remove_file(dbp.with_extension("db-wal"));
-                let _ = std::fs::remove_file(dbp.with_extension("db-shm"));
+            // RESTORE-BEFORE-FRESH: prefer the reader's most recent good backup
+            // over an empty DB. Only if no backup passes the coherence preflight
+            // do we fall through to a fresh database (the corrupt original is
+            // already preserved above).
+            match backup::try_restore_newest_backup() {
+                Ok(backup::RestoreOutcome::Restored(_path)) => {
+                    tracing::info!("restored reading.db from a verified backup");
+                    match db::open_and_migrate() {
+                        // R7-1: the generation was rotated ON THE PREPARED
+                        // CANDIDATE before its atomic promotion (see
+                        // restore_into_place_prepared) — the restored library
+                        // arrives already carrying its own token, so there is
+                        // no post-swap rotation left to fail here.
+                        Ok(c) => return c,
+                        // The restored file failed to re-open (should not happen —
+                        // it was validated on a copy). FAIL CLOSED with the truth:
+                        // the old "fall through to fresh" claim was a lie — the
+                        // unopenable restored file sits at the live path, so the
+                        // fresh-open below would panic with a misleading
+                        // "could not create a fresh database" message anyway.
+                        Err(e) => panic!(
+                            "Throughline restored a backup but could not reopen it ({e:#}). \
+                             Nothing else was changed — the damaged library is preserved and \
+                             your backups are intact. Relaunch to retry recovery."
+                        ),
+                    }
+                }
+                Ok(backup::RestoreOutcome::NoneUsable {
+                    any_unassessable: false,
+                }) => {
+                    tracing::error!(
+                        "every backup is definitively unusable; starting fresh (corrupt DB preserved)"
+                    );
+                }
+                // R5 FAIL CLOSED: an environmental error is not a verdict. If
+                // any candidate could not be ASSESSED, or the attempt itself
+                // errored, an empty library is NOT authorized — stop with
+                // everything preserved and still in place.
+                Ok(backup::RestoreOutcome::NoneUsable {
+                    any_unassessable: true,
+                }) => panic!(
+                    "Throughline could not assess at least one backup (a disk or permissions \
+                     problem, not proof it is bad). Nothing was changed — the damaged library \
+                     is preserved and your backups are intact. Fix the disk problem and relaunch."
+                ),
+                // R9-1: the promotion classification is PRESERVED so each
+                // hard stop tells the truth about what is on disk — the three
+                // classes differ, and only one of them may say "nothing was
+                // changed".
+                Err(backup::RestoreError::Promotion(backup::PromotionError::After(e))) => panic!(
+                    "Throughline restored a backup, but could not PROVE the switch durable \
+                     ({e:#}). The restored library IS in place and the damaged one is \
+                     preserved — relaunch to re-verify. Nothing was lost."
+                ),
+                Err(backup::RestoreError::Promotion(backup::PromotionError::AuxMutated(e))) => {
+                    panic!(
+                        "Throughline could not finish restoring a backup ({e:#}). The damaged \
+                         library file was not replaced (helper files beside it were cleared), \
+                         and a full copy of it is preserved — fix the disk problem and relaunch."
+                    )
+                }
+                Err(backup::RestoreError::Promotion(backup::PromotionError::Untouched(e))) => {
+                    panic!(
+                        "Throughline could not restore a backup ({e:#}). Nothing was changed — \
+                         the damaged library is preserved and your backups are intact. Fix the \
+                         disk problem and relaunch."
+                    )
+                }
+                Err(backup::RestoreError::Env(e)) => panic!(
+                    "Throughline could not check your backups ({e:#}). Nothing was changed — \
+                     the damaged library is preserved. Fix the disk problem and relaunch."
+                ),
             }
-            db::open_and_migrate()
-                .expect("could not create a fresh database after corruption recovery")
+
+            // R4/R5: preservation no longer moves the originals — the corrupt
+            // triple still sits at the live path. Only now, with durable
+            // preserved copies on disk and every backup DEFINITIVELY unusable,
+            // does the crash-safe fresh-start transition run: durable marker →
+            // clear → fresh DB → lift marker. A crash at any boundary is
+            // resumed at the next launch (see the top of this function) — an
+            // interrupted transition is never mistaken for a missing DB.
+            if let Err(ce) = backup::begin_fresh_start(&dbp) {
+                panic!(
+                    "Throughline preserved the damaged library but could not record the fresh start ({ce:#}). \
+                     Nothing was lost — relaunch to retry."
+                );
+            }
+            if let Err(ce) = backup::clear_live_db_after_preservation(&dbp) {
+                panic!(
+                    "Throughline preserved the damaged library but could not clear it for a fresh start ({ce:#}). \
+                     Nothing was lost — relaunch to retry."
+                );
+            }
+            let conn = db::open_and_migrate()
+                .expect("could not create a fresh database after corruption recovery");
+            // R5/R6-4: a fresh library is its own generation too — stamped
+            // INSIDE the marker bracket, so a failure panics with the marker
+            // still down and the next launch resumes (and retries) instead of
+            // running under a stale token.
+            settings::rotate_library_generation(&conn).unwrap_or_else(|e| {
+                panic!(
+                    "Throughline prepared a fresh library but could not stamp its generation ({e:#}). Nothing was lost — relaunch to retry."
+                )
+            });
+            if let Err(e) = backup::finish_fresh_start(&dbp) {
+                tracing::warn!(
+                    "fresh-start marker not cleared ({e:#}); the next launch resumes harmlessly"
+                );
+            }
+            conn
         }
     }
 }
@@ -202,35 +382,14 @@ pub fn run() {
     // Initialize structured logging before anything else so DB migrations,
     // startup errors, and IPC events all get captured.
     log::init();
-    let conn = open_db_resilient();
-    // adr-001: bound the AI audit trail on every launch. Rows older than the
-    // retention window that never became a note are swept; approved rows stay.
-    {
-        let days = settings::get_ai_retention_days(&conn);
-        match ai_retention::sweep(&conn, days) {
-            Ok(n) if n > 0 => tracing::info!(
-                "ai_retention: swept {} ai_requests row(s) older than {} days",
-                n,
-                days
-            ),
-            Ok(_) => {}
-            Err(e) => tracing::warn!("ai_retention: sweep failed: {}", e),
-        }
-    }
-    // Purge plans "let go" longer than 30 days ago, with their sessions + notes.
-    match commands::plans::sweep_deleted_plans(&conn, 30) {
-        Ok(n) if n > 0 => tracing::info!("plan_retention: purged {} let-go plan(s)", n),
-        Ok(_) => {}
-        Err(e) => tracing::warn!("plan_retention: sweep failed: {}", e),
-    }
-    // P0 quit-flush safety net: close sessions a previous run left open (hard kill
-    // or a lost quit-flush race), honestly, from the last durable reading evidence.
-    match commands::sessions::sweep_orphan_sessions(&conn) {
-        Ok(n) if n > 0 => tracing::info!("session sweep: closed {} orphaned session(s)", n),
-        Ok(_) => {}
-        Err(e) => tracing::warn!("session sweep failed: {}", e),
-    }
-    let state = DbState(Mutex::new(conn));
+    // R11-2: NO database work happens before the Tauri builder runs. The
+    // single-instance plugin initializes FIRST — a second launch (a
+    // throughline:// activation click while the app is running) forwards its
+    // URL to the primary over the plugin's socket and exits(0) during plugin
+    // setup, so it can never reach the interprocess DB lock, let alone panic
+    // on it. The database opens inside `.setup()` (below), which only a
+    // PRIMARY instance ever reaches. Pinned by
+    // `single_instance_forwarding_precedes_any_db_open`.
 
     tauri::Builder::default()
         // single-instance MUST be first: a second launch (e.g. a throughline://
@@ -249,7 +408,6 @@ pub fn run() {
         // the updater's last-resort recovery (window.open is a no-op in wry).
         // The capability scopes it to https://readthroughline.com/* only.
         .plugin(tauri_plugin_opener::init())
-        .manage(state)
         // CORE-1193: the app-menu "Check for Updates…" item. Focus the reading
         // window, then let the webview land the reader on Settings › Software
         // Update and start a manual (cooldown-free) check.
@@ -263,6 +421,70 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // R11-2: the database opens HERE — after every plugin initialized,
+            // so a secondary instance already forwarded-and-exited and can
+            // never contend on (or panic over) the interprocess DB lock.
+            {
+                use tauri::Manager;
+                let conn = open_db_resilient();
+                // adr-001: bound the AI audit trail on every launch. Rows older
+                // than the retention window that never became a note are swept;
+                // approved rows stay.
+                {
+                    let days = settings::get_ai_retention_days(&conn);
+                    match ai_retention::sweep(&conn, days) {
+                        Ok(n) if n > 0 => tracing::info!(
+                            "ai_retention: swept {} ai_requests row(s) older than {} days",
+                            n,
+                            days
+                        ),
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("ai_retention: sweep failed: {}", e),
+                    }
+                }
+                // Purge plans "let go" longer than 30 days ago, with their
+                // sessions + notes.
+                match commands::plans::sweep_deleted_plans(&conn, 30) {
+                    Ok(n) if n > 0 => {
+                        tracing::info!("plan_retention: purged {} let-go plan(s)", n)
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("plan_retention: sweep failed: {}", e),
+                }
+                // TRUST-029: commit removals the reader CONFIRMED but whose Undo
+                // window a quit interrupted. Staged ids are durable in the
+                // settings ledger, so a confirmed removal survives quit/relaunch;
+                // Undo (within the window) unstages before this ever runs again.
+                match commands::commit_pending_deletes(&conn) {
+                    Ok((0, 0)) => {}
+                    Ok((notes, books)) => tracing::info!(
+                        "pending-delete sweep: committed {notes} note(s), {books} book(s)"
+                    ),
+                    Err(e) => tracing::warn!("pending-delete sweep failed: {e:#}"),
+                }
+                // DATA-005: heal stale Markdown mirrors — books whose export
+                // failed after a durable row change are marked in a ledger and
+                // re-exported here, so the reader's files catch up even if they
+                // never pressed "try again". After the delete sweep, so removed
+                // books resolve to "nothing to heal".
+                match commands::retry_pending_exports(&conn) {
+                    (0, 0) => {}
+                    (healed, still_dirty) => tracing::info!(
+                        "export retry: healed {healed} stale book file(s), {still_dirty} still pending"
+                    ),
+                }
+                // P0 quit-flush safety net: close sessions a previous run left
+                // open (hard kill or a lost quit-flush race), honestly, from the
+                // last durable reading evidence.
+                match commands::sessions::sweep_orphan_sessions(&conn) {
+                    Ok(n) if n > 0 => {
+                        tracing::info!("session sweep: closed {} orphaned session(s)", n)
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("session sweep failed: {}", e),
+                }
+                app.manage(DbState::new(conn));
+            }
             // macOS app menu: the stock default menu plus "Check for Updates…"
             // right under "About Throughline" (CORE-1193). macOS-only — the
             // other platforms ship no menubar today and this must not add one.
@@ -311,7 +533,7 @@ pub fn run() {
                 std::thread::spawn(move || loop {
                     std::thread::sleep(std::time::Duration::from_secs(60 * 60));
                     let state = handle.state::<DbState>();
-                    let Ok(conn) = state.0.lock() else { continue };
+                    let Ok(conn) = state.lock() else { continue };
                     let enabled = settings::get_backups_enabled(&conn);
                     let newest = backup::newest_backup_taken_at()
                         .ok()
@@ -343,6 +565,8 @@ pub fn run() {
             commands::books::cmd_relink_book,
             commands::books::cmd_set_active_book,
             commands::books::cmd_delete_book,
+            commands::books::cmd_stage_book_delete,
+            commands::books::cmd_unstage_book_delete,
             commands::books::cmd_configure_plan,
             // ── discover (public-domain catalogue; reader-initiated egress) ──
             commands::discover::cmd_discover_search,
@@ -358,6 +582,8 @@ pub fn run() {
             commands::notes::cmd_save_note,
             commands::notes::cmd_update_note,
             commands::notes::cmd_delete_note,
+            commands::notes::cmd_stage_note_delete,
+            commands::notes::cmd_unstage_note_delete,
             commands::notes::cmd_list_notes,
             commands::notes::cmd_quote_warns,
             commands::notes::cmd_export_library,
@@ -371,7 +597,7 @@ pub fn run() {
             commands::ai::cmd_finalize_ai_request,
             commands::ai::cmd_get_usage_summary,
             commands::ai::cmd_set_monthly_spend_cap,
-            commands::ai::cmd_confirm_cloud_send,
+            commands::ai::cmd_outbound_envelope,
             commands::ai::cmd_activate_company,
             commands::ai::cmd_company_status,
             commands::ai::cmd_company_credits,
@@ -414,6 +640,8 @@ pub fn run() {
             commands::backups::cmd_set_backups_enabled,
             commands::backups::cmd_list_backups,
             commands::backups::cmd_restore_backup,
+            commands::backups::cmd_undo_restore,
+            commands::backups::cmd_stage_restore_source,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -431,6 +659,138 @@ mod tests {
 
     use crate::import::{estimate_minutes_for_chars, sectionize};
     use crate::{ai_client, db, export, paths};
+
+    /// R7-1(c): an UNREADABLE fresh-start marker state (metadata/permission
+    /// failure on the data dir) is a HARD STOP — never treated as "absent",
+    /// which would skip the resume of an interrupted transition and could
+    /// mint a silent empty library. No session runs on an undetermined state.
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_marker_state_hard_stops_the_launch() {
+        use std::os::unix::fs::PermissionsExt;
+        let g = paths::lock_env_for_test();
+        let data = std::env::temp_dir().join(format!(
+            "tl-markerread-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&data).unwrap();
+        // SAFETY: env vars are process-global; the lock above serializes access.
+        unsafe { std::env::set_var("THROUGHLINE_DATA_DIR", &data) };
+
+        // The data dir cannot be inspected: marker presence is UNKNOWN.
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let perms_enforced = std::fs::read_dir(&data).is_err();
+        let result = std::panic::catch_unwind(crate::open_db_resilient);
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        if perms_enforced {
+            let err = result.expect_err("an undetermined marker state must not launch");
+            let msg = err
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_else(|| "non-string panic".to_string());
+            // R10-2: the interprocess lock is acquired BEFORE the marker
+            // read, so an unreadable data dir now stops the launch at the
+            // lock — one step earlier, same protection, honest either way.
+            assert!(
+                msg.contains("could not determine whether a recovery was interrupted")
+                    || msg.contains("could not secure exclusive access to its data folder"),
+                "the hard stop names the undetermined/inaccessible state: {msg}"
+            );
+            // Nothing was created over the unknown state.
+            assert!(
+                std::fs::read_dir(&data).unwrap().next().is_none(),
+                "no library was minted while the marker state was unreadable"
+            );
+        } else {
+            eprintln!("skipping: permissions not enforced (root?)");
+        }
+
+        unsafe { std::env::remove_var("THROUGHLINE_DATA_DIR") };
+        let _ = std::fs::remove_dir_all(&data);
+        drop(g);
+    }
+
+    /// R9-1: the AUTOMATIC recovery path hard-stops TRUTHFULLY on an
+    /// applied-but-unproven restore — the launch panic must say the restored
+    /// library IS in place (never "nothing was changed"), and the process
+    /// must not continue to a session or a fresh library.
+    #[test]
+    fn automatic_applied_but_unproven_restore_hard_stops_truthfully() {
+        let g = paths::lock_env_for_test();
+        let data = std::env::temp_dir().join(format!(
+            "tl-autounproven-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let _ = std::fs::remove_dir_all(&data);
+        // SAFETY: env vars are process-global; the lock above serializes access.
+        unsafe { std::env::set_var("THROUGHLINE_DATA_DIR", &data) };
+
+        let result = std::panic::catch_unwind(|| {
+            // A good backup, then a corrupt live DB.
+            let conn = db::open_and_migrate().expect("open live DB");
+            crate::settings::set_string(&conn, "library_marker", "GOOD BACKUP").unwrap();
+            crate::backup::write_rolling_backup(&conn).expect("backup");
+            drop(conn);
+            let live = paths::db_path().unwrap();
+            std::fs::write(&live, b"CORRUPT LIVE BYTES").unwrap();
+            let sidecars = [
+                format!("{}-wal", live.to_string_lossy()),
+                format!("{}-shm", live.to_string_lossy()),
+            ];
+            for s in &sidecars {
+                let _ = std::fs::remove_file(s);
+            }
+
+            // The recovery's promotion applies but cannot prove durability.
+            crate::backup::promotion_test_seam::arm(
+                crate::backup::promotion_test_seam::FailPoint::PostRenameDirFsync,
+            );
+            let launch = std::panic::catch_unwind(crate::open_db_resilient);
+            crate::backup::promotion_test_seam::disarm();
+
+            let err = launch.expect_err("an unproven automatic restore must hard-stop");
+            let msg = err
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_else(|| "non-string panic".to_string());
+            assert!(
+                msg.contains("could not PROVE the switch durable"),
+                "the hard stop names the unproven transition: {msg}"
+            );
+            assert!(
+                msg.contains("The restored library IS in place"),
+                "the hard stop tells the truth about what is on disk: {msg}"
+            );
+            assert!(
+                !msg.to_lowercase().contains("nothing was changed"),
+                "an applied restore must never claim 'nothing was changed': {msg}"
+            );
+            // TRUTH of the message: the restored library really is in place…
+            let conn = rusqlite::Connection::open(&live).expect("restored library opens");
+            assert_eq!(
+                crate::settings::get_string(&conn, "library_marker").as_deref(),
+                Some("GOOD BACKUP")
+            );
+            drop(conn);
+            // …and the preserved corrupt copy still exists.
+            let preserved = std::fs::read_dir(&data)
+                .unwrap()
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().contains("corrupt"));
+            assert!(preserved, "the damaged library remains preserved");
+        });
+
+        crate::backup::promotion_test_seam::disarm();
+        unsafe { std::env::remove_var("THROUGHLINE_DATA_DIR") };
+        let _ = std::fs::remove_dir_all(&data);
+        drop(g);
+        if let Err(p) = result {
+            std::panic::resume_unwind(p);
+        }
+    }
 
     #[test]
     fn parses_activate_deep_link_only() {

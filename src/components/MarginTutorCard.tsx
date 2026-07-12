@@ -3,7 +3,8 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import TLIcon from "./TLIcon";
 import AiSetupSheet from "./AiSetupSheet";
 import TutorFuel from "./TutorFuel";
-import { AI_PROVIDERS, aiProviderLabel, type Note, type AskHandle, type SettingsDto, type StreamEvent } from "../types";
+import { AI_PROVIDERS, aiProviderLabel, providerIdForHost, type Note, type AskHandle, type SavedNote, type SettingsDto, type StreamEvent } from "../types";
+import CloudConsentSheet, { type ConsentBinding, type EnvelopePreview } from "./CloudConsentSheet";
 import { humanizeError, looksUnavailable } from "../aiErrors";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
 import "../tl-tutor.css";
@@ -31,6 +32,14 @@ export type TutorMode = "explain" | "historical" | "vocabulary" | "socratic";
 type Depth = "brief" | "deep";
 type Phase = "consent" | "thinking" | "streaming" | "done" | "error" | "blocked";
 
+// R10-4: attempt identity is PROCESS-GLOBAL, keyed by draft — the authority a
+// LATE terminal outcome reconciles against. A remounted card (a new component
+// instance for the same draft) registers its own newer attempt here, so a
+// delayed outcome from an older attempt can prove it is stale and never
+// mutate the newer attempt's state.
+let tutorAttemptCounter = 0;
+const tutorLatestAttempt = new Map<string, number>();
+
 /**
  * CORE-1163: a draft's completed answer, persisted at the parent so reopening a
  * collapsed card REPLAYS instantly without re-calling the model (no re-spend, no
@@ -41,8 +50,31 @@ export interface TutorCache {
   brief: string;
   deep: string;
   deepRequested: boolean;
+  /** Legacy single id (mirrors the brief tier's). New caches carry the
+   *  per-tier ids below (R11-6). */
   aiRequestId: string | null;
+  /** R11-6: request identity PER RETAINED TIER — a saved brief+deep body has
+   *  TWO contributing audit rows, and each tier's identity resets at its own
+   *  dispatch (a failed deep must never clobber the brief's contributor). */
+  briefRequestId?: string | null;
+  deepRequestId?: string | null;
   collapsed: boolean;
+  /** R8-4 (legacy, read-only): the single-provider attribution older caches
+   *  carried. New caches persist the PER-TIER fields below. */
+  answeredProvider?: string | null;
+  /** R9-6: PER-TIER attribution — the provider each RETAINED tier's answer
+   *  actually came from (derived from that ask's reported provider_host;
+   *  null = unknown → neutral). The brief and the deep tier can come from
+   *  DIFFERENT providers (a Settings change between them), so one field
+   *  cannot honestly attribute both. Persisted through completed AND
+   *  interrupted caches so a replay attributes from the cache, never from
+   *  current Settings. */
+  briefProvider?: string | null;
+  deepProvider?: string | null;
+  /** R11-5: the attempt ended in the company relay's CAP refusal — a
+   *  POST-egress terminal state (the passage already reached the relay). A
+   *  reopen shows the cap doors instead of silently re-sending. */
+  capExhausted?: boolean;
   /**
    * P1-3: set when a paid call was in flight but the card was unmounted (card
    * switch / section nav) before the answer settled. Its mere presence makes
@@ -119,27 +151,59 @@ function Prose({ text }: { text: string }) {
 /**
  * The permanent privacy microline at the card's bottom, honest per MODE
  * (CORE-1190). Local never left the Mac. Company mode went through
- * Throughline's stateless relay (forward, stream, drop), so "nothing kept" is a
- * promise we can make. BYO went to the READER'S OWN provider account;
- * Throughline cannot promise a third party's retention, so those lines name the
- * provider and claim nothing about what it keeps. Exported for tests.
+ * Throughline's stateless relay (forward, stream, drop), so "the relay keeps
+ * nothing" is a promise we can make about OUR relay. BYO went to the READER'S
+ * OWN provider account; Throughline cannot promise a third party's retention,
+ * so those lines name the provider and claim nothing about what it keeps.
+ *
+ * R9-6: takes the SET of providers the card's RETAINED tiers came from — the
+ * brief and the deep tier can come from different providers. A mixed card
+ * gets ENUMERATED copy with no retention claims: never "Answered on this
+ * Mac." when any retained tier used the cloud, and never the relay promise
+ * stretched across a BYO tier. Exported for tests.
  */
-export function tutorPrivacyLine(provider: string | null): string {
-  switch (provider) {
-    case "local":
-      return "Answered on this Mac.";
-    case "company":
-      return "Your selection was sent to the Throughline assistant, nothing kept.";
-    case "openai":
-      return "Your selection was sent to OpenAI using your key.";
-    case "anthropic":
-      return "Your selection was sent to Anthropic using your key.";
-    case "codex":
-      return "Your selection was sent to OpenAI through your ChatGPT sign-in.";
-    default:
-      // Unknown / not-yet-loaded provider: say only what is certain.
-      return "Your selection was sent to your AI provider.";
+export function tutorPrivacyLine(providers: ReadonlyArray<string | null>): string {
+  const unique = [...new Set(providers)];
+  if (unique.length === 0) return "Your selection was sent to your AI provider.";
+  if (unique.length === 1) {
+    switch (unique[0]) {
+      case "local":
+        return "Answered on this Mac.";
+      case "company":
+        return "Your selection went through Throughline's relay, which does not log or store it.";
+      case "openai":
+        return "Your selection was sent to OpenAI using your key.";
+      case "anthropic":
+        return "Your selection was sent to Anthropic using your key.";
+      case "codex":
+        return "Your selection was sent to OpenAI through your ChatGPT sign-in.";
+      default:
+        // Unknown / not-yet-loaded provider: say only what is certain.
+        return "Your selection was sent to your AI provider.";
+    }
   }
+  // Mixed tiers with any UNKNOWN destination: only the neutral line is honest.
+  if (unique.some((p) => p == null)) {
+    return "Your selection was sent to your AI provider.";
+  }
+  const name = (p: string): string => {
+    switch (p) {
+      case "local":
+        return "the local model on this Mac";
+      case "company":
+        return "Throughline's relay";
+      case "openai":
+        return "OpenAI (your key)";
+      case "anthropic":
+        return "Anthropic (your key)";
+      case "codex":
+        return "OpenAI (your ChatGPT sign-in)";
+      default:
+        return "your AI provider";
+    }
+  };
+  const names = (unique as string[]).map(name);
+  return `Parts of this answer came from different places — your selection was sent to ${names.join(" and ")}.`;
 }
 
 // ── header "thinking" indicator: three pulsing dots + "thinking" (handoff).
@@ -162,9 +226,13 @@ export default function MarginTutorCard(props: {
   onActivate: () => void;
   /** Persisted as a durable TutorNote — caller refreshes the margin from it. */
   onSaved: (note: Note) => void;
+  /** DATA-004: the note saved durably but its Markdown export failed. */
+  onExportIssue?: (noteId: string, message: string) => void;
   onDiscard: () => void;
-  /** CORE-1163: persist the completed answer at the parent for instant replay. */
-  onCached?: (draftId: string, cache: TutorCache) => void;
+  /** CORE-1163: persist the completed answer at the parent for instant replay.
+   *  R10-4: `null` CLEARS a persisted snapshot (used when a delayed
+   *  pre-egress refusal proves an interrupted snapshot never billed). */
+  onCached?: (draftId: string, cache: TutorCache | null) => void;
   /** Book title + author, threaded into the cold-start setup sheet's fallback
    *  prompt so a reader who copies it gets a fully-attributed prompt. Optional:
    *  the sheet degrades calmly to "Explain this passage." without them. */
@@ -182,10 +250,52 @@ export default function MarginTutorCard(props: {
   const [deepAnswer, setDeepAnswer] = useState(cached?.deep ?? "");
   const [deepRequested, setDeepRequested] = useState(cached?.deepRequested ?? false);
   const [errorMsg, setErrorMsg] = useState("");
+  // A failed SAVE (not a failed stream): rendered inside the save form so it is
+  // visible in the done phase where saving happens (DATA-005).
+  const [saveErr, setSaveErr] = useState<string | null>(null);
   // First-cloud-call consent (C2): set when cmd_ai_ask returns NeedsCloudConsent.
-  const [cloudConsent, setCloudConsent] = useState<{ host: string; which: TutorMode; tier: Depth } | null>(null);
+  const [cloudConsent, setCloudConsent] = useState<{
+    host: string;
+    which: TutorMode;
+    tier: Depth;
+    /** PRIV-A11Y-009: the exact outbound envelope (cmd_outbound_envelope) —
+     *  undefined while loading, null when the fetch failed (the sheet then
+     *  shows the full selection directly, never a truncated substitute). */
+    envelope?: EnvelopePreview | null;
+  } | null>(null);
+  const fetchConsentEnvelope = useCallback(
+    (which: TutorMode, tier: Depth) => {
+      setCloudConsent((cur) => (cur && cur.which === which ? { ...cur, envelope: undefined } : cur));
+      invoke<EnvelopePreview>("cmd_outbound_envelope", {
+        bookId: props.bookId,
+        mode: which,
+        selection: draft.anchoredText,
+        chapter: draft.chapter || null,
+        userNote: null,
+        depth: tier,
+      })
+        .then((env) =>
+          // R5: the envelope's host is AUTHORITATIVE at preview time — if the
+          // provider changed since NeedsCloudConsent, the sheet re-binds to
+          // the new destination together with its matching preview (host and
+          // preview can never disagree on screen). A null/hostless response
+          // is a failed preview (Send stays disabled).
+          setCloudConsent((cur) =>
+            cur && cur.which === which
+              ? { ...cur, host: env?.host ?? cur.host, envelope: env ?? null }
+              : cur,
+          ),
+        )
+        .catch(() =>
+          setCloudConsent((cur) => (cur && cur.which === which ? { ...cur, envelope: null } : cur)),
+        );
+    },
+    [props.bookId, draft.anchoredText, draft.chapter],
+  );
   // Company-mode cap spent (CM6): set when cmd_ai_ask returns CapExhausted.
-  const [capExhausted, setCapExhausted] = useState(false);
+  // R11-5: a cached terminal cap state reopens INTO the cap doors — never a
+  // silent re-send.
+  const [capExhausted, setCapExhausted] = useState(cached?.capExhausted ?? false);
   // The cap screen's $20 door (reuses the existing buy→activate flow).
   const [topUpUrl, setTopUpUrl] = useState<string | null>(null);
   const [modelName, setModelName] = useState("the local model");
@@ -193,6 +303,17 @@ export default function MarginTutorCard(props: {
   // (WHERE the passage goes). Disabled only when no provider is chosen. null =
   // not yet known.
   const [provider, setProvider] = useState<string | null>(null);
+  // R7-9/R8-4/R9-6: the providers the SETTLED answer tiers actually came
+  // from — PER TIER, derived from each successful ask's returned
+  // provider_host (or, on replay, from the CACHE), never from mount-time
+  // Settings state. Legacy caches carried one `answeredProvider`; it reads
+  // as the brief tier's.
+  const cachedBriefProvider = cached ? (cached.briefProvider ?? cached.answeredProvider ?? null) : null;
+  const cachedDeepProvider = cached ? (cached.deepProvider ?? cached.answeredProvider ?? null) : null;
+  const [briefProvider, setBriefProvider] = useState<string | null>(cachedBriefProvider);
+  const [deepProvider, setDeepProvider] = useState<string | null>(cachedDeepProvider);
+  const briefProviderRef = useRef<string | null>(cachedBriefProvider);
+  const deepProviderRef = useRef<string | null>(cachedDeepProvider);
   const [quoteOpen, setQuoteOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(cached?.collapsed ?? false);
   const [showSave, setShowSave] = useState(false);
@@ -202,6 +323,23 @@ export default function MarginTutorCard(props: {
 
   const channelRef = useRef<Channel<StreamEvent> | null>(null);
   const aiReqRef = useRef<string>(cached?.aiRequestId ?? "");
+  // R10-4/R11-6: request identity as STATE, PER TIER — the Save affordance
+  // is honestly disabled while any retained nonempty tier's id is unknown,
+  // and the save marks every contributing audit row.
+  const cachedBriefReq = cached ? (cached.briefRequestId ?? cached.aiRequestId ?? null) : null;
+  const cachedDeepReq = cached?.deepRequestId ?? null;
+  const [briefRequestId, setBriefRequestId] = useState<string | null>(cachedBriefReq);
+  const [deepRequestId, setDeepRequestId] = useState<string | null>(cachedDeepReq);
+  const briefReqRef = useRef<string | null>(cachedBriefReq);
+  const deepReqRef = useRef<string | null>(cachedDeepReq);
+  // R10-4: mounted/run identity. Every awaited preflight inside startStream
+  // re-checks BOTH before proceeding — an unmount (or a newer attempt)
+  // during a delayed settings/model preflight must produce ZERO asks.
+  const mountedRef = useRef<boolean>(true);
+  const attemptSeqRef = useRef<number>(0);
+  // The attempt whose dispatch armed the pending state — late terminal
+  // outcomes reconcile against this so they never mutate a newer attempt.
+  const pendingAttemptRef = useRef<number>(0);
   const briefRef = useRef<string>(cached?.brief ?? "");
   const deepRef = useRef<string>(cached?.deep ?? "");
   const streamTierRef = useRef<Depth>("brief");
@@ -221,6 +359,12 @@ export default function MarginTutorCard(props: {
   // without the reader ever regenerating it (P1-3).
   const completedFreshRef = useRef<boolean>(false);
   const cardRef = useRef<HTMLDivElement | null>(null);
+  // A11Y-010: a tutor card spawned active from the selection toolbar receives
+  // focus, so a keyboard reader lands on the answer they just asked for.
+  useEffect(() => {
+    if (props.active) cardRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const stickToBottomRef = useRef<boolean>(true);
 
   const lensMeta = LENS[lens];
@@ -263,7 +407,14 @@ export default function MarginTutorCard(props: {
   // Fire a streaming call for a given lens + depth tier.
   //  - "brief": fresh answer; resets the deep tier and the lens.
   //  - "deep":  keeps the brief on screen and appends below it.
-  const startStream = useCallback(async (which: TutorMode, tier: Depth) => {
+  const startStream = useCallback(async (which: TutorMode, tier: Depth, consent?: ConsentBinding) => {
+    // R10-4: this RUN's identity, taken before any await. Superseded (a newer
+    // attempt — in this instance or a remounted one) or unmounted runs must
+    // go quiet at every awaited boundary — never dispatch, never mutate
+    // newer state.
+    const attempt = ++tutorAttemptCounter;
+    attemptSeqRef.current = attempt;
+    const superseded = () => !mountedRef.current || attemptSeqRef.current !== attempt;
     setLens(which);
     setPhase("thinking");
     setErrorMsg("");
@@ -288,17 +439,23 @@ export default function MarginTutorCard(props: {
     let liveProvider = "none";
     try {
       const s = await invoke<SettingsDto>("cmd_get_settings");
+      // R10-4: identity check after EVERY awaited preflight — an unmount (or
+      // a newer attempt) during a delayed settings read produces ZERO asks.
+      if (superseded()) return;
       if (!s.ai_provider || s.ai_provider === "none") { setPhase("blocked"); return; }
       liveProvider = s.ai_provider;
     } catch {
+      if (superseded()) return;
       setPhase("blocked"); return; // can't read settings → fail closed
     }
 
     await ensureModel();
+    if (superseded()) return; // R10-4: same check after the model preflight
 
     const channel = new Channel<StreamEvent>();
     channelRef.current = channel;
     let firstDelta = true;
+    let errored = false;
     channel.onmessage = (ev) => {
       if (channelRef.current !== channel) return; // superseded run → drop (soft-cancel)
       if (ev.kind === "delta") {
@@ -311,13 +468,52 @@ export default function MarginTutorCard(props: {
           setDeepAnswer(deepRef.current);
         }
       } else if (ev.kind === "done") {
-        completedFreshRef.current = true; // a real completion clears any interrupted flag
-        setPhase((p) => (p === "error" ? p : "done"));
+        // R9-6: a done AFTER an error on this stream is not a completion —
+        // partial text must never heal into a "complete" answer.
+        if (!errored) {
+          completedFreshRef.current = true; // a real completion clears any interrupted flag
+          setPhase((p) => (p === "error" ? p : "done"));
+        }
       } else if (ev.kind === "error") {
+        errored = true;
         setErrorMsg(humanizeError(liveProvider, ev.message ?? "The tutor couldn't answer this time."));
         setPhase("error");
       }
     };
+
+    // R9-6: PENDING STATE IS ARMED BEFORE THE DISPATCH. From the moment
+    // cmd_ai_ask is invoked the call may be billed and deltas may stream in
+    // ahead of the AskHandle resolving — an unmount in that window must
+    // persist a NEUTRAL interrupted cache (provider unknown until the handle
+    // reports it) so a reopen replays instead of auto-firing a second ask.
+    // R10-4: this dispatch OWNS the pending state (late terminal outcomes
+    // reconcile against it), and the request identity RESETS with it — new
+    // text is never cached or saved under an older attempt's request id.
+    startedRef.current = true;
+    doneRef.current = false;
+    pendingAttemptRef.current = attempt;
+    tutorLatestAttempt.set(draft.draftId, attempt);
+    aiReqRef.current = "";
+    if (tier === "brief") {
+      briefReqRef.current = null;
+      setBriefRequestId(null);
+      deepReqRef.current = null;
+      setDeepRequestId(null);
+    } else {
+      // R11-6: the deep tier resets ITS OWN identity only — a failed or
+      // empty deep must never clobber the brief's contributor.
+      deepReqRef.current = null;
+      setDeepRequestId(null);
+    }
+    if (tier === "brief") {
+      briefProviderRef.current = null;
+      setBriefProvider(null);
+      deepProviderRef.current = null;
+      setDeepProvider(null);
+    } else {
+      deepProviderRef.current = null;
+      setDeepProvider(null);
+    }
 
     try {
       const handle = await invoke<AskHandle>("cmd_ai_ask", {
@@ -328,28 +524,121 @@ export default function MarginTutorCard(props: {
         chapter: draft.chapter || null,
         locator: draft.locator,
         userNote: null,
+        // R6-1: on the confirmed retry this carries the sheet's binding; the
+        // backend validates it against THIS call at the send boundary. Any
+        // drift comes back as NeedsCloudConsent below — fresh sheet, fresh
+        // preview, nothing sent, no consent armed.
+        consent: consent ?? null,
         onEvent: channel,
       });
-      if (channelRef.current === channel) {
+      // R9-6: a DELAYED handle from a superseded attempt (regenerate, lens
+      // switch, unmount) is ignored — it must not attribute or re-identify
+      // the CURRENT attempt's answer.
+      if (channelRef.current === channel && !superseded()) {
         aiReqRef.current = handle.ai_request_id;
-        // The stream is live and the relay is now billing it; a subsequent unmount
-        // before the answer settles must NOT let a reopen fire a second call (P1-3).
-        startedRef.current = true;
-        doneRef.current = false;
+        if (tier === "brief") {
+          briefReqRef.current = handle.ai_request_id;
+          setBriefRequestId(handle.ai_request_id);
+        } else {
+          deepReqRef.current = handle.ai_request_id;
+          setDeepRequestId(handle.ai_request_id);
+        }
+        // R7-9/R8-4/R9-6: attribution follows the destination the backend
+        // REPORTED for this ask — the audit row's provider_host — recorded
+        // PER TIER. The refs feed cache persistence (including the
+        // done-before-handle ordering and the unmount snapshot).
+        const pid = providerIdForHost(handle.provider_host);
+        if (tier === "brief") {
+          briefProviderRef.current = pid;
+          setBriefProvider(pid);
+        } else {
+          deepProviderRef.current = pid;
+          setDeepProvider(pid);
+        }
       }
     } catch (e) {
-      if (channelRef.current === channel) {
-        const err = e as { kind?: string; host?: string; message?: string };
+      const err = e as { kind?: string; host?: string; message?: string };
+      // R10-4: LATE terminal outcomes reconcile by attempt identity. A
+      // delayed pre-egress refusal (NeedsCloudConsent / CapExhausted)
+      // arriving after this attempt was unmounted proves ITS interrupted
+      // snapshot never billed anything: clear exactly that pending state
+      // (restoring the consent path on reopen) — and never touch a NEWER
+      // attempt's state.
+      if (channelRef.current !== channel) {
+        // The PROCESS-GLOBAL registry is the authority: only when no newer
+        // attempt (any instance, any remount) has dispatched for this draft
+        // may the stale outcome touch the pending snapshot.
+        if (tutorLatestAttempt.get(draft.draftId) !== attempt) return;
         if (err?.kind === "NeedsCloudConsent") {
+          // ONLY this refusal is proven PRE-egress (R11-5): nothing left the
+          // Mac, nothing was billed — clear the snapshot so a reopen walks
+          // the consent path.
+          tutorLatestAttempt.delete(draft.draftId);
+          startedRef.current = false;
+          props.onCached?.(draft.draftId, null);
+        } else if (err?.kind === "CapExhausted") {
+          // POST-egress terminal state: upgrade the interrupted snapshot so
+          // a reopen shows the cap doors, never a silent re-send.
+          props.onCached?.(draft.draftId, {
+            lens: lensRef.current,
+            brief: briefRef.current,
+            deep: deepRef.current,
+            deepRequested: deepRequestedRef.current,
+            aiRequestId: briefReqRef.current,
+            briefRequestId: briefReqRef.current,
+            deepRequestId: deepReqRef.current,
+            collapsed: false,
+            interrupted: true,
+            capExhausted: true,
+            briefProvider: briefProviderRef.current,
+            deepProvider: deepProviderRef.current,
+          });
+        }
+        return;
+      }
+      if (channelRef.current === channel) {
+        if (err?.kind === "NeedsCloudConsent") {
+          // PROVEN PRE-EGRESS refusal: the backend refused before anything
+          // left the Mac — nothing was billed, so the pending state clears
+          // (R9-6) and no interrupted cache will be persisted for it.
+          startedRef.current = false;
           // First cloud send — pause and ask once before anything leaves the Mac.
+          // Fetch the EXACT outbound envelope so the sheet discloses precisely
+          // what would be sent (PRIV-A11Y-009): every field, full bounded text.
+          // FAIL-CLOSED: until it loads, Send stays disabled; a failed fetch
+          // shows Retry (fetchConsentEnvelope re-runs this) and Not now only.
           setCloudConsent({ host: err.host ?? "the cloud provider", which, tier });
+          fetchConsentEnvelope(which, tier);
           return;
         }
         if (err?.kind === "CapExhausted") {
+          // R11-5: a 402 is POST-egress — the selection already reached the
+          // relay. Persist the TERMINAL cap state so an unmount/remount
+          // shows the cap doors instead of silently re-sending; doneRef
+          // stops the unmount snapshot from overwriting it.
+          doneRef.current = true;
+          props.onCached?.(draft.draftId, {
+            lens: which,
+            brief: briefRef.current,
+            deep: deepRef.current,
+            deepRequested: deepRequestedRef.current,
+            aiRequestId: briefReqRef.current,
+            briefRequestId: briefReqRef.current,
+            deepRequestId: deepReqRef.current,
+            collapsed: false,
+            interrupted: true,
+            capExhausted: true,
+            briefProvider: briefProviderRef.current,
+            deepProvider: deepProviderRef.current,
+          });
           // Company-paid credits spent — fall to the BYO-key / local floor.
           setCapExhausted(true);
           return;
         }
+        // Any other rejection is NOT proven pre-egress (a network failure can
+        // happen mid-send) — the pending state stays armed, so an unmount
+        // persists the interrupted snapshot rather than permitting a silent
+        // second ask (R9-6).
         setErrorMsg(humanizeError(liveProvider, String(err?.message ?? e)));
         setPhase("error");
       }
@@ -360,9 +649,14 @@ export default function MarginTutorCard(props: {
   // state (phase "done"), so the model is NOT called on reopen; only on first open,
   // explicit Regenerate, a new lens (pickLens), or Go deeper.
   useEffect(() => {
+    // R10-4: re-arm on every effect setup — StrictMode (dev) runs
+    // setup → cleanup → setup on the same instance, and a stale
+    // mountedRef=false from the probe cleanup would silence the real run.
+    mountedRef.current = true;
     if (!cached && isTutorEnabled()) startStream(draft.mode, "brief");
     // Dropping the channel ref on unmount soft-cancels any in-flight stream.
     return () => {
+      mountedRef.current = false; // R10-4: silences any in-flight preflight
       channelRef.current = null;
       // P1-3: a paid stream that started but never settled to a "done" cache (card
       // switch / section nav mid-stream). Persist an interrupted snapshot so REOPEN
@@ -375,9 +669,16 @@ export default function MarginTutorCard(props: {
           brief: briefRef.current,
           deep: deepRef.current,
           deepRequested: deepRequestedRef.current,
-          aiRequestId: aiReqRef.current || null,
+          aiRequestId: briefReqRef.current,
+          briefRequestId: briefReqRef.current,
+          deepRequestId: deepReqRef.current,
           collapsed: false,
           interrupted: true,
+          // R9-6: per-tier attribution rides through INTERRUPTED caches too.
+          // A pending attempt whose AskHandle never resolved is null here —
+          // the replay renders the NEUTRAL line, never a guess.
+          briefProvider: briefProviderRef.current,
+          deepProvider: deepProviderRef.current,
         });
       }
     };
@@ -402,14 +703,27 @@ export default function MarginTutorCard(props: {
       brief: briefAnswer,
       deep: deepAnswer,
       deepRequested,
-      aiRequestId: aiReqRef.current || null,
+      aiRequestId: briefRequestId,
+      briefRequestId,
+      deepRequestId,
       collapsed,
       // Preserve the interrupted flag on pure replay/sub-state changes; only a
       // fresh stream completion in this instance clears it (P1-3).
       interrupted: !completedFreshRef.current && !!cached?.interrupted,
+      // R11 closure: the TERMINAL cap state survives every cache rewrite —
+      // including THIS replay/sub-state re-persist. Without it, a reopen of
+      // a brief-done + deep-402 card silently rewrote the cache without the
+      // flag, and the SECOND reopen lost the cap doors. Only an explicit
+      // retry (retryAfterTopUp / setup connect) clears the state.
+      capExhausted,
+      // R8-4/R9-6: per-tier attribution rides in the cache. Both providers
+      // are deps, so an AskHandle resolving AFTER the done event re-persists
+      // the entry with its attribution.
+      briefProvider,
+      deepProvider,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, briefAnswer, deepAnswer, deepRequested, lens, collapsed]);
+  }, [phase, briefAnswer, deepAnswer, deepRequested, lens, collapsed, briefProvider, deepProvider, briefRequestId, deepRequestId, capExhausted]);
 
   // Keep the newest streamed text in view (unless the reader scrolled up) — but
   // ONLY when an ancestor is its own bounded scroll region (the narrow overlay
@@ -459,6 +773,13 @@ export default function MarginTutorCard(props: {
   const onSetupConnected = useCallback((connected: string) => {
     setTutorEnabled(true);
     if (connected) setProvider(connected);
+    // R11 closure: leaving the cap screen through "Keep going free" is the
+    // reader's explicit retry on a NEW provider — the terminal cap state (and
+    // any half-open checkout note) clears BEFORE the replacement request, or
+    // the done-persist effect would write capExhausted back into the fresh
+    // answer's cache and the cap doors would swallow the streamed answer.
+    setCapExhausted(false);
+    setTopUpUrl(null);
     startStream(lens, deepRequested ? "deep" : "brief");
   }, [lens, deepRequested, startStream]);
 
@@ -480,14 +801,25 @@ export default function MarginTutorCard(props: {
   }, [lens, startStream]);
 
   const doSave = useCallback(async () => {
-    if (!aiReqRef.current || !briefRef.current.trim()) return;
+    if (!briefReqRef.current || !briefRef.current.trim()) return;
+    // R11-6: a nonempty deep tier may only be saved with ITS identity known —
+    // otherwise its audit row would be silently omitted. (The Save button is
+    // disabled in that state; this is the belt.)
+    if (deepRef.current.trim() && !deepReqRef.current) return;
     setSaving(true);
+    setSaveErr(null);
     try {
       const body = [takeaway.trim(), briefRef.current.trim(), deepRef.current.trim()]
         .filter(Boolean)
         .join("\n\n");
-      const note = await invoke<Note>("cmd_save_ai_response_as_note", {
-        aiRequestId: aiReqRef.current,
+      // Every contributing request rides with the save so EVERY audit row is
+      // marked wrote_to_memory in the same transaction (R11-6).
+      const contributing = deepRef.current.trim() && deepReqRef.current
+        ? [deepReqRef.current]
+        : [];
+      const saved = await invoke<SavedNote>("cmd_save_ai_response_as_note", {
+        aiRequestId: briefReqRef.current,
+        contributingRequestIds: contributing,
         noteType: "TutorNote",
         body,
         locator: draft.locator,
@@ -499,10 +831,17 @@ export default function MarginTutorCard(props: {
       });
       setSaved(true);
       setShowSave(false);
+      // DATA-004: durable save + a failed Markdown merge are separate facts.
+      if (!saved.export.ok) {
+        props.onExportIssue?.(saved.note.id, saved.export.message ?? "The Markdown export needs attention.");
+      }
       // Let the reader see "Saved ✓" briefly before the draft becomes a note.
-      setTimeout(() => props.onSaved(note), 1100);
+      setTimeout(() => props.onSaved(saved.note), 1100);
     } catch (e) {
-      setErrorMsg(humanizeError(provider, String((e as { message?: string })?.message ?? e)));
+      // DATA-005: this error renders in the CURRENT phase (inside the save
+      // form), not in the unreachable phase==="error" branch — the takeaway
+      // text stays, and Save retries.
+      setSaveErr(humanizeError(provider, String((e as { message?: string })?.message ?? e)));
     } finally {
       setSaving(false);
     }
@@ -521,7 +860,14 @@ export default function MarginTutorCard(props: {
   // answer came from, per provider mode (CORE-1190). Never imply on-device when
   // the selection went to the cloud, and never claim retention on a third
   // party's behalf (BYO).
-  const privacyLine = tutorPrivacyLine(provider);
+  // R7-9/R8-4/R9-6: the settled line names where the RETAINED TIERS actually
+  // came from — cache-derived on replay, handle-derived on a fresh stream,
+  // NEUTRAL when unknown, ENUMERATED when the tiers came from different
+  // providers. Never current Settings (a provider change after the answer
+  // must not re-attribute it).
+  const privacyLine = tutorPrivacyLine(
+    deepRequested ? [briefProvider, deepProvider] : [briefProvider],
+  );
 
   return (
     <div
@@ -531,6 +877,7 @@ export default function MarginTutorCard(props: {
       onClick={props.onActivate}
       role="complementary"
       aria-label={`Tutor — ${lensMeta.label}`}
+      tabIndex={-1}
     >
       {/* header: ✦ Tutor · {lens} — spacer — [streaming: thinking | done: ↻] · collapse · ×
           Regenerate is a repair, so it lives in the header chrome next to Close,
@@ -769,6 +1116,11 @@ export default function MarginTutorCard(props: {
                   onChange={(e) => setTakeaway(e.target.value)}
                   onClick={(e) => e.stopPropagation()}
                 />
+                {saveErr && (
+                  <p className="tl-tutor-note" role="alert">
+                    Couldn't save this to your notes ({saveErr}). Your takeaway is still here — try Save again.
+                  </p>
+                )}
                 <div className="tl-tutor-saverow">
                   <span className="tl-tutor-foot-note">Saved on this Mac only</span>
                   <span className="tl-tutor-foot-sp" />
@@ -803,7 +1155,22 @@ export default function MarginTutorCard(props: {
                     where the ANSWER came from). */}
                 <div className="tl-tutor-foot">
                   <div className="tl-tutor-foot-row">
-                    <button className="tl-tutor-save" onClick={(e) => { e.stopPropagation(); setShowSave(true); }}>
+                    {/* R10-4/R11-6: never a silently inert Save — the button
+                        is disabled with the honest reason while ANY retained
+                        nonempty tier's request identity is unknown (an
+                        interrupted replay, a handle that never arrived). */}
+                    <button
+                      className="tl-tutor-save"
+                      disabled={
+                        !briefRequestId || (!!deepAnswer.trim() && !deepRequestId)
+                      }
+                      title={
+                        briefRequestId && (!deepAnswer.trim() || deepRequestId)
+                          ? undefined
+                          : "Part of this answer didn't finish, so it can't be saved yet — Ask again first."
+                      }
+                      onClick={(e) => { e.stopPropagation(); setShowSave(true); }}
+                    >
                       <TLIcon name="pencil" size={13} /> Save as note
                     </button>
                     <span className="tl-tutor-foot-sp" />
@@ -821,47 +1188,41 @@ export default function MarginTutorCard(props: {
       )}
 
       {cloudConsent && (
-        <div
-          className="tl-scrim"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Confirm cloud AI"
-          onClick={() => { setCloudConsent(null); setPhase("error"); setErrorMsg("Cloud AI wasn't confirmed — enable it anytime in Settings."); }}
-        >
-          <div className="tl-replan-sheet" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-            <h3>Send this passage to {cloudConsent.host}?</h3>
-            {/* The first sentence is the provider's own disclosure (AI_PROVIDERS),
-                so this dialog and the provider picker can never drift: key for
-                BYO, login for Codex, the one-time purchase for company mode. */}
-            <p className="ctx">
-              {AI_PROVIDERS.find((p) => p.id === provider)?.disclosure
-                ?? `Your selected passage (below) is sent to ${cloudConsent.host} so the tutor can answer — never the whole book.`}{" "}
-              Your book file never leaves this Mac. Asked once, then remembered.
-            </p>
-            <blockquote style={{ margin: "0 0 var(--tl-4)", padding: "8px 12px", borderLeft: "2px solid var(--tl-line)", color: "var(--tl-muted)", fontSize: 13, fontStyle: "italic" }}>
-              "{draft.anchoredText.length > 220 ? draft.anchoredText.slice(0, 220) + "…" : draft.anchoredText}"
-            </blockquote>
-            <div className="tl-replan-foot">
-              <span className="keep">→ {cloudConsent.host}</span>
-              <span className="right">
-                <button className="tl-btn tl-btn-ghost" onClick={() => { setCloudConsent(null); setPhase("error"); setErrorMsg("Cloud AI wasn't confirmed — enable it anytime in Settings."); }}>
-                  Not now
-                </button>
-                <button
-                  className="tl-btn tl-btn-primary"
-                  onClick={async () => {
-                    const c = cloudConsent;
-                    setCloudConsent(null);
-                    await invoke("cmd_confirm_cloud_send");
-                    startStream(c.which, c.tier);
-                  }}
-                >
-                  Send to {cloudConsent.host}
-                </button>
-              </span>
-            </div>
-          </div>
-        </div>
+        <CloudConsentSheet
+          host={cloudConsent.host}
+          disclosure={
+            // R6-1: the disclosure names the provider the ENVELOPE resolved —
+            // the same authority the heading's host and the send binding come
+            // from — never separately-cached component state.
+            AI_PROVIDERS.find((p) => p.id === (cloudConsent.envelope?.provider ?? provider))?.disclosure
+              ?? `Your selected passage (below) is sent to ${cloudConsent.host} so the tutor can answer, with the book's title, author, and chapter name for context — never the whole book.`
+          }
+          envelope={cloudConsent.envelope}
+          onRetryEnvelope={() => fetchConsentEnvelope(cloudConsent.which, cloudConsent.tier)}
+          onCancel={() => {
+            setCloudConsent(null);
+            setPhase("error");
+            setErrorMsg("Cloud AI wasn't confirmed — enable it anytime in Settings.");
+          }}
+          onConfirm={async () => {
+            // R6-1: no confirm-then-send race. The confirmed ask carries the
+            // binding the backend issued with this exact preview; the send
+            // boundary re-resolves the call and validates provider + host +
+            // envelope fingerprint before anything egresses. Consent is
+            // recorded THERE, only when the binding matches. Drift comes back
+            // as NeedsCloudConsent: startStream's catch reopens this sheet
+            // with the new destination and its fresh matching preview.
+            const c = cloudConsent;
+            const env = c.envelope;
+            if (!env) throw new Error("the preview hasn't loaded — nothing was sent");
+            setCloudConsent(null);
+            await startStream(c.which, c.tier, {
+              provider: env.provider,
+              host: env.host,
+              fingerprint: env.fingerprint,
+            });
+          }}
+        />
       )}
     </div>
   );

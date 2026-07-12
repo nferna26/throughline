@@ -772,15 +772,36 @@ fn decode_text_to_utf8(bytes: &[u8]) -> String {
     enc.decode(bytes).0.into_owned()
 }
 
+/// Pub for tests: the REC-011 restore regressions remove a real imported book's
+/// directory (read-only 0444 files) the way deletion does.
+pub fn remove_book_dir_for_tests(dir: &Path) {
+    remove_book_dir_quiet(dir)
+}
+
 /// Best-effort removal of a partially-written book_dir (its files are 0o444, so
-/// reset perms first) when an import refuses after the dir was created.
-fn remove_book_dir_quiet(dir: &Path) {
+/// reset perms first) when an import refuses after the dir was created. Also
+/// the cleanup for a REFUSED restore staging (`backup::stage_book_for_restore`).
+///
+/// R9-2: NO-FOLLOW throughout. If `dir` itself is a symlink, only the link is
+/// removed — never the target's contents. Entries that are symlinks are never
+/// chmodded (`set_permissions` follows links, which would mutate permissions
+/// OUTSIDE the doomed directory); `remove_dir_all` itself does not follow.
+pub(crate) fn remove_book_dir_quiet(dir: &Path) {
+    if let Ok(meta) = fs::symlink_metadata(dir) {
+        if meta.file_type().is_symlink() {
+            let _ = fs::remove_file(dir);
+            return;
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if let Ok(entries) = fs::read_dir(dir) {
             for e in entries.flatten() {
-                let _ = fs::set_permissions(e.path(), fs::Permissions::from_mode(0o644));
+                let entry_is_symlink = e.file_type().map(|t| t.is_symlink()).unwrap_or(true);
+                if !entry_is_symlink {
+                    let _ = fs::set_permissions(e.path(), fs::Permissions::from_mode(0o644));
+                }
             }
         }
     }
@@ -788,6 +809,29 @@ fn remove_book_dir_quiet(dir: &Path) {
 }
 
 pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
+    let book_id = format!("book_{}", Uuid::new_v4().simple());
+    import_txt_into(&book_id, src_path)
+}
+
+/// Import a .txt INTO a caller-chosen book id. The normal path generates a
+/// fresh id (`import_txt`); the restore-staging path (REC-011) re-runs the
+/// SAME deterministic derivation under a HISTORICAL id, so a re-imported file
+/// whose bytes match the backup row's SHA-256 reproduces the exact derived
+/// files (reader.txt, offsets, structure) that id's section rows reference.
+pub fn import_txt_into(book_id: &str, src_path: &Path) -> Result<ImportResult> {
+    let book_dir = paths::book_dir(book_id)?;
+    import_txt_into_dir(book_id, &book_dir, src_path)
+}
+
+/// [`import_txt_into`] with the destination directory explicit (R5): the
+/// restore-staging REBUILD derives into a sibling temp directory and replaces
+/// the previous staging atomically only after full validation — the previous
+/// source/artifacts are never destroyed on error.
+pub(crate) fn import_txt_into_dir(
+    book_id: &str,
+    book_dir: &Path,
+    src_path: &Path,
+) -> Result<ImportResult> {
     paths::ensure_dirs()?;
     if !src_path.exists() {
         return Err(anyhow!("source file does not exist: {:?}", src_path));
@@ -836,9 +880,7 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
             .to_string()
     });
 
-    let book_id = format!("book_{}", Uuid::new_v4().simple());
-    let book_dir = paths::book_dir(&book_id)?;
-    fs::create_dir_all(&book_dir)?;
+    fs::create_dir_all(book_dir)?;
     let dest = book_dir.join("source.txt");
     fs::copy(src_path, &dest).context("copy source into app data")?;
     // Make read-only (immutability hint; honour with `chmod 444`)
@@ -864,7 +906,7 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
     // was entirely illustration/markup), refuse and remove the book_dir already
     // written, so neither the DB nor disk strands an unopenable book.
     if body.trim().is_empty() {
-        remove_book_dir_quiet(&book_dir);
+        remove_book_dir_quiet(book_dir);
         return Err(anyhow!(
             "This file has no readable text to import. If it came from a download, it may be empty or incomplete."
         ));
@@ -914,7 +956,7 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
         }
         sections.push(BookSection {
             id,
-            book_id: book_id.clone(),
+            book_id: book_id.to_string(),
             label: label.clone(),
             href: None,
             start_locator: Some(s.to_string()),
@@ -945,7 +987,7 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
     )?;
 
     let manifest = ImportManifest {
-        book_id: book_id.clone(),
+        book_id: book_id.to_string(),
         title: title.clone(),
         author: meta_author.clone(),
         source_type: "txt".to_string(),
@@ -975,7 +1017,7 @@ pub fn import_txt(src_path: &Path) -> Result<ImportResult> {
     )?;
 
     let book = Book {
-        id: book_id,
+        id: book_id.to_string(),
         title,
         author: meta_author,
         source_type: "txt".to_string(),

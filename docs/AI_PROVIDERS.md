@@ -65,7 +65,8 @@ the reader cards are unchanged.
   `ai_model_anthropic`, `ai_model_codex`). Cloud base URLs are **code constants**
   (a typo can't redirect a key); the `ai_base_url` slot is loopback-only.
 - `cmd_activate_company`, `cmd_company_status`, `cmd_company_credits`,
-  `cmd_company_checkout`, `cmd_confirm_cloud_send`.
+  `cmd_company_checkout`. (First-cloud consent is bound to the ask itself —
+  `cmd_ai_ask`'s `consent` binding, v8 — there is no separate confirm command.)
 - `cmd_set_ai_settings(provider?, baseUrl?, model?, retentionDays?, aiPhrases?)`,
   `cmd_set_ai_key(provider, key)`, `cmd_clear_ai_key(provider)`,
   `cmd_test_ai_connection(provider?, key?)`, `cmd_list_ai_models(provider?)`.

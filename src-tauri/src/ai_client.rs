@@ -137,6 +137,43 @@ pub fn is_loopback_host(host: &str) -> bool {
     false
 }
 
+/// R7-2: the company-relay destination gate at the CALL SITE — the peer of
+/// `validate_base_url`'s local-only enforcement (load-bearing; treat changes
+/// as security changes). The URL about to carry a passage or the Keychain
+/// license must sit EXACTLY on the canonical company origin: https, the
+/// canonical host, no explicit port. The ONE exception is compiled out of
+/// release builds: `cfg(test)` / `cfg(debug_assertions)` builds additionally
+/// accept a LOOPBACK origin, so hermetic relay mocks (unit and integration)
+/// can exercise the transport without any process-global override — the
+/// production binary a reader runs refuses everything but the constant.
+pub fn validate_company_destination(url: &str) -> Result<Url> {
+    let expected = crate::settings::company_base_url();
+    let expected_url =
+        Url::parse(&expected).with_context(|| format!("company origin unparseable: {expected}"))?;
+    let u = Url::parse(url).with_context(|| "company destination unparseable".to_string())?;
+    let loopback_dev_origin = cfg!(any(test, debug_assertions))
+        && u.host_str().is_some_and(crate::ai_client::is_loopback_host);
+    if loopback_dev_origin {
+        return Ok(u);
+    }
+    if u.origin() != expected_url.origin() {
+        return Err(anyhow!(
+            "company request destination {} does not match the canonical origin {} — refusing to send",
+            u.origin().ascii_serialization(),
+            expected_url.origin().ascii_serialization(),
+        ));
+    }
+    if u.scheme() != "https" {
+        return Err(anyhow!("company relay must be https, got {}", u.scheme()));
+    }
+    if u.port().is_some() {
+        return Err(anyhow!(
+            "company relay must use the default https port, got an explicit one"
+        ));
+    }
+    Ok(u)
+}
+
 /// Validate the base URL the client is about to call. Returns the parsed Url
 /// if it's acceptable, or an explanatory error.
 pub fn validate_base_url(base_url: &str, local_only: bool) -> Result<Url> {

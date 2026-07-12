@@ -60,12 +60,15 @@ calls `validate_base_url`, so invariant 2's local-only refusal is untouched. Do 
 other egress through this path, and keep the payload an allowlist (never an echo).
 
 **2a. Cloud-consent attaches to first egress, not to entitlement (CORE-1177).** The
-cloud-consent flag (`KEY_FIRST_CLOUD_CONFIRMED_AT`) is written ONLY by
-`cmd_confirm_cloud_send`, i.e. an explicit in-app user confirmation shown alongside the exact
-passage about to leave the Mac. Activation flows, deep links, and migrations may change
-entitlements (license, provider, `LOCAL_ONLY`) but MUST NOT write consent. So the
-first-cloud-send sheet fires for every reader, including freshly-activated paying ones,
-because that sheet is where the privacy promise is actually delivered.
+cloud-consent flag (`KEY_FIRST_CLOUD_CONFIRMED_AT`) is written ONLY by `cmd_ai_ask`'s
+bound-consent gate (`enforce_bound_cloud_consent`, IPC v8) — i.e. an explicit in-app user
+confirmation shown alongside the exact passage about to leave the Mac, validated at the
+send boundary against the very call it authorizes (provider + host + envelope
+fingerprint; any drift sends nothing and records nothing). Activation flows, deep links,
+and migrations may change entitlements (license, provider, `LOCAL_ONLY`) but MUST NOT
+write consent. So the first-cloud-send sheet fires for every reader, including
+freshly-activated paying ones, because that sheet is where the privacy promise is
+actually delivered.
 
 **3. Copyright posture (counsel-reviewed 2026-06-08 — binding, do not weaken).**
 

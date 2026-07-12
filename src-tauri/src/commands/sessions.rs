@@ -37,12 +37,32 @@ pub fn cmd_save_section_progress(
     percent: Option<f64>,
     state: State<DbState>,
 ) -> Result<(), AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
+    save_section_progress_impl(&conn, &book_id, &section_id, &locator, percent)
+}
+
+/// `cmd_save_section_progress`'s body, extracted for hermetic tests.
+/// DATA-005: validates ownership and the locator BEFORE any write, then
+/// transacts the section-progress row and the position advance together —
+/// and never discards a `record_progress` error (a failed position save is a
+/// real save failure the reader must see, not a silent skip).
+fn save_section_progress_impl(
+    conn: &Connection,
+    book_id: &str,
+    section_id: &str,
+    locator: &str,
+    percent: Option<f64>,
+) -> Result<(), AppError> {
     let now = Utc::now().to_rfc3339();
     // 4a: validate the locator LOUDLY before storing it or advancing — a bad locator
     // here is a real save failure, not a silently-dropped position update.
-    let global = parse_reading_offset(&locator)?;
-    conn.execute(
+    let global = parse_reading_offset(locator)?;
+    // The section must exist AND belong to this book: a cross-book id changes nothing.
+    require_section_owned_by(conn, section_id, book_id)?;
+    let sections = list_sections(conn, book_id)?;
+
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "INSERT INTO section_progress (book_id, section_id, completed_at, last_locator, last_percent, updated_at)
          VALUES (?1, ?2, NULL, ?3, ?4, ?5)
          ON CONFLICT(book_id, section_id) DO UPDATE SET
@@ -53,9 +73,32 @@ pub fn cmd_save_section_progress(
     )?;
     // Advance the durable, position-based progress (furthest is MAX-clamped,
     // last_read is exact). `locator` is a global body offset.
-    let sections = list_sections(&conn, &book_id)?;
-    let _ = sittings::record_progress(&conn, &book_id, &sections, global, &now);
+    sittings::record_progress(&tx, book_id, &sections, global, &now)?;
+    tx.commit()?;
     Ok(())
+}
+
+/// DATA-005 validation helper: the section must exist and belong to `book_id`.
+fn require_section_owned_by(
+    conn: &Connection,
+    section_id: &str,
+    book_id: &str,
+) -> Result<(), AppError> {
+    use rusqlite::OptionalExtension;
+    let owner: Option<String> = conn
+        .query_row(
+            "SELECT book_id FROM book_sections WHERE id = ?1",
+            params![section_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match owner.as_deref() {
+        Some(b) if b == book_id => Ok(()),
+        Some(_) => Err(AppError::validation(format!(
+            "section {section_id} belongs to a different book"
+        ))),
+        None => Err(AppError::not_found("section", Some(section_id.to_string()))),
+    }
 }
 
 #[tauri::command]
@@ -64,7 +107,7 @@ pub fn cmd_restart_current_section(
     section_id: String,
     state: State<DbState>,
 ) -> Result<(), AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     conn.execute(
         "DELETE FROM section_progress WHERE book_id = ?1 AND section_id = ?2",
         params![book_id, section_id],
@@ -79,7 +122,7 @@ pub fn cmd_start_session(
     start_locator: Option<String>,
     state: State<DbState>,
 ) -> Result<ReadingSession, AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     start_session_on(
         &conn,
         &book_id,
@@ -111,7 +154,9 @@ fn owning_plan_id_for_book(conn: &Connection, book_id: &str) -> rusqlite::Result
     }
 }
 
-fn start_session_on(
+/// Pub for tests (the no-unsolicited-AI integration test starts a real session
+/// through the same path the command uses).
+pub fn start_session_on(
     conn: &Connection,
     book_id: &str,
     section_id: Option<&str>,
@@ -155,6 +200,16 @@ fn start_session_on(
     Ok(stmt.query_row(params![id], session_from_row)?)
 }
 
+/// Typed result of a session end (DATA-005): the durable end transaction and
+/// the Markdown session export are SEPARATE facts. `export.ok == false` means
+/// the session IS ended and safe in the database while the Sessions/*.md file
+/// needs attention — never a conflated single success.
+#[derive(Debug, serde::Serialize)]
+pub struct SessionEnd {
+    pub session: ReadingSession,
+    pub export: export::ExportOutcome,
+}
+
 #[tauri::command]
 pub fn cmd_end_session(
     session_id: String,
@@ -163,57 +218,90 @@ pub fn cmd_end_session(
     completed_section_ids: Option<Vec<String>>,
     summary_sentence: Option<String>,
     state: State<DbState>,
-    app: tauri::AppHandle,
-) -> Result<ReadingSession, AppError> {
-    let conn = state.0.lock()?;
+) -> Result<SessionEnd, AppError> {
+    let conn = state.lock()?;
+    end_session_impl(
+        &conn,
+        &session_id,
+        end_locator,
+        minutes,
+        completed_section_ids,
+        summary_sentence,
+    )
+}
+
+/// `cmd_end_session`'s actual body, extracted so tests can drive it against an
+/// isolated DB — including the no-unsolicited-AI test (PRIV-001: ending a
+/// session must never spawn AI work of any kind).
+///
+/// DATA-005 contract:
+/// - Everything is VALIDATED before anything mutates: the session must exist,
+///   every completed section must belong to the session's book (a cross-book id
+///   changes nothing), and the end locator must parse (4a: loudly).
+/// - Session end, section completion, position advance, and plan completion
+///   commit in ONE transaction — an error rolls the whole end back and surfaces,
+///   so the UI can keep the reader's work and offer a retry.
+/// - A repeated end is IDEMPOTENT: the first end's row values win; a repeat
+///   only re-attempts the (idempotent) Markdown session export, which is also
+///   the retry path when the first export failed.
+pub fn end_session_impl(
+    conn: &Connection,
+    session_id: &str,
+    end_locator: Option<String>,
+    minutes: Option<i64>,
+    completed_section_ids: Option<Vec<String>>,
+    summary_sentence: Option<String>,
+) -> Result<SessionEnd, AppError> {
+    use rusqlite::OptionalExtension;
     let now = Utc::now().to_rfc3339();
     let completed: Vec<String> = completed_section_ids.unwrap_or_default();
-    let touched_any = !completed.is_empty();
-    conn.execute(
-        "UPDATE reading_sessions SET ended_at = ?1, end_locator = ?2, minutes = ?3, completed_assignment = ?4
-         WHERE id = ?5",
-        params![now, end_locator, minutes, if touched_any { 1 } else { 0 }, session_id],
-    )?;
 
+    // ── Validate BEFORE mutating ──
+    let row: Option<(String, bool)> = conn
+        .query_row(
+            "SELECT book_id, ended_at IS NOT NULL FROM reading_sessions WHERE id = ?1",
+            params![session_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((book_id, already_ended)) = row else {
+        return Err(AppError::not_found("session", Some(session_id.to_string())));
+    };
     for sec_id in &completed {
-        let book_id: Option<String> = conn
-            .query_row(
-                "SELECT book_id FROM book_sections WHERE id = ?1",
-                params![sec_id],
-                |r| r.get(0),
-            )
-            .ok();
-        if let Some(book_id) = book_id {
-            conn.execute(
+        require_section_owned_by(conn, sec_id, &book_id)?;
+    }
+    let advance_to: Option<i64> = match end_locator.as_deref() {
+        Some(l) => Some(parse_reading_offset(l)?),
+        None => None,
+    };
+
+    if !already_ended {
+        // ── One transaction: end + completion + position + plan state ──
+        let sections = list_sections(conn, &book_id)?;
+        let touched_any = !completed.is_empty();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE reading_sessions SET ended_at = ?1, end_locator = ?2, minutes = ?3, completed_assignment = ?4
+             WHERE id = ?5",
+            params![now, end_locator, minutes, if touched_any { 1 } else { 0 }, session_id],
+        )?;
+        for sec_id in &completed {
+            tx.execute(
                 "INSERT INTO section_progress (book_id, section_id, completed_at, last_locator)
                  VALUES (?1, ?2, ?3, ?4)
                  ON CONFLICT(book_id, section_id) DO UPDATE SET completed_at = excluded.completed_at, last_locator = excluded.last_locator",
                 params![book_id, sec_id, now, end_locator],
             )?;
         }
-    }
-
-    // Advance the durable, position-based progress to where the session ended, so
-    // tomorrow's Today resumes at the next sitting. `end_locator` is a global offset.
-    // 4a: a non-numeric end_locator is logged LOUDLY by parse_reading_offset (not a
-    // silent skip); the advance is skipped but session-end must still complete, so we
-    // do not propagate here (unlike cmd_save_section_progress).
-    if let Some(global) = end_locator
-        .as_deref()
-        .and_then(|l| parse_reading_offset(l).ok())
-    {
-        if let Ok(book_id) = conn.query_row(
-            "SELECT book_id FROM reading_sessions WHERE id = ?1",
-            params![session_id],
-            |r| r.get::<_, String>(0),
-        ) {
-            let sections = list_sections(&conn, &book_id)?;
-            let _ = sittings::record_progress(&conn, &book_id, &sections, global, &now);
-            // Fire-and-forget: prefetch the NEXT sitting's phrase (Stage 3,
-            // docs/PHRASES_API.md timing). Spawned, never awaited — the recap
-            // UI cannot wait on this even by accident.
-            crate::phrases::spawn_next_phrase(&app, &conn, &book_id, &sections, global);
+        // Advance the durable, position-based progress to where the session
+        // ended, so tomorrow's Today resumes at the next sitting. A failure
+        // here rolls the WHOLE end back — never a silently lost position.
+        if let Some(global) = advance_to {
+            sittings::record_progress(&tx, &book_id, &sections, global, &now)?;
         }
+        // If every assignable section is now complete, mark the plan completed.
+        complete_plan_if_book_done(&tx, &book_id)?;
+        tx.commit()?;
     }
 
     let mut stmt = conn.prepare(
@@ -222,10 +310,9 @@ pub fn cmd_end_session(
     )?;
     let session = stmt.query_row(params![session_id], session_from_row)?;
 
-    // If every assignable section is now complete, mark the plan completed.
-    complete_plan_if_book_done(&conn, &session.book_id);
-
-    if let Ok(Some(book)) = (|| -> rusqlite::Result<Option<Book>> {
+    // The Markdown session export rides AFTER the durable commit and reports a
+    // TYPED outcome (DATA-004/005) — the reader's sitting is safe either way.
+    let book: Option<Book> = (|| -> rusqlite::Result<Option<Book>> {
         let mut s = conn.prepare(
             "SELECT id, title, author, source_type, source_path, source_sha256, created_at, last_opened_at FROM books WHERE id = ?1",
         )?;
@@ -235,33 +322,39 @@ pub fn cmd_end_session(
         } else {
             Ok(None)
         }
-    })() {
-        if let Ok(p) = export::export_session(
-            &export::root_for(&conn),
+    })()
+    .unwrap_or(None);
+    let export = match book {
+        Some(book) => match export::export_session(
+            &export::root_for(conn),
             &book,
             &session,
             summary_sentence.as_deref(),
         ) {
-            log::log_export("session", &p.to_string_lossy());
-        }
-    }
-    Ok(session)
+            Ok(p) => {
+                log::log_export("session", &p.to_string_lossy());
+                export::ExportOutcome::exported()
+            }
+            Err(e) => export::ExportOutcome::failed(&e),
+        },
+        None => export::ExportOutcome::exported(), // book gone: nothing to export
+    };
+    Ok(SessionEnd { session, export })
 }
 
 /// When every assignable section of `book_id` is complete, mark its plan
-/// `completed`. Best-effort — a failure here must never fail the session end.
-fn complete_plan_if_book_done(conn: &Connection, book_id: &str) {
-    let (assignable_total, assignable_done): (i64, i64) = conn
-        .query_row(
-            "SELECT
+/// `completed`. Runs inside the session-end transaction (DATA-005): a failure
+/// rolls the whole end back rather than leaving plan state out of step.
+fn complete_plan_if_book_done(conn: &Connection, book_id: &str) -> rusqlite::Result<()> {
+    let (assignable_total, assignable_done): (i64, i64) = conn.query_row(
+        "SELECT
                (SELECT COUNT(*) FROM book_sections WHERE book_id = ?1 AND assignable = 1),
                (SELECT COUNT(*) FROM book_sections bs
                   JOIN section_progress sp ON sp.book_id = bs.book_id AND sp.section_id = bs.id
                   WHERE bs.book_id = ?1 AND bs.assignable = 1 AND sp.completed_at IS NOT NULL)",
-            params![book_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap_or((0, 0));
+        params![book_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
     if assignable_total > 0 && assignable_done >= assignable_total {
         // Lifecycle filter (CORE-1022): only the live plan may flip — archived /
         // superseded / let-go plans are "earlier attempts" history, not today's.
@@ -270,9 +363,9 @@ fn complete_plan_if_book_done(conn: &Connection, book_id: &str) {
              WHERE book_id = ?1 AND status != 'completed'
                AND lifecycle = 'active' AND deleted_at IS NULL",
             params![book_id],
-        )
-        .ok();
+        )?;
     }
+    Ok(())
 }
 
 /// Close sessions a previous run left open (P0 quit-flush safety net). The primary
@@ -476,7 +569,7 @@ mod tests {
         )
         .unwrap();
 
-        complete_plan_if_book_done(&conn, "b1");
+        complete_plan_if_book_done(&conn, "b1").unwrap();
 
         let status = |id: &str| -> String {
             conn.query_row(
@@ -594,5 +687,259 @@ mod tests {
         assert_eq!(mins3, Some(30));
         // Idempotent: a second sweep finds nothing.
         assert_eq!(sweep_orphan_sessions(&conn).unwrap(), 0);
+    }
+
+    // ── DATA-005: validated, transactional, idempotent session end ──
+
+    /// Two books with one section each, a live plan on b1, and an OPEN session
+    /// on b1. Returns the session id.
+    fn end_session_fixture(conn: &Connection) -> String {
+        conn.execute_batch(
+            "INSERT INTO books (id,title,author,source_type,source_path,source_sha256,created_at,last_opened_at)
+               VALUES ('b1','T',NULL,'txt','/x','sha1','2026-01-01',NULL),
+                      ('b2','U',NULL,'txt','/y','sha2','2026-01-01',NULL);
+             INSERT INTO reading_plans (id,book_id,start_date,status,lifecycle)
+               VALUES ('p_live','b1','2026-01-01','active','active');
+             INSERT INTO book_sections (id,book_id,label,start_locator,end_locator,estimated_units,sort_order,assignable)
+               VALUES ('sec1','b1','S1','0','1000',1000,0,1),
+                      ('sec2','b2','S2','0','1000',1000,0,1);",
+        )
+        .unwrap();
+        start_session_on(conn, "b1", Some("sec1"), Some("0"))
+            .unwrap()
+            .id
+    }
+
+    fn session_open(conn: &Connection, id: &str) -> bool {
+        conn.query_row(
+            "SELECT ended_at IS NULL FROM reading_sessions WHERE id = ?1",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn count(conn: &Connection, sql: &str) -> i64 {
+        conn.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    /// A completed-section id from ANOTHER book must reject BEFORE any
+    /// mutation: the session stays open and no progress row appears anywhere.
+    #[test]
+    fn end_session_rejects_cross_book_section_and_changes_nothing() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        let sid = end_session_fixture(&conn);
+
+        let err = end_session_impl(
+            &conn,
+            &sid,
+            Some("500".into()),
+            Some(10),
+            Some(vec!["sec2".into()]), // belongs to b2, not the session's b1
+            None,
+        )
+        .expect_err("cross-book section id must reject");
+        assert!(format!("{err}").contains("different book"), "{err}");
+        assert!(session_open(&conn, &sid), "the session must stay open");
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM section_progress"),
+            0,
+            "no progress row may appear for either book"
+        );
+        // An unknown section id is a not_found, equally before any change.
+        let err = end_session_impl(&conn, &sid, None, None, Some(vec!["ghost".into()]), None)
+            .expect_err("unknown section id must reject");
+        assert!(format!("{err}").to_lowercase().contains("not"), "{err}");
+        assert!(session_open(&conn, &sid));
+    }
+
+    /// An invalid end locator (the 4a "char:N" case law) rejects LOUDLY before
+    /// any mutation — the session stays open, nothing half-applies.
+    #[test]
+    fn end_session_rejects_invalid_locator_before_any_mutation() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        let sid = end_session_fixture(&conn);
+
+        end_session_impl(
+            &conn,
+            &sid,
+            Some("char:500".into()),
+            Some(10),
+            Some(vec!["sec1".into()]),
+            None,
+        )
+        .expect_err("a non-bare-digit locator must reject the whole end");
+        assert!(session_open(&conn, &sid), "the session must stay open");
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM section_progress"), 0);
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM reading_position"), 0);
+    }
+
+    /// Ending a session that doesn't exist is a not_found, never a blind UPDATE.
+    #[test]
+    fn end_session_unknown_session_is_not_found() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        end_session_fixture(&conn);
+        let err = end_session_impl(&conn, "sess_ghost", Some("10".into()), None, None, None)
+            .expect_err("unknown session must reject");
+        assert!(format!("{err}").to_lowercase().contains("not"), "{err}");
+    }
+
+    /// An injected position-save failure (reading_position table renamed away)
+    /// must roll back the WHOLE end — session open, no completion, plan intact —
+    /// and surface the error instead of discarding it.
+    #[test]
+    fn end_session_progress_failure_rolls_back_the_whole_end() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        let sid = end_session_fixture(&conn);
+        conn.execute_batch("ALTER TABLE reading_position RENAME TO reading_position_broken")
+            .unwrap();
+
+        let result = end_session_impl(
+            &conn,
+            &sid,
+            Some("1000".into()),
+            Some(25),
+            Some(vec!["sec1".into()]),
+            None,
+        );
+
+        assert!(result.is_err(), "a failed position save must surface");
+        assert!(session_open(&conn, &sid), "rolled back: session still open");
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM section_progress"),
+            0,
+            "rolled back: the section completion is gone too"
+        );
+        let plan_status: String = conn
+            .query_row(
+                "SELECT status FROM reading_plans WHERE id='p_live'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(plan_status, "active", "rolled back: plan state untouched");
+    }
+
+    /// A repeated end is IDEMPOTENT: the first end's values win; the repeat
+    /// re-attempts only the Markdown export (the retry path) and returns the
+    /// durable session unchanged. Exactly one durable mutation.
+    #[test]
+    fn end_session_repeated_end_is_idempotent() {
+        let _g = crate::paths::lock_env_for_test();
+        let export_dir = std::env::temp_dir().join(format!("tl-end-idem-{}", std::process::id()));
+        std::fs::remove_dir_all(&export_dir).ok();
+        std::fs::create_dir_all(&export_dir).unwrap();
+        unsafe {
+            std::env::set_var("THROUGHLINE_EXPORT_DIR", &export_dir);
+        }
+
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        let sid = end_session_fixture(&conn);
+
+        let first = end_session_impl(
+            &conn,
+            &sid,
+            Some("1000".into()),
+            Some(25),
+            Some(vec!["sec1".into()]),
+            Some("takeaway".into()),
+        )
+        .expect("first end");
+        assert!(first.export.ok, "clean dir → session export ok");
+
+        let second = end_session_impl(
+            &conn,
+            &sid,
+            Some("2000".into()), // different args must NOT re-mutate
+            Some(99),
+            None,
+            Some("takeaway".into()),
+        )
+        .expect("repeated end is not an error");
+
+        unsafe {
+            std::env::remove_var("THROUGHLINE_EXPORT_DIR");
+        }
+        std::fs::remove_dir_all(&export_dir).ok();
+
+        assert_eq!(second.session.minutes, Some(25), "first end's values win");
+        assert_eq!(
+            second.session.end_locator.as_deref(),
+            Some("1000"),
+            "first end's locator wins"
+        );
+        assert_eq!(second.session.ended_at, first.session.ended_at);
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM reading_sessions"),
+            1,
+            "exactly one session row"
+        );
+    }
+
+    /// A failed session export is TYPED: the end itself is durable, the outcome
+    /// reports the export failure, and repeating the end retries the export.
+    #[cfg(unix)]
+    #[test]
+    fn end_session_export_failure_is_typed_and_end_stays_durable() {
+        use std::os::unix::fs::PermissionsExt;
+        let _g = crate::paths::lock_env_for_test();
+        let export_dir =
+            std::env::temp_dir().join(format!("tl-end-expfail-{}", std::process::id()));
+        std::fs::remove_dir_all(&export_dir).ok();
+        let sessions_dir = export_dir.join("Sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        unsafe {
+            std::env::set_var("THROUGHLINE_EXPORT_DIR", &export_dir);
+        }
+
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        let sid = end_session_fixture(&conn);
+
+        std::fs::set_permissions(&sessions_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let perms_enforced = std::fs::write(sessions_dir.join(".probe"), b"x").is_err();
+        let first = if perms_enforced {
+            Some(end_session_impl(
+                &conn,
+                &sid,
+                Some("1000".into()),
+                Some(25),
+                None,
+                None,
+            ))
+        } else {
+            None
+        };
+        std::fs::set_permissions(&sessions_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let Some(first) = first else {
+            unsafe {
+                std::env::remove_var("THROUGHLINE_EXPORT_DIR");
+            }
+            std::fs::remove_dir_all(&export_dir).ok();
+            eprintln!("skipping export-failure assertion: permissions not enforced (root?)");
+            return;
+        };
+        let first = first.expect("the end itself must succeed");
+        assert!(!first.export.ok, "the export failure must be reported");
+        assert!(
+            !session_open(&conn, &sid),
+            "the session end is durable despite the export failure"
+        );
+
+        // Retry path: repeating the end re-attempts the export and now succeeds.
+        let retry = end_session_impl(&conn, &sid, Some("1000".into()), Some(25), None, None)
+            .expect("repeat end");
+        assert!(retry.export.ok, "the retried export succeeds");
+
+        unsafe {
+            std::env::remove_var("THROUGHLINE_EXPORT_DIR");
+        }
+        std::fs::remove_dir_all(&export_dir).ok();
     }
 }

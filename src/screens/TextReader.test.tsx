@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import TextReader, { clampToolbarPosition, clampPanelWidth, panelDragOutcome, DEFAULT_PANEL_WIDTH, splitParagraphs, firstProseDropCapOffset, byteToU16, u16ToByte } from "./TextReader";
 import type { TodayCard, BookSection, Note } from "../types";
+import { setDraftGeneration } from "../noteDrafts";
 import { invoke } from "@tauri-apps/api/core";
 
 // Channel is a no-op class here — the Deep Study guard test only needs
@@ -14,7 +16,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 // The reader persists panel open/width to localStorage; clear it before each
 // test so the companion panel starts at its CLOSED default (tests that need it
 // open set tl.panelOpen="true" explicitly).
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  // Each test opts into a KNOWN generation explicitly; the default is the
+  // unknown state (R6-4: applies nothing, destroys nothing).
+  setDraftGeneration(null);
+});
 
 const section: BookSection = {
   id: "s1",
@@ -62,13 +69,30 @@ function note(over: Partial<Note>): Note {
 // "quick" starts at index 10 of this section text.
 const TEXT = "0123456789quick brown fox jumps over the lazy dog.";
 
-function mockBackend(notes: Note[]) {
+// The typed IPC shapes (DATA-004/005): durable mutation + export outcome.
+const EXPORT_OK = { ok: true, message: null };
+function sessionEndOk() {
+  return {
+    session: { id: "sess1", book_id: "b1", started_at: "", ended_at: "2026-05-29T10:30:00Z", start_locator: "char:0", end_locator: null, minutes: 25, completed_assignment: true, subjective_difficulty: null },
+    export: EXPORT_OK,
+  };
+}
+function savedNoteOk() {
+  return { note: note({ id: "saved1" }), export: EXPORT_OK };
+}
+
+function mockBackend(notes: Note[], overrides: Record<string, () => Promise<unknown>> = {}) {
   vi.mocked(invoke).mockImplementation((cmd: string) => {
+    if (overrides[cmd]) return overrides[cmd]();
     switch (cmd) {
       case "cmd_assignable_sections": return Promise.resolve([section]);
       case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
       case "cmd_read_section_text": return Promise.resolve(TEXT);
       case "cmd_list_notes": return Promise.resolve(notes);
+      case "cmd_end_session": return Promise.resolve(sessionEndOk());
+      case "cmd_save_note": return Promise.resolve(savedNoteOk());
+      case "cmd_update_note": return Promise.resolve(savedNoteOk());
+      case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
       default: return Promise.resolve(undefined);
     }
   });
@@ -136,6 +160,10 @@ describe("TextReader — part-divider page", () => {
         case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
         case "cmd_read_section_text": return Promise.resolve(t);
         case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        case "cmd_save_note": return Promise.resolve(savedNoteOk());
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
         default: return Promise.resolve(undefined);
       }
     });
@@ -173,19 +201,54 @@ describe("TextReader margin note delete — Undo (FT-32)", () => {
     // (aria-label "Delete note") — kept the same label.
     fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
     fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    // DATA-005: the durable stage is AWAITED before the card hides.
+    await act(async () => {});
 
     // No backend delete yet, and a removal notice with an Undo button is shown.
     expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(false);
+    // TRUST-029: the CONFIRMED removal is staged DURABLY at once, so a quit
+    // inside the Undo window still removes it at the next launch.
+    expect(
+      vi.mocked(invoke).mock.calls.some(
+        (c) => c[0] === "cmd_stage_note_delete" && (c[1] as { noteId: string }).noteId === "n1",
+      ),
+    ).toBe(true);
     const status = screen.getByRole("status");
     expect(status).toBeInTheDocument();
     const undo = screen.getByRole("button", { name: /Undo/i });
 
-    // Undo cancels the pending delete; let the would-be timer elapse anyway.
+    // Undo cancels the pending delete AND unstages the durable ledger entry;
+    // R4: the unstage is AWAITED — the card returns only after it resolves.
     fireEvent.click(undo);
+    await act(async () => {});
+    expect(
+      vi.mocked(invoke).mock.calls.some(
+        (c) => c[0] === "cmd_unstage_note_delete" && (c[1] as { noteId: string }).noteId === "n1",
+      ),
+    ).toBe(true);
     act(() => { vi.advanceTimersByTime(7000); });
     expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(false);
     // The card returns.
     expect(container.querySelector("mark.tl-hl")).not.toBeNull();
+  });
+
+  it("quitting (unmount) inside the Undo window does NOT unstage — the confirmed removal stays staged", async () => {
+    mockBackend([note({ note_type: "Highlight", body: "" })]);
+    const { container, unmount } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
+
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    expect(
+      vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_stage_note_delete"),
+    ).toBe(true);
+
+    // "Quit" mid-window: unmount without Undo. No unstage may fire — the
+    // durable stage is what the launch sweep commits on relaunch.
+    unmount();
+    expect(
+      vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_unstage_note_delete"),
+    ).toBe(false);
   });
 
   it("commits exactly one cmd_delete_note after the 6s timer lapses", async () => {
@@ -195,12 +258,356 @@ describe("TextReader margin note delete — Undo (FT-32)", () => {
 
     fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
     fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    await act(async () => {}); // staging resolves; the 6s window arms
     expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(false);
 
     await act(async () => { vi.advanceTimersByTime(6000); });
     const deletes = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "cmd_delete_note");
     expect(deletes.length).toBe(1);
     expect((deletes[0][1] as { noteId: string }).noteId).toBe("n1");
+  });
+
+  // ── DATA-005 R3: staging is awaited and failure-visible; the retained
+  // draft survives Undo and dies only with the committed delete ──
+
+  it("the card does NOT hide (and no Undo window opens) while the stage call is still in flight", async () => {
+    let resolveStage: ((v: unknown) => void) | null = null;
+    mockBackend([note({ note_type: "Highlight", body: "" })], {
+      cmd_stage_note_delete: () => new Promise((res) => { resolveStage = res; }),
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
+
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    await act(async () => {});
+
+    // Stage unresolved → the highlight is still there, no toast, and even a
+    // full Undo-window's worth of time commits nothing.
+    expect(container.querySelector("mark.tl-hl")).not.toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    await act(async () => { vi.advanceTimersByTime(7000); });
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(false);
+
+    // Staging confirms → NOW the card hides and the Undo window opens.
+    await act(async () => { resolveStage!(undefined); });
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(container.querySelector("mark.tl-hl")).toBeNull();
+  });
+
+  it("a FAILED stage keeps the card, reports the failure, and never deletes", async () => {
+    mockBackend([note({ note_type: "Highlight", body: "" })], {
+      cmd_stage_note_delete: () => Promise.reject({ message: "database is locked" }),
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
+
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    await act(async () => {});
+
+    // Failure-visible: the note is still in the margin and the reader is told.
+    expect(container.querySelector("mark.tl-hl")).not.toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toMatch(/couldn't be removed/i);
+    await act(async () => { vi.advanceTimersByTime(7000); });
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(false);
+  });
+
+  it("Undo is AWAITED: the note stays hidden and the toast stays up until the unstage resolves (R4)", async () => {
+    let resolveUnstage: ((v: unknown) => void) | null = null;
+    mockBackend([note({ note_type: "Highlight", body: "" })], {
+      cmd_unstage_note_delete: () => new Promise((res) => { resolveUnstage = res; }),
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
+
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: /Undo/i }));
+    await act(async () => {});
+
+    // Unstage unresolved → nothing is unhidden and the toast persists: a
+    // premature "undone" here would still be deleted by the relaunch sweep.
+    expect(container.querySelector("mark.tl-hl")).toBeNull();
+    expect(screen.getByRole("status")).toBeInTheDocument();
+
+    await act(async () => { resolveUnstage!(undefined); });
+    expect(container.querySelector("mark.tl-hl")).not.toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("a REJECTED unstage keeps the toast with an announced Retry; the retry undoes for real (R4)", async () => {
+    let fail = true;
+    mockBackend([note({ note_type: "Highlight", body: "" })], {
+      cmd_unstage_note_delete: () =>
+        fail ? Promise.reject({ message: "database is locked" }) : Promise.resolve(undefined),
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
+
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: /Undo/i }));
+    await act(async () => {});
+
+    // Failure-visible: still hidden (the staged deletion stands — a relaunch
+    // would commit it), announced, and retryable in place.
+    expect(container.querySelector("mark.tl-hl")).toBeNull();
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toMatch(/Couldn't undo/i);
+
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: /Retry undo/i }));
+    await act(async () => {});
+    expect(container.querySelector("mark.tl-hl")).not.toBeNull();
+    expect(
+      vi.mocked(invoke).mock.calls.filter((c) => c[0] === "cmd_unstage_note_delete"),
+    ).toHaveLength(2);
+  });
+
+  it("Undo refreshes the rows BEFORE unhiding, so a flushed pending edit is what remounts (R5)", async () => {
+    // The hidden card's unmount flush SAVES a pending edit; the parent's rows
+    // are stale. Undo must refresh before the card remounts, or a later
+    // autosave from the stale body would overwrite the flushed words.
+    let flushedBody: string | null = null;
+    const baseNote = note({ note_type: "MarginNote", body: "original words" });
+    mockBackend([baseNote], {
+      cmd_update_note: () => {
+        flushedBody = "flushed newer words";
+        return Promise.resolve({
+          note: { ...baseNote, body: flushedBody, updated_at: "2026-05-29T11:00:00Z" },
+          export: { ok: true, message: null },
+        });
+      },
+      cmd_list_notes: () =>
+        Promise.resolve([
+          flushedBody == null
+            ? baseNote
+            : { ...baseNote, body: flushedBody, updated_at: "2026-05-29T11:00:00Z" },
+        ]),
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    // Surface the card from its margin marker first.
+    await vi.waitFor(() => expect(container.querySelector(".tl-kmark")).not.toBeNull());
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    await vi.waitFor(() => expect(screen.getByDisplayValue("original words")).toBeInTheDocument());
+
+    // Type a pending edit (debounce armed, not yet saved), then delete: the
+    // card unmounts and the flush saves the newer words.
+    fireEvent.change(screen.getByDisplayValue("original words"), {
+      target: { value: "flushed newer words" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    await act(async () => {});
+
+    // Undo: the remounted card must show the FLUSHED body, not stale state.
+    fireEvent.click(screen.getByRole("button", { name: /Undo/i }));
+    await act(async () => {});
+    await vi.waitFor(() => expect(container.querySelector(".tl-kmark")).not.toBeNull());
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    await vi.waitFor(() =>
+      expect(screen.getByDisplayValue("flushed newer words")).toBeInTheDocument(),
+    );
+  });
+
+  it("a FAILED refresh after the unstage keeps the card HIDDEN with a retryable error — stale state never remounts (R6-6)", async () => {
+    // Same unmount-flush scenario, but the row reload after the successful
+    // unstage FAILS. Unhiding would remount the stale parent body and a later
+    // autosave would write it back over the flushed words — the card must
+    // stay hidden and the toast must become the retry.
+    let flushedBody: string | null = null;
+    let listFailsOnce = false;
+    const baseNote = note({ note_type: "MarginNote", body: "original words" });
+    mockBackend([baseNote], {
+      cmd_update_note: () => {
+        flushedBody = "flushed newer words";
+        return Promise.resolve({
+          note: { ...baseNote, body: flushedBody, updated_at: "2026-05-29T11:00:00Z" },
+          export: { ok: true, message: null },
+        });
+      },
+      cmd_list_notes: () => {
+        if (listFailsOnce) {
+          listFailsOnce = false;
+          return Promise.reject({ message: "database is locked" });
+        }
+        return Promise.resolve([
+          flushedBody == null
+            ? baseNote
+            : { ...baseNote, body: flushedBody, updated_at: "2026-05-29T11:00:00Z" },
+        ]);
+      },
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector(".tl-kmark")).not.toBeNull());
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    await vi.waitFor(() => expect(screen.getByDisplayValue("original words")).toBeInTheDocument());
+    fireEvent.change(screen.getByDisplayValue("original words"), {
+      target: { value: "flushed newer words" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    await act(async () => {});
+
+    // Undo: the unstage succeeds, the refresh fails.
+    listFailsOnce = true;
+    fireEvent.click(screen.getByRole("button", { name: /Undo/i }));
+    await act(async () => {});
+
+    // The card is still hidden (no marker), and the toast says what is left
+    // to finish — with the retry.
+    const alert = await vi.waitFor(() => screen.getByRole("alert"));
+    expect(alert.textContent).toMatch(/couldn't be reloaded/i);
+    expect(container.querySelector(".tl-kmark")).toBeNull();
+
+    // Retry: the (idempotent) unstage re-runs, the refresh succeeds, and the
+    // remounted card shows the FLUSHED body.
+    fireEvent.click(screen.getByRole("button", { name: /Retry undo/i }));
+    await act(async () => {});
+    await vi.waitFor(() => expect(container.querySelector(".tl-kmark")).not.toBeNull());
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    await vi.waitFor(() =>
+      expect(screen.getByDisplayValue("flushed newer words")).toBeInTheDocument(),
+    );
+  });
+
+  it("a flush that COMMITS AFTER Undo's refresh still surfaces the flushed words, and a later edit extends them (R7-5)", async () => {
+    // The exact ordering race: unstage succeeds → the row list is read (still
+    // the OLD row) → the unmount flush commits → its cleanup runs → the card
+    // remounts against the STALE row. The flush's rebased draft is what
+    // carries the newer words into that mount; without it the remount shows
+    // stale state whose next autosave would overwrite the flushed words.
+    setDraftGeneration("gen_reader");
+    let resolveFlush: ((v: unknown) => void) | null = null;
+    const baseNote = note({ note_type: "MarginNote", body: "original words" });
+    mockBackend([baseNote], {
+      cmd_update_note: () =>
+        new Promise((res) => {
+          resolveFlush = res;
+        }),
+      // The list NEVER catches up in this test — worst case.
+      cmd_list_notes: () => Promise.resolve([baseNote]),
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector(".tl-kmark")).not.toBeNull());
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    await vi.waitFor(() => expect(screen.getByDisplayValue("original words")).toBeInTheDocument());
+    fireEvent.change(screen.getByDisplayValue("original words"), {
+      target: { value: "flushed newer words" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    await act(async () => {});
+
+    // Undo: unstage succeeds and the refresh reads the STALE row while the
+    // flush is still in flight.
+    fireEvent.click(screen.getByRole("button", { name: /Undo/i }));
+    await act(async () => {});
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("status") ?? screen.queryByRole("alert")).toBeNull(),
+    );
+
+    // NOW the flush commits — after the refresh — and its cleanup rebases
+    // the draft onto the flushed row.
+    await act(async () => {
+      resolveFlush!({
+        note: { ...baseNote, body: "flushed newer words", updated_at: "2026-05-29T11:00:00Z" },
+        export: { ok: true, message: null },
+      });
+    });
+
+    // The remounted card shows the FLUSHED words despite the stale row…
+    await vi.waitFor(() => expect(container.querySelector(".tl-kmark")).not.toBeNull());
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    await vi.waitFor(() =>
+      expect(screen.getByDisplayValue("flushed newer words")).toBeInTheDocument(),
+    );
+
+    // …and a later edit EXTENDS them: the next durable save carries the
+    // flushed words plus the edit, never the stale row body.
+    fireEvent.change(screen.getByDisplayValue("flushed newer words"), {
+      target: { value: "flushed newer words plus more" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(800);
+    });
+    await vi.waitFor(() => {
+      const last = vi
+        .mocked(invoke)
+        .mock.calls.filter((c) => c[0] === "cmd_update_note")
+        .pop();
+      expect((last?.[1] as { body: string } | undefined)?.body).toBe(
+        "flushed newer words plus more",
+      );
+    });
+  });
+
+  it("a FAILED delete's Try again retries the DELETION — never cmd_export_library (R5)", async () => {
+    let deleteFails = true;
+    mockBackend([note({ note_type: "Highlight", body: "" })], {
+      cmd_delete_note: () =>
+        deleteFails
+          ? Promise.reject({ message: "database is locked" })
+          : Promise.resolve({ ok: true, message: null }),
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
+
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    await act(async () => {});
+    await act(async () => { vi.advanceTimersByTime(6000); }); // the commit fails
+
+    // Its own toast — an announced removal failure, still scheduled.
+    const alert = await vi.waitFor(() => screen.getByRole("alert"));
+    expect(alert.textContent).toMatch(/couldn't be removed[\s\S]*scheduled for removal/i);
+
+    // Try again retries the DELETION itself and never touches the library export.
+    deleteFails = false;
+    fireEvent.click(screen.getByRole("button", { name: /Try again/i }));
+    await act(async () => {});
+    expect(
+      vi.mocked(invoke).mock.calls.filter((c) => c[0] === "cmd_export_library"),
+    ).toHaveLength(0);
+    expect(
+      vi.mocked(invoke).mock.calls.filter((c) => c[0] === "cmd_delete_note"),
+    ).toHaveLength(2);
+    await vi.waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("the retained draft SURVIVES Undo and is cleared only by the committed delete", async () => {
+    localStorage.setItem(
+      "tl.noteDraft.n1",
+      JSON.stringify({ body: "half-typed thought", base: "2026-05-29T10:00:00Z" }),
+    );
+    // Hiding the card unmounts it, which ATTEMPTS a best-effort flush of the
+    // draft into the row (fine: the staged row still exists, and Undo would
+    // bring the words back from the DB). Here that flush REJECTS — the exact
+    // case where the retained draft is the only copy of the reader's words.
+    mockBackend([note({ note_type: "Highlight", body: "" })], {
+      cmd_update_note: () => Promise.reject({ message: "database is locked" }),
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await vi.waitFor(() => expect(container.querySelector("mark.tl-hl")).not.toBeNull());
+
+    // X → Undo: the draft must come back with the card.
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: /Undo/i }));
+    await act(async () => {}); // R4: undo awaits the durable unstage
+    expect(localStorage.getItem("tl.noteDraft.n1")).not.toBeNull();
+
+    // X again, let the 6s window lapse: the delete commits and takes the draft
+    // with it (a stale draft could otherwise resurrect words onto a
+    // restored-from-backup note with the same id).
+    fireEvent.click(container.querySelector(".tl-kmark") as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
+    await act(async () => {});
+    await act(async () => { vi.advanceTimersByTime(6000); });
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === "cmd_delete_note")).toBe(true);
+    expect(localStorage.getItem("tl.noteDraft.n1")).toBeNull();
   });
 });
 
@@ -216,6 +623,10 @@ function mockTwoSections() {
       case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
       case "cmd_read_section_text": return Promise.resolve(TEXT);
       case "cmd_list_notes": return Promise.resolve([]);
+      case "cmd_end_session": return Promise.resolve(sessionEndOk());
+      case "cmd_save_note": return Promise.resolve(savedNoteOk());
+      case "cmd_update_note": return Promise.resolve(savedNoteOk());
+      case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
       default: return Promise.resolve(undefined);
     }
   });
@@ -575,6 +986,10 @@ describe("TextReader sitting-bounded session", () => {
         case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
         case "cmd_read_section_text": return Promise.resolve(MB_TEXT);
         case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        case "cmd_save_note": return Promise.resolve(savedNoteOk());
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
         default: return Promise.resolve(undefined);
       }
     });
@@ -595,6 +1010,10 @@ describe("TextReader sitting-bounded session", () => {
         case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
         case "cmd_read_section_text": return Promise.resolve(TEXT);
         case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        case "cmd_save_note": return Promise.resolve(savedNoteOk());
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
         default: return Promise.resolve(undefined);
       }
     });
@@ -630,6 +1049,10 @@ describe("TextReader sitting-bounded session", () => {
         case "cmd_read_section_text":
           return Promise.resolve((args as { sectionId: string }).sectionId === "s2" ? TEXT2 : TEXT);
         case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        case "cmd_save_note": return Promise.resolve(savedNoteOk());
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
         default: return Promise.resolve(undefined);
       }
     });
@@ -904,8 +1327,8 @@ describe("TextReader selection toolbar — Escape dismiss + a11y", () => {
     await selectInColumn(container);
     const toolbar = await screen.findByRole("toolbar", { name: /Selection actions/i });
     expect(toolbar).toBeInTheDocument();
-    // The Escape affordance is advertised to assistive tech.
-    expect(toolbar).toHaveAttribute("aria-keyshortcuts", "Escape");
+    // The Tab + Escape affordances are advertised to assistive tech (A11Y-010).
+    expect(toolbar).toHaveAttribute("aria-keyshortcuts", "Tab Escape");
 
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("toolbar", { name: /Selection actions/i })).toBeNull());
@@ -926,6 +1349,10 @@ describe("TextReader New-note modal — humanized position", () => {
         case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "320", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
         case "cmd_read_section_text": return Promise.resolve(LONG);
         case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        case "cmd_save_note": return Promise.resolve(savedNoteOk());
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
         default: return Promise.resolve(undefined);
       }
     });
@@ -959,6 +1386,9 @@ describe("TextReader New-note modal — save failure", () => {
         case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
         case "cmd_read_section_text": return Promise.resolve(TEXT);
         case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
         case "cmd_save_note": return Promise.reject({ kind: "Io", message: "Throughline can't save notes to this folder." });
         default: return Promise.resolve(undefined);
       }
@@ -998,6 +1428,10 @@ describe("TextReader failed section load (FT-33)", () => {
             ? Promise.reject({ message: "Throughline couldn't open this book's file." })
             : Promise.resolve(TEXT);
         case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        case "cmd_save_note": return Promise.resolve(savedNoteOk());
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
         default: return Promise.resolve(undefined);
       }
     });
@@ -1023,6 +1457,10 @@ describe("TextReader failed session start keeps the takeaway (FT-33)", () => {
         case "cmd_start_session": return Promise.reject({ message: "Throughline couldn't start this session." });
         case "cmd_read_section_text": return Promise.resolve(TEXT);
         case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        case "cmd_save_note": return Promise.resolve(savedNoteOk());
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
         default: return Promise.resolve(undefined);
       }
     });
@@ -1080,6 +1518,10 @@ describe("TextReader Deep Study — stale-section guard", () => {
         case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
         case "cmd_read_section_text": return textPromises[args.sectionId as string] ?? Promise.resolve("");
         case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        case "cmd_save_note": return Promise.resolve(savedNoteOk());
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
         case "cmd_get_settings": return Promise.resolve({ ai_provider: "local", ai_base_url: "http://localhost:1234/v1", ai_model: "m", margin_help: "deep_study" });
         case "cmd_test_ai_connection": return Promise.resolve({ reachable: true, first_model_id: "m", message: "ok" });
         case "cmd_ai_ask": return Promise.resolve({ ai_request_id: "ai_1", prompt_sent: "(hidden)", provider_host: "localhost" });
@@ -1143,6 +1585,10 @@ describe("TextReader reading-page redesign (structure rendering)", () => {
         case "cmd_read_section_text": return Promise.resolve(STRUCT_TEXT);
         case "cmd_read_section_structure": return Promise.resolve(ranges);
         case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        case "cmd_save_note": return Promise.resolve(savedNoteOk());
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
         default: return Promise.resolve(undefined);
       }
     });
@@ -1290,6 +1736,10 @@ describe("TextReader book typography (front-matter vocabulary)", () => {
         case "cmd_read_section_text": return Promise.resolve(TY_TEXT);
         case "cmd_read_section_structure": return Promise.resolve(TY_RANGES);
         case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        case "cmd_save_note": return Promise.resolve(savedNoteOk());
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
         default: return Promise.resolve(undefined);
       }
     });
@@ -1506,4 +1956,411 @@ describe("TextReader anchored tutor answer (CORE-1158)", () => {
     expect(container.querySelector(".tl-anchored.is-active")).not.toBeNull();
   });
 
+});
+
+// ── DATA-005: failure-honest mutations — reject each IPC and assert retained
+// work, no premature exit, one durable mutation after retry, and surfaced
+// progress failures. The backend counterpart (transactionality, cross-book
+// rejection) is pinned in src-tauri/src/commands/sessions.rs tests.
+describe("TextReader failure-honest mutations (DATA-005)", () => {
+  beforeEach(() => vi.mocked(invoke).mockReset());
+
+  function mockFor(overrides: Record<string, (args?: unknown) => Promise<unknown>>) {
+    vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
+      if (overrides[cmd]) return overrides[cmd](args);
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(TEXT);
+        case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        case "cmd_save_note": return Promise.resolve(savedNoteOk());
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_delete_note": return Promise.resolve(EXPORT_OK);
+        default: return Promise.resolve(undefined);
+      }
+    });
+  }
+
+  it("a rejected session end never exits silently: announced error, explicit Exit without saving, and a retry that ends exactly once more", async () => {
+    let endCalls = 0;
+    mockFor({
+      cmd_end_session: () => {
+        endCalls += 1;
+        return endCalls === 1
+          ? Promise.reject({ message: "database is locked" })
+          : Promise.resolve(sessionEndOk());
+      },
+    });
+    const onExit = vi.fn();
+    const { container } = render(<TextReader today={card()} onExit={onExit} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: /Today/ }));
+
+    // Announced, actionable, and the reader is NOT thrown out.
+    const sheet = await screen.findByRole("alertdialog");
+    expect(within(sheet).getByText(/couldn't be saved/i)).toBeInTheDocument();
+    expect(within(sheet).getByText(/database is locked/)).toBeInTheDocument();
+    expect(onExit).not.toHaveBeenCalled();
+    // "Exit without saving" exists ONLY here, after an explicit failure.
+    expect(within(sheet).getByRole("button", { name: /Exit without saving/i })).toBeInTheDocument();
+
+    fireEvent.click(within(sheet).getByRole("button", { name: /Try again/i }));
+    await waitFor(() => expect(onExit).toHaveBeenCalledTimes(1));
+    expect(endCalls).toBe(2);
+  });
+
+  it("a rejected takeaway save keeps the recap and the reader's words; the retry saves the note exactly once", async () => {
+    let saveCalls = 0;
+    mockFor({
+      cmd_save_note: () => {
+        saveCalls += 1;
+        return saveCalls === 1
+          ? Promise.reject({ message: "disk full" })
+          : Promise.resolve(savedNoteOk());
+      },
+    });
+    const onExit = vi.fn();
+    const { container } = render(<TextReader today={card()} onExit={onExit} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    fireEvent.click(screen.getByRole("button", { name: /Add a takeaway/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Your one line/i), { target: { value: "grace precedes effort" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save & finish/i }));
+
+    const sheet = await screen.findByRole("alertdialog");
+    expect(within(sheet).getByText(/takeaway couldn't be saved/i)).toBeInTheDocument();
+    expect(onExit).not.toHaveBeenCalled();
+    // The reader's words are still in the recap box behind the sheet.
+    expect(screen.getByDisplayValue("grace precedes effort")).toBeInTheDocument();
+
+    fireEvent.click(within(sheet).getByRole("button", { name: /Try again/i }));
+    await waitFor(() => expect(onExit).toHaveBeenCalledTimes(1));
+    // One failed + one durable save — the retry never duplicates the note.
+    const takeawaySaves = vi.mocked(invoke).mock.calls.filter(
+      (c) => c[0] === "cmd_save_note" && (c[1] as { noteType?: string }).noteType === "Takeaway",
+    );
+    expect(takeawaySaves.length).toBe(2);
+  });
+
+  it("a durable end whose Markdown export failed is reported as saved-but-needs-attention, never full success", async () => {
+    mockFor({
+      cmd_end_session: () =>
+        Promise.resolve({
+          ...sessionEndOk(),
+          export: { ok: false, message: "Saved in Throughline, but the Sessions folder is read-only." },
+        }),
+    });
+    const onExit = vi.fn();
+    const { container } = render(<TextReader today={card()} onExit={onExit} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: /Today/ }));
+
+    const sheet = await screen.findByRole("alertdialog");
+    expect(within(sheet).getByText(/Your sitting is saved/i)).toBeInTheDocument();
+    expect(within(sheet).getByText(/read-only/)).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: /Try export again/i })).toBeInTheDocument();
+    expect(onExit).not.toHaveBeenCalled();
+    // Continue is an honest option — the durable part is done.
+    fireEvent.click(within(sheet).getByRole("button", { name: /Continue/i }));
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("a rejected reading-position save surfaces as an announced notice instead of vanishing", async () => {
+    mockFor({
+      cmd_save_section_progress: () => Promise.reject({ message: "database is locked" }),
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    const main = container.querySelector(".tl-reader-main") as HTMLElement;
+    Object.defineProperty(main, "scrollTop", { value: 400, writable: true, configurable: true });
+    Object.defineProperty(main, "clientHeight", { value: 800, configurable: true });
+    Object.defineProperty(main, "scrollHeight", { value: 4000, configurable: true });
+    fireEvent.scroll(main);
+
+    const alert = await screen.findByRole("alert", undefined, { timeout: 3000 });
+    expect(alert.textContent).toMatch(/reading position couldn't be saved/i);
+    expect(alert.textContent).toMatch(/retries as you read/i);
+  });
+
+  it("a note saved durably with a failed Markdown export shows the needs-attention toast, and Try again re-merges", async () => {
+    let retried = 0;
+    mockFor({
+      cmd_save_note: () =>
+        Promise.resolve({
+          note: note({ id: "n_exp" }),
+          export: { ok: false, message: "Saved in Throughline, but the Markdown file couldn't be updated." },
+        }),
+      cmd_update_note: () => {
+        retried += 1;
+        return Promise.resolve(savedNoteOk());
+      },
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("quick"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    fireEvent.change(screen.getByPlaceholderText(/Paraphrase, reflection/i), { target: { value: "a thought" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+
+    const toast = await screen.findByRole("alert");
+    expect(toast.textContent).toMatch(/Markdown file couldn't be updated/);
+    fireEvent.click(within(toast).getByRole("button", { name: /Try again/i }));
+    await waitFor(() => expect(retried).toBe(1));
+    // The retry succeeded → the toast clears (no false lingering failure).
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+});
+
+// ── A11Y-010: keyboard/AT-operable passage actions + semantic headings ──
+describe("TextReader keyboard selection + semantic headings (A11Y-010)", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    localStorage.setItem("tl.panelOpen", "true");
+    // The tutor is enabled so Define stays a popover (otherwise it escalates
+    // to the margin card's guided setup — also fine, but not what we assert).
+    localStorage.setItem("tl.tutorEnabled", "true");
+  });
+
+  /** Select [from, to) inside the reading column WITHOUT any mouse event:
+   *  build a DOM Range, install it as the window selection, and dispatch
+   *  document `selectionchange` — the path keyboard and AT selection take. */
+  function selectByKeyboard(container: HTMLElement, from: number, to: number, text: string) {
+    const col = container.querySelector(".tl-readcol") as HTMLElement;
+    const p = col.querySelector("p[data-offset]") as HTMLElement;
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    const at = (target: number): { node: Text; offset: number } => {
+      let seen = 0;
+      let node = walker.nextNode() as Text | null;
+      while (node) {
+        const len = node.data.length;
+        if (seen + len >= target) return { node, offset: target - seen };
+        seen += len;
+        node = walker.nextNode() as Text | null;
+      }
+      throw new Error("offset past end");
+    };
+    const startPt = at(from);
+    const range = document.createRange();
+    range.setStart(startPt.node, startPt.offset);
+    const endWalkerReset = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    let seen = 0;
+    let node = endWalkerReset.nextNode() as Text | null;
+    let endSet = false;
+    while (node) {
+      const len = node.data.length;
+      if (seen + len >= to) { range.setEnd(node, to - seen); endSet = true; break; }
+      seen += len;
+      node = endWalkerReset.nextNode() as Text | null;
+    }
+    if (!endSet) throw new Error("end offset past end");
+    (range as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect =
+      () => ({ left: 100, top: 80, width: 40, height: 18, right: 140, bottom: 98, x: 100, y: 80, toJSON: () => {} } as DOMRect);
+    const fakeSel = {
+      isCollapsed: false,
+      rangeCount: 1,
+      getRangeAt: () => range,
+      toString: () => text,
+      removeAllRanges: () => {},
+    };
+    vi.spyOn(window, "getSelection").mockReturnValue(fakeSel as unknown as Selection);
+    fireEvent(document, new Event("selectionchange"));
+  }
+
+  async function toolbarByKeyboard(container: HTMLElement) {
+    selectByKeyboard(container, 10, 15, "quick");
+    // Past the 200ms selectionchange debounce.
+    return await screen.findByRole("toolbar", { name: /Selection actions/i }, { timeout: 2000 });
+  }
+
+  it("keyboard/AT selection (no mouse) raises the toolbar and Tab focuses its first action", async () => {
+    mockBackend([]);
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector("p[data-offset]")).not.toBeNull());
+
+    const toolbar = await toolbarByKeyboard(container);
+    expect(toolbar).toBeInTheDocument();
+    // Deterministic access: Tab (from the page, not the toolbar) lands on the
+    // first action.
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(toolbar.contains(document.activeElement)).toBe(true);
+    expect((document.activeElement as HTMLElement).textContent).toMatch(/Highlight/);
+  });
+
+  /** A stateful backend so freshly saved notes appear in cmd_list_notes —
+   *  the new margin card must actually MOUNT for the focus assertions. */
+  function mockStatefulBackend() {
+    const notes: Note[] = [];
+    let seq = 0;
+    vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(TEXT);
+        case "cmd_list_notes": return Promise.resolve([...notes]);
+        case "cmd_save_note": {
+          const a = args as { noteType: string; anchorStart: string | null; anchorEnd: string | null; anchoredText: string | null };
+          const n = note({
+            id: `saved_${++seq}`,
+            note_type: a.noteType,
+            anchor_start: a.anchorStart,
+            anchor_end: a.anchorEnd,
+            anchored_text: a.anchoredText,
+            locator: a.anchorStart ?? "char:10",
+          });
+          notes.push(n);
+          return Promise.resolve({ note: n, export: EXPORT_OK });
+        }
+        case "cmd_update_note": return Promise.resolve(savedNoteOk());
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        default: return Promise.resolve(undefined);
+      }
+    });
+  }
+
+  /** Real keyboard activation (A11Y-010): Tab into the toolbar via the
+   *  deterministic redirect, arrow— no: Tab+Enter through userEvent, which
+   *  honors preventDefault and implements native button activation. */
+  async function activateByKeyboard(container: HTMLElement, label: RegExp) {
+    const user = userEvent.setup();
+    const toolbar = await toolbarByKeyboard(container);
+    const button = within(toolbar).getByRole("button", { name: label });
+    // Reach the toolbar with the keyboard (the document-level Tab redirect),
+    // then walk to the target action with further Tabs.
+    await user.tab();
+    expect(toolbar.contains(document.activeElement)).toBe(true);
+    let guard = 0;
+    while (document.activeElement !== button && guard < 12) {
+      await user.tab();
+      guard += 1;
+      if (!toolbar.contains(document.activeElement)) {
+        // jsdom's tab order (no layout) can step out; re-enter deterministically.
+        (within(toolbar).getAllByRole("button")[0] as HTMLElement).focus();
+      }
+    }
+    if (document.activeElement !== button) button.focus(); // jsdom tab-order fallback — still keyboard activation below
+    await user.keyboard("{Enter}");
+  }
+
+  it("Highlight via keyboard saves and returns focus to the labelled article", async () => {
+    mockStatefulBackend();
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector("p[data-offset]")).not.toBeNull());
+
+    await activateByKeyboard(container, /^Highlight$/);
+    await waitFor(() => {
+      const call = vi.mocked(invoke).mock.calls.find(
+        (c) => c[0] === "cmd_save_note" && (c[1] as { noteType?: string }).noteType === "Highlight",
+      );
+      expect(call).toBeTruthy();
+      expect((call![1] as { anchoredText: string }).anchoredText).toBe("quick");
+    });
+    const article = screen.getByRole("article");
+    await waitFor(() => expect(document.activeElement).toBe(article));
+  });
+
+  it("Note and Question via keyboard save and move focus into the new card's editor", async () => {
+    for (const [label, noteType] of [
+      ["Note", "MarginNote"],
+      ["Question", "Question"],
+    ] as const) {
+      vi.mocked(invoke).mockReset();
+      mockStatefulBackend();
+      const { container, unmount } = render(<TextReader today={card()} onExit={() => {}} />);
+      await waitFor(() => expect(container.querySelector("p[data-offset]")).not.toBeNull());
+
+      await activateByKeyboard(container, new RegExp(`^${label}$`));
+      await waitFor(() => {
+        const call = vi.mocked(invoke).mock.calls.find(
+          (c) => c[0] === "cmd_save_note" && (c[1] as { noteType?: string }).noteType === noteType,
+        );
+        expect(call, `${label} must save a ${noteType}`).toBeTruthy();
+      });
+      // Focus lands in the fresh card's editor (activeElement assertion).
+      await waitFor(() => {
+        const active = document.activeElement as HTMLElement | null;
+        expect(active?.classList.contains("tl-card-input"), `${label}: focus must land in the new card's editor, got ${active?.tagName}.${active?.className}`).toBe(true);
+      });
+      unmount();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("Explain and Context via keyboard spawn tutor cards that take focus", async () => {
+    for (const [label, cardName] of [
+      [/^Explain/, /Tutor — Explain/i],
+      [/^Context$/, /Tutor — Context/i],
+    ] as const) {
+      vi.mocked(invoke).mockReset();
+      mockStatefulBackend();
+      const { container, unmount } = render(<TextReader today={card()} onExit={() => {}} />);
+      await waitFor(() => expect(container.querySelector("p[data-offset]")).not.toBeNull());
+
+      await activateByKeyboard(container, label);
+      const tutorCard = await screen.findByRole("complementary", { name: cardName });
+      await waitFor(() =>
+        expect(tutorCard === document.activeElement || tutorCard.contains(document.activeElement)).toBe(true),
+      );
+      unmount();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("Define via keyboard opens the popover with deterministic focus; Escape restores the article", async () => {
+    mockStatefulBackend();
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector("p[data-offset]")).not.toBeNull());
+
+    await activateByKeyboard(container, /^Define$/);
+    const popover = await screen.findByRole("dialog", { name: /Define quick/i });
+    await waitFor(() =>
+      expect(popover === document.activeElement || popover.contains(document.activeElement)).toBe(true),
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Define quick/i })).toBeNull());
+    const article = screen.getByRole("article");
+    await waitFor(() => expect(document.activeElement).toBe(article));
+  });
+
+  it("exposes imported headings as role=heading with correct levels/order while anchors stay p[data-offset]", async () => {
+    // Section text: a title line, a chapter line, then prose. The importer's
+    // structure ranges mark them; offsets are UTF-16 section-relative.
+    const TXT = "The Book Title\n\nChapter One\n\nPlain prose follows here.";
+    const titleStart = 0, titleEnd = 14;         // "The Book Title"
+    const chapStart = 16, chapEnd = 27;          // "Chapter One"
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_assignable_sections": return Promise.resolve([section]);
+        case "cmd_start_session": return Promise.resolve({ id: "sess1", book_id: "b1", started_at: "", ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null });
+        case "cmd_read_section_text": return Promise.resolve(TXT);
+        case "cmd_read_section_structure": return Promise.resolve([
+          { kind: "title", start: titleStart, end: titleEnd },
+          { kind: "chapter-title", start: chapStart, end: chapEnd },
+        ]);
+        case "cmd_list_notes": return Promise.resolve([]);
+        case "cmd_end_session": return Promise.resolve(sessionEndOk());
+        default: return Promise.resolve(undefined);
+      }
+    });
+    const { container } = render(<TextReader today={card()} onExit={() => {}} />);
+    await waitFor(() => expect(container.querySelector(".tl-readcol")?.textContent).toContain("Plain prose"));
+
+    // Semantic outline: names, levels, document order.
+    const headings = await screen.findAllByRole("heading");
+    expect(headings.map((h) => h.textContent)).toEqual(["The Book Title", "Chapter One"]);
+    expect(headings.map((h) => h.getAttribute("aria-level"))).toEqual(["1", "2"]);
+    // Anchoring unchanged: every heading is STILL a p[data-offset] with the
+    // exact same offsets the plain renderer would emit.
+    for (const h of headings) {
+      expect(h.tagName).toBe("P");
+    }
+    expect(headings[0]).toHaveAttribute("data-offset", String(titleStart));
+    expect(headings[1]).toHaveAttribute("data-offset", String(chapStart));
+    // The article is labelled for AT.
+    expect(screen.getByRole("article")).toHaveAttribute("aria-label", expect.stringContaining("Test Book"));
+  });
 });

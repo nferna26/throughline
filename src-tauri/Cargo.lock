@@ -4660,6 +4660,7 @@ dependencies = [
  "futures-util",
  "hex",
  "keyring",
+ "minisign-verify",
  "objc2",
  "objc2-app-kit",
  "proptest",

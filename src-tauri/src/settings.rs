@@ -33,8 +33,9 @@ pub const KEY_AI_MODEL_CODEX: &str = "ai_model_codex";
 // whenever a key/credential is saved or cleared; seeded once from the Keychain
 // the first time they're read (see key_present_seeded). The secret itself is
 // still ONLY in the Keychain — these hold a boolean, never the key.
-/// AI session phrases on/off ("true"/"false", default ON). Off = zero phrase
-/// network calls — the gate lives in phrases::plan_batch, before any wire code.
+/// AI session phrases on/off ("true"/"false", default OFF). Phrase GENERATION
+/// was removed entirely (PRIV-001 — see phrases.rs); this key remains only so
+/// legacy rows parse and so the default stays pinned OFF by test.
 pub const KEY_AI_PHRASES: &str = "ai_phrases";
 // ── Appearance (Settings › Appearance, CORE settings redesign) ──
 /// Reader-chosen window theme: "light" | "dark" | "auto" (follow macOS).
@@ -201,8 +202,6 @@ pub struct SettingsDto {
     pub ai_key_present_anthropic: bool,
     /// Whether usable Codex-login credentials exist on disk (~/.codex/auth.json).
     pub ai_codex_creds_present: bool,
-    /// AI session phrases on/off (Stage 3). Off = zero phrase network calls.
-    pub ai_phrases: bool,
     // ── Appearance (additive; IPC minor) ──
     /// "light" | "dark" | "auto" | "" (empty = never chosen here; the frontend
     /// migrates the legacy tl.theme localStorage value once, else uses "auto").
@@ -211,6 +210,14 @@ pub struct SettingsDto {
     pub reading_typeface: String,
     /// "comfortable" | "compact" | "open" (default comfortable).
     pub reading_line_spacing: String,
+    /// R5: the LIBRARY GENERATION token — an opaque id rotated by every
+    /// library-level replacement (manual restore, Undo restore, automatic
+    /// corruption recovery, fresh start). Frontend note drafts record the
+    /// generation they were typed under and never auto-apply across a
+    /// rotation, so a restored row with a coincidentally-matching updated_at
+    /// can never resurrect post-backup words. "" on libraries that predate
+    /// the token (treated as its own distinct generation).
+    pub library_generation: String,
 }
 
 pub fn get_export_path(conn: &Connection) -> Result<PathBuf> {
@@ -313,13 +320,22 @@ pub fn set_export_path(conn: &Connection, raw: &str) -> Result<PathBuf> {
     if !expanded.exists() {
         std::fs::create_dir_all(&expanded)?;
     }
-    // Create the canonical Markdown subdirs so the user can write right away.
-    // Only the literature-note model's dirs (`Books/`, `Sessions/`) — the
-    // per-note `Notes/` files and the empty `Reviews/`/`_indexes/` trees are
-    // obsolete after the per-book literature note, so we no longer plant them.
-    // Mirrors `export::ensure_export_dirs`.
+    // DATA-004: the canonical Markdown targets (`Books/`, `Sessions/` — mirrors
+    // `export::ensure_export_dirs`) must be real, writable directories that
+    // support the ATOMIC-REPLACE pattern every export uses, verified BEFORE the
+    // root is persisted. Creation failures were previously ignored (`let _`),
+    // so a root whose `Books` was a stray file could be saved and every later
+    // note export would fail against it.
     for sub in ["Books", "Sessions"] {
-        let _ = std::fs::create_dir_all(expanded.join(sub));
+        let dir = expanded.join(sub);
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            anyhow!("Throughline can't create the {sub} folder inside this export folder ({e}).")
+        })?;
+        let probe = dir.join(".throughline-write-test.md");
+        paths::atomic_write_string(&probe, "ok").map_err(|e| {
+            anyhow!("Throughline can't save Markdown files into {sub} here ({e:#}).")
+        })?;
+        let _ = std::fs::remove_file(&probe);
     }
     conn.execute(
         "INSERT INTO settings (key, value) VALUES (?1, ?2)
@@ -337,6 +353,59 @@ pub fn get_string(conn: &Connection, key: &str) -> Option<String> {
     )
     .ok()
     .filter(|s| !s.is_empty())
+}
+
+// ── Durable pending-delete ledger (TRUST-029 / DATA-005) ────────────────────
+// A CONFIRMED note/book removal is staged here the moment the reader confirms,
+// so quitting inside the Undo window can never resurrect it: the launch sweep
+// commits whatever is still staged. Undo unstages. Stored as JSON id arrays in
+// the existing settings k/v table — durable, transactional with the DB, and no
+// schema migration.
+pub const KEY_PENDING_NOTE_DELETES: &str = "pending_note_deletes";
+pub const KEY_PENDING_BOOK_DELETES: &str = "pending_book_deletes";
+/// DATA-005: books whose Markdown mirror is STALE — an export failed after a
+/// durable row change, so `Books/{slug}.md` no longer reflects the DB. Marked
+/// (durably, before the failure is reported) by `export::export_book_durably`,
+/// cleared only by a later successful export of the same book, and retried on
+/// every launch (`commands::retry_pending_exports`).
+pub const KEY_PENDING_BOOK_EXPORTS: &str = "pending_book_exports";
+/// R5: the library generation token (see `SettingsDto::library_generation`).
+pub const KEY_LIBRARY_GENERATION: &str = "library_generation";
+
+pub fn get_library_generation(conn: &Connection) -> String {
+    get_string(conn, KEY_LIBRARY_GENERATION).unwrap_or_default()
+}
+
+/// Rotate the library generation. Called AFTER every library-level
+/// replacement succeeds (restore, undo-restore, automatic recovery, fresh
+/// start), on the NEW live connection — so drafts typed against the previous
+/// library can never auto-apply to this one.
+pub fn rotate_library_generation(conn: &Connection) -> Result<String> {
+    let g = format!("gen_{}", uuid::Uuid::new_v4().simple());
+    set_string(conn, KEY_LIBRARY_GENERATION, &g)?;
+    Ok(g)
+}
+
+pub fn ledger_ids(conn: &Connection, key: &str) -> Vec<String> {
+    get_string(conn, key)
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+        .unwrap_or_default()
+}
+
+pub fn ledger_add(conn: &Connection, key: &str, id: &str) -> Result<()> {
+    let mut ids = ledger_ids(conn, key);
+    if !ids.iter().any(|x| x == id) {
+        ids.push(id.to_string());
+    }
+    set_string(conn, key, &serde_json::to_string(&ids)?)
+}
+
+pub fn ledger_remove(conn: &Connection, key: &str, id: &str) -> Result<()> {
+    let ids: Vec<String> = ledger_ids(conn, key)
+        .into_iter()
+        .filter(|x| x != id)
+        .collect();
+    set_string(conn, key, &serde_json::to_string(&ids)?)
 }
 
 pub fn set_string(conn: &Connection, key: &str, value: &str) -> Result<()> {
@@ -358,47 +427,38 @@ pub fn get_local_only(conn: &Connection) -> bool {
     !matches!(get_string(conn, KEY_LOCAL_ONLY).as_deref(), Some("false"))
 }
 
-/// AI session phrases (Stage 3). Default ON; the import-screen line discloses
-/// it and Settings owns the toggle. Stored "true"/"false" like KEY_LOCAL_ONLY.
+/// AI session phrases. Default OFF, and phrase GENERATION no longer exists —
+/// no code path sends book text for naming regardless of this value (PRIV-001).
+/// The getter stays only so the OFF default is an explicit, tested fact.
 pub fn get_ai_phrases(conn: &Connection) -> bool {
-    !matches!(get_string(conn, KEY_AI_PHRASES).as_deref(), Some("false"))
-}
-
-/// One-time default for AI phrases, run at startup. Fresh installs default ON
-/// (the plan screen carries the disclosure before any send). Installs that
-/// already hold books predate that disclosure surface, so they default OFF —
-/// for them, the consent moment is the Settings toggle, whose copy says
-/// exactly what is sent. Never overrides an explicit choice.
-pub fn seed_ai_phrases_default(conn: &Connection) -> Result<()> {
-    if get_string(conn, KEY_AI_PHRASES).is_some() {
-        return Ok(());
-    }
-    let has_books: bool = conn
-        .query_row("SELECT EXISTS(SELECT 1 FROM books)", [], |r| r.get(0))
-        .unwrap_or(false);
-    set_string(
-        conn,
-        KEY_AI_PHRASES,
-        if has_books { "false" } else { "true" },
-    )
+    matches!(get_string(conn, KEY_AI_PHRASES).as_deref(), Some("true"))
 }
 
 pub fn get_ai_base_url(conn: &Connection) -> String {
     get_string(conn, KEY_AI_BASE_URL).unwrap_or_else(|| DEFAULT_AI_BASE_URL.to_string())
 }
 
-/// Company-paid proxy endpoint. Overridable (so the backend can be re-pointed via
-/// DNS without an app update), defaulting to the production proxy.
-pub const KEY_COMPANY_BASE_URL: &str = "company_base_url";
 pub const DEFAULT_COMPANY_BASE_URL: &str = "https://ai.readthroughline.com";
 /// Set to "1" once a license is stored, so status checks never prompt the
 /// Keychain (mirrors the Codex-creds-present flag pattern).
 pub const KEY_COMPANY_ACTIVATED: &str = "company_activated";
-pub fn get_company_base_url(conn: &Connection) -> String {
-    get_string(conn, KEY_COMPANY_BASE_URL)
-        .map(|s| s.trim().trim_end_matches('/').to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| DEFAULT_COMPANY_BASE_URL.to_string())
+
+/// R7-2: the company relay origin is a CODE CONSTANT — exactly like the other
+/// cloud providers' base URLs. The old `company_base_url` settings row was a
+/// writable production value capable of rerouting passage text AND the
+/// Keychain license to an arbitrary host; nothing reads it anymore (a stored
+/// value is inert). The proxy is re-pointed via DNS, never via app state.
+/// Tests may inject a mock origin through the TEST-ONLY env seam below, which
+/// does not exist in production builds.
+pub fn company_base_url() -> String {
+    #[cfg(test)]
+    if let Ok(o) = std::env::var("THROUGHLINE_TEST_COMPANY_ORIGIN") {
+        let o = o.trim().trim_end_matches('/').to_string();
+        if !o.is_empty() {
+            return o;
+        }
+    }
+    DEFAULT_COMPANY_BASE_URL.to_string()
 }
 
 pub fn get_ai_model(conn: &Connection) -> String {
@@ -652,10 +712,10 @@ pub fn build_dto(conn: &Connection) -> Result<SettingsDto> {
         ai_codex_creds_present: key_present_seeded(conn, KEY_CODEX_CREDS_PRESENT, || {
             crate::keystore::has_codex_creds()
         }) || crate::ai_providers::codex_cli_auth_present(),
-        ai_phrases: get_ai_phrases(conn),
         ui_theme: get_ui_theme(conn),
         reading_typeface: get_reading_typeface(conn),
         reading_line_spacing: get_reading_line_spacing(conn),
+        library_generation: get_library_generation(conn),
     })
 }
 
@@ -667,6 +727,29 @@ mod tests {
     fn rejects_empty_path() {
         assert!(validate_export_path("").is_err());
         assert!(validate_export_path("   ").is_err());
+    }
+
+    /// DATA-004: a root whose canonical `Books` target cannot be a writable
+    /// directory must be REJECTED — and, crucially, NOT persisted. The old code
+    /// ignored subdir creation failures and saved the root anyway, after which
+    /// every note export silently failed against the stray file.
+    #[test]
+    fn set_export_path_rejects_and_does_not_persist_a_root_with_books_as_file() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        let root = std::env::temp_dir().join(format!("tl-set-export-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Books"), b"a stray file named Books").unwrap();
+
+        let result = set_export_path(&conn, root.to_str().unwrap());
+
+        assert!(result.is_err(), "Books-as-file root must be refused");
+        assert!(
+            get_string(&conn, KEY_EXPORT_PATH).is_none(),
+            "a rejected root must never be persisted"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -1054,10 +1137,10 @@ mod tests {
             ai_key_present_openai: false,
             ai_key_present_anthropic: false,
             ai_codex_creds_present: false,
-            ai_phrases: true,
             ui_theme: String::new(),
             reading_typeface: DEFAULT_READING_TYPEFACE.into(),
             reading_line_spacing: DEFAULT_READING_LINE_SPACING.into(),
+            library_generation: String::new(),
         };
         let v = serde_json::to_value(&dto).unwrap();
         assert!(
@@ -1066,30 +1149,21 @@ mod tests {
         );
     }
 
+    /// PRIV-001: ai_phrases defaults OFF on every install — fresh or existing —
+    /// and nothing seeds it ON. (Generation itself no longer exists; this pins
+    /// the stored default so a future feature cannot inherit an ON state.)
     #[test]
-    fn ai_phrases_seed_defaults_off_for_existing_installs_on_for_fresh() {
-        // Fresh install (no books): disclosure shows at first import → ON.
+    fn ai_phrases_defaults_off_and_is_never_seeded_on() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::migrations::apply_pending(&conn).unwrap();
-        seed_ai_phrases_default(&conn).unwrap();
-        assert!(get_ai_phrases(&conn));
-
-        // Existing install (books predate the disclosure surface): OFF until
-        // the reader opts in via the Settings toggle.
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::migrations::apply_pending(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO books (id,title,source_type,source_path,source_sha256,created_at)
-             VALUES ('b','T','txt','/x','h','2026-01-01')",
-            [],
-        )
-        .unwrap();
-        seed_ai_phrases_default(&conn).unwrap();
-        assert!(!get_ai_phrases(&conn));
-
-        // Never overrides an explicit choice.
+        assert!(!get_ai_phrases(&conn), "unset must read as OFF");
+        assert!(
+            get_string(&conn, KEY_AI_PHRASES).is_none(),
+            "nothing may write a default ai_phrases row"
+        );
+        // A legacy explicit "true" row still parses (the value is inert — no
+        // generation path consults it).
         set_string(&conn, KEY_AI_PHRASES, "true").unwrap();
-        seed_ai_phrases_default(&conn).unwrap();
         assert!(get_ai_phrases(&conn));
     }
 

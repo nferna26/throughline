@@ -66,6 +66,26 @@ fn flatten_toc(nav: &[epub::doc::NavPoint], out: &mut Vec<(String, String)>, dep
 }
 
 pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
+    let book_id = format!("book_{}", Uuid::new_v4().simple());
+    import_epub_into(&book_id, src_path)
+}
+
+/// Import an .epub INTO a caller-chosen book id — see `import_txt_into` for the
+/// restore-staging (REC-011) rationale; the derivation is deterministic for
+/// byte-identical sources, so a SHA-matched re-import reproduces the derived
+/// files a historical id's section rows reference.
+pub fn import_epub_into(book_id: &str, src_path: &Path) -> Result<ImportResult> {
+    let book_dir = paths::book_dir(book_id)?;
+    import_epub_into_dir(book_id, &book_dir, src_path)
+}
+
+/// [`import_epub_into`] with the destination directory explicit (R5) — see
+/// `import::import_txt_into_dir` for why the rebuild path needs this.
+pub(crate) fn import_epub_into_dir(
+    book_id: &str,
+    book_dir: &Path,
+    src_path: &Path,
+) -> Result<ImportResult> {
     paths::ensure_dirs()?;
     if !src_path.exists() {
         return Err(anyhow!("source file does not exist: {:?}", src_path));
@@ -115,9 +135,7 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
     }
 
     // Copy source.epub into app data
-    let book_id = format!("book_{}", Uuid::new_v4().simple());
-    let book_dir = paths::book_dir(&book_id)?;
-    fs::create_dir_all(&book_dir)?;
+    fs::create_dir_all(book_dir)?;
     let dest = book_dir.join("source.epub");
     fs::copy(src_path, &dest).context("copy EPUB into app data")?;
     #[cfg(unix)]
@@ -133,7 +151,7 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
     // shelf can show it AS-IS for imported books — a real cover is the
     // provenance signal, never overwritten by the cloth treatment. Best-effort:
     // a missing / oversized / unknown-format cover simply falls back to cloth.
-    write_embedded_cover(&mut doc, &book_dir);
+    write_embedded_cover(&mut doc, book_dir);
 
     let sha = hash_file(&dest)?;
     let now = Utc::now().to_rfc3339();
@@ -148,7 +166,7 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
         }
         sections.push(BookSection {
             id: sec_id,
-            book_id: book_id.clone(),
+            book_id: book_id.to_string(),
             label: entry.label.clone(),
             href: Some(entry.href.clone()),
             start_locator: Some(ex.start.to_string()),
@@ -167,10 +185,10 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
     // the structure sidecar and a body-offset marker (body_start = 0; EPUB text has
     // no Gutenberg-style header to skip). source.txt is the reader's source;
     // source.epub stays the integrity/SHA anchor and is never modified or exported.
-    write_epub_text_artifacts(&book_dir, &body, &structure)?;
+    write_epub_text_artifacts(book_dir, &body, &structure)?;
 
     let manifest = ImportManifest {
-        book_id: book_id.clone(),
+        book_id: book_id.to_string(),
         title: title.clone(),
         author: author.clone(),
         source_type: "epub".to_string(),
@@ -190,7 +208,7 @@ pub fn import_epub(src_path: &Path) -> Result<ImportResult> {
     )?;
 
     let book = Book {
-        id: book_id,
+        id: book_id.to_string(),
         title,
         author,
         source_type: "epub".to_string(),
@@ -502,6 +520,33 @@ pub fn ensure_epub_text(conn: &rusqlite::Connection, book_id: &str) -> Result<bo
         )?;
     }
     Ok(true)
+}
+
+/// R4: one section of an EPUB derivation run IN ISOLATION — no DB writes, no
+/// on-disk artifacts. Exactly the derivation [`ensure_epub_text`] would apply,
+/// exposed so the restore preflight can PROVE a source-only EPUB would
+/// actually backfill (count, locators, nonempty assignable text) instead of
+/// accepting "the EPUB opens".
+pub(crate) struct IsolatedEpubSection {
+    pub start: usize,
+    pub end: usize,
+    pub nonempty: bool,
+}
+
+/// Derive an EPUB's sections in isolation (see [`IsolatedEpubSection`]).
+pub(crate) fn derive_epub_sections_isolated(epub_path: &Path) -> Result<Vec<IsolatedEpubSection>> {
+    let mut doc = epub::doc::EpubDoc::new(epub_path)
+        .with_context(|| "open EPUB for isolated derivation".to_string())?;
+    let entries = build_spine_entries(&doc);
+    let (_body, extracts) = extract_sections(&mut doc, &entries)?;
+    Ok(extracts
+        .iter()
+        .map(|e| IsolatedEpubSection {
+            start: e.start,
+            end: e.end,
+            nonempty: e.char_count > 0,
+        })
+        .collect())
 }
 
 /// Clean plain text extracted from one spine item's XHTML, plus the inline/block

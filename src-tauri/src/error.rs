@@ -53,9 +53,9 @@ pub enum AppError {
 
     /// The reader enabled a cloud provider but hasn't confirmed the FIRST cloud
     /// send. The frontend catches this, shows a consent sheet naming `host`, and
-    /// retries after cmd_confirm_cloud_send. (Epic C2.) `message` is a serialized
-    /// backstop (P1-2): a consumer that only reads `message` still gets meaningful
-    /// copy instead of "[object Object]".
+    /// retries cmd_ai_ask carrying the sheet's consent binding (R6-1). (Epic C2.)
+    /// `message` is a serialized backstop (P1-2): a consumer that only reads
+    /// `message` still gets meaningful copy instead of "[object Object]".
     NeedsCloudConsent { host: String, message: String },
 
     /// The reader's Throughline AI (company-paid) credits are spent. The frontend

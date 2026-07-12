@@ -273,6 +273,12 @@ pub async fn run_provider_call(call: ProviderCall) -> Result<mpsc::Receiver<Stre
                 ProviderAuth::CompanyLicense(l) => l,
                 _ => return Err(anyhow!("Throughline AI selected but not activated")),
             };
+            // R7-2: the SEND-BOUNDARY destination gate — however this URL was
+            // assembled, a passage and the license leave only for the exact
+            // canonical company origin (the same host the consent binding and
+            // the audit row carry). Enforced on EVERY send, remembered
+            // consent included.
+            crate::ai_client::validate_company_destination(&call.base_url)?;
             run_company(
                 &call.base_url,
                 &license,
@@ -538,8 +544,11 @@ async fn run_company(
     if let Err(e) = breaker.check() {
         return Err(anyhow!("AI service unavailable: {}", e));
     }
+    // R8-3: NEVER follow a redirect — a 307/308 would re-send the passage
+    // and the Bearer license to whatever host the Location header names.
     let client = reqwest::Client::builder()
         .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("reqwest build")?;
     let body = anthropic_body(model, prompt, max_tokens);
@@ -647,15 +656,90 @@ pub fn codex_cli_auth_present() -> bool {
         .unwrap_or(false)
 }
 
-/// Atomically write auth.json back (temp file + rename), preserving fields we
-/// don't model via serde flatten. The app only ever rewrites it after a refresh.
+/// Write auth.json back FAIL-CLOSED (CRED-002). The old implementation used
+/// `std::fs::write` on a sibling temp, whose default mode (0666 & ~umask =
+/// 0644 on a typical Mac) survived the rename — so a background refresh could
+/// silently make a 0600 token file world-readable. Now:
+///
+/// 1. the temp is created EXCLUSIVELY with mode 0600 (owner-only from the very
+///    first byte — 0600 has no group/other bits, so no umask can widen it),
+/// 2. contents are written and fsynced,
+/// 3. the refreshed file always lands OWNER-ONLY (0600): a legacy 0644
+///    auth.json — the exact damage the OLD implementation caused — is
+///    NORMALIZED to 0600 by the refresh rather than faithfully preserved.
+///    Group/other bits are never carried over,
+/// 4. the temp is atomically renamed over auth.json (owner: the current user,
+///    same as every prior write — the file lives in the user's home),
+/// 5. the parent directory is fsynced so the rename itself is durable — and
+///    this is REQUIRED, not best-effort: a crash that loses the un-synced
+///    rename resurrects the PREVIOUS auth.json, whose refresh token the
+///    server-side rotation may already have invalidated (a broken login). A
+///    post-rename fsync failure therefore returns Err meaning "persisted but
+///    NOT PROVEN DURABLE": the swapped file is in place (never torn — the
+///    rename is atomic and the data bytes were already fsynced), and the
+///    caller's retry re-runs this idempotent write.
+///
+/// ANY pre-rename failure leaves the previous auth.json bytes fully intact
+/// and cleans up the temp. Token data never reaches an error message or a
+/// log — the JSON exists only in memory and in the 0600-mode files.
 fn write_codex_auth(auth: &CodexAuth) -> Result<()> {
+    write_codex_auth_with(auth, |parent| std::fs::File::open(parent)?.sync_all())
+}
+
+/// [`write_codex_auth`] with the parent-directory fsync injectable, so a test
+/// can fault exactly the durability step and hold the postcondition above.
+fn write_codex_auth_with(
+    auth: &CodexAuth,
+    fsync_parent: impl FnOnce(&std::path::Path) -> std::io::Result<()>,
+) -> Result<()> {
+    use std::io::Write;
     let path = codex_auth_path();
-    let tmp = path.with_extension("json.tltmp");
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("codex auth path has no parent directory"))?
+        .to_path_buf();
     let data = serde_json::to_string_pretty(auth).context("serialize codex auth")?;
-    std::fs::write(&tmp, data).context("write codex auth tmp")?;
-    std::fs::rename(&tmp, &path).context("rename codex auth")?;
-    Ok(())
+    let tmp = parent.join(format!(
+        ".auth.json.tltmp.{}.{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+
+    let result = (|| -> Result<()> {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp).context("create codex auth temp")?;
+        f.write_all(data.as_bytes())
+            .context("write codex auth temp")?;
+        f.sync_all().context("fsync codex auth temp")?;
+        drop(f);
+
+        // The temp was created 0600 and STAYS 0600: token files are owner-only,
+        // period. Deliberately no preservation of a wider original mode — a
+        // legacy 0644 auth.json (the old implementation's own damage) is
+        // normalized to owner-only by this refresh.
+
+        std::fs::rename(&tmp, &path).context("rename codex auth into place")?;
+
+        // REQUIRED durability for the rename (doc step 5): fsync the
+        // containing directory. On failure this reports "not proven durable" —
+        // the swap itself has completed and the retry is idempotent.
+        fsync_parent(&parent).context("fsync codex home after auth swap")?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 // ── App-owned Codex credentials + device-code login ──
@@ -1334,7 +1418,16 @@ async fn test_codex(model: &str, timeout: Duration) -> ConnTest {
 /// breaker `check()` but feeds the outcome, like the other connection tests.
 async fn test_company(base_url: &str, license: &str, timeout: Duration) -> ConnTest {
     let breaker = crate::ai_client::breaker_for(AiProvider::Company);
-    let client = match reqwest::Client::builder().timeout(timeout).build() {
+    // R8-3: the destination is gated BEFORE the license is attached or a
+    // request even exists, and redirects are never followed.
+    if let Err(e) = crate::ai_client::validate_company_destination(base_url) {
+        return (false, None, format!("refused: {e}"));
+    }
+    let client = match reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
         Ok(c) => c,
         Err(e) => return (false, None, format!("client build: {e}")),
     };
@@ -1745,6 +1838,179 @@ mod tests {
         assert!(
             stamp > "2026-04-17T00:00:00Z",
             "last_refresh updated: {stamp}"
+        );
+    }
+
+    /// CRED-002 R3: the parent-directory fsync after the auth swap is a
+    /// GUARANTEE, not best-effort (a lost rename would resurrect a
+    /// server-side-invalidated refresh token). INJECTED fsync failure must:
+    /// return Err (the caller then surfaces "sign in again" instead of
+    /// claiming durable success), leave the atomically swapped file in place
+    /// at 0600 (the documented "persisted but not proven durable"
+    /// postcondition — never a torn file), leak no token into the error, and
+    /// leave no temp behind. The retry is idempotent.
+    #[test]
+    fn codex_auth_parent_fsync_failure_errors_without_tearing_or_leaking() {
+        let _g = crate::paths::lock_env_for_test();
+        let dir = seed_codex_home("fsync-fault");
+
+        let auth = CodexAuth {
+            auth_mode: Some("chatgpt".into()),
+            openai_api_key: None,
+            tokens: Some(CodexTokens {
+                id_token: Some("jwt".into()),
+                access_token: "at-new".into(),
+                refresh_token: "rt-new".into(),
+                account_id: Some("acct".into()),
+                extra: Default::default(),
+            }),
+            last_refresh: Some("2026-07-09T00:00:00Z".into()),
+            extra: Default::default(),
+        };
+        let result = write_codex_auth_with(&auth, |_| {
+            Err(std::io::Error::other("injected fsync failure"))
+        });
+        let raw = std::fs::read_to_string(dir.join("auth.json")).unwrap();
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(dir.join("auth.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        let stray_tmps = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains("tltmp"))
+            .count();
+        unsafe {
+            std::env::remove_var("CODEX_HOME");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let err = result.expect_err("a failed durability fsync must be an error");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("fsync codex home"),
+            "names the failed step: {msg}"
+        );
+        assert!(
+            !msg.contains("at-new") && !msg.contains("rt-new"),
+            "token values must never reach an error message: {msg}"
+        );
+        // Postcondition: the atomic swap COMPLETED (never torn) — the error
+        // means "not proven durable", and the idempotent retry re-writes.
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["tokens"]["access_token"], "at-new");
+        #[cfg(unix)]
+        assert_eq!(mode, 0o600, "the swapped file is owner-only");
+        assert_eq!(stray_tmps, 0, "no temp left behind");
+    }
+
+    /// Swap the process umask, returning the previous one. Tests only.
+    #[cfg(unix)]
+    fn swap_umask(mask: u32) -> u32 {
+        #[cfg(target_os = "macos")]
+        type ModeT = u16;
+        #[cfg(not(target_os = "macos"))]
+        type ModeT = u32;
+        extern "C" {
+            fn umask(mask: ModeT) -> ModeT;
+        }
+        unsafe { umask(mask as ModeT) as u32 }
+    }
+
+    /// CRED-002 regression: a Codex refresh must never widen the mode of a
+    /// 0600 auth.json, AND it must NORMALIZE a legacy 0644 file (the old
+    /// `std::fs::write(temp)+rename` implementation's own damage under the
+    /// default macOS umask) back to owner-only. Both starting modes must land
+    /// at exactly 0600 under BOTH common umasks, with rotated tokens written
+    /// and unknown JSON fields preserved.
+    #[cfg(unix)]
+    #[test]
+    fn codex_refresh_lands_owner_only_from_0600_and_legacy_0644_under_umask_022_and_002() {
+        use std::os::unix::fs::PermissionsExt;
+        let _g = crate::paths::lock_env_for_test();
+
+        for mask in [0o022u32, 0o002u32] {
+            for start_mode in [0o600u32, 0o644u32] {
+                let dir = seed_codex_home(&format!("mode-{mask:o}-{start_mode:o}"));
+                let auth_path = dir.join("auth.json");
+                std::fs::set_permissions(&auth_path, std::fs::Permissions::from_mode(start_mode))
+                    .unwrap();
+
+                let prev_umask = swap_umask(mask);
+                let result = persist_rotated_codex(&rotated_file_creds());
+                swap_umask(prev_umask);
+
+                let mode = std::fs::metadata(&auth_path).unwrap().permissions().mode() & 0o777;
+                let raw = std::fs::read_to_string(&auth_path).unwrap();
+                unsafe {
+                    std::env::remove_var("CODEX_HOME");
+                }
+                let _ = std::fs::remove_dir_all(&dir);
+
+                result.expect("refresh write-back succeeds");
+                assert_eq!(
+                    mode, 0o600,
+                    "umask {mask:o}, starting mode {start_mode:o}: refreshed auth.json must land owner-only (0600), got {mode:o}"
+                );
+                let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+                assert_eq!(v["tokens"]["refresh_token"], "rt-new", "tokens rotated");
+                assert_eq!(v["some_future_field"], 123, "unknown fields preserved");
+            }
+        }
+    }
+
+    /// CRED-002 fail-closed: when the write faults before the rename, the old
+    /// auth.json bytes must remain fully intact and no temp litter may remain —
+    /// the reader's existing (still-valid-locally) credentials are the only
+    /// copy, and a partial replacement would strand both the app and the CLI.
+    #[cfg(unix)]
+    #[test]
+    fn codex_refresh_fault_before_rename_leaves_old_bytes_intact() {
+        use std::os::unix::fs::PermissionsExt;
+        let _g = crate::paths::lock_env_for_test();
+        let dir = seed_codex_home("fault");
+        let auth_path = dir.join("auth.json");
+        let before = std::fs::read(&auth_path).unwrap();
+
+        // Fault injection: a read-only CODEX_HOME makes the exclusive temp
+        // creation fail — a failure strictly BEFORE the rename step.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let perms_enforced = std::fs::write(dir.join(".probe"), b"x").is_err();
+        let result = if perms_enforced {
+            Some(persist_rotated_codex(&rotated_file_creds()))
+        } else {
+            None
+        };
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let after = std::fs::read(&auth_path).unwrap();
+        let litter: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("tltmp"))
+            .collect();
+        unsafe {
+            std::env::remove_var("CODEX_HOME");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let Some(result) = result else {
+            eprintln!("skipping fault assertion: permissions not enforced (running as root?)");
+            return;
+        };
+        assert!(result.is_err(), "fault must surface, not be swallowed");
+        assert_eq!(
+            before, after,
+            "a failed refresh write-back must leave the old auth.json bytes untouched"
+        );
+        assert!(
+            litter.is_empty(),
+            "no temp litter after a failed write-back: {litter:?}"
         );
     }
 

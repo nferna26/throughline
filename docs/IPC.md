@@ -2,7 +2,7 @@
 
 The Rust backend exposes commands to the React frontend via Tauri's `invoke` bridge. This document is the binding contract: argument names, types, return shapes, error shapes, and the semver commitment for changes.
 
-The current API version is **6**. Read it at runtime from the frontend via `invoke("cmd_api_version")`.
+The current API version is **8**, exposed at runtime via `invoke("cmd_api_version")` (the shipped frontend performs no startup version check — see the bottom of this document).
 
 > **1 → 2:** `cmd_import_book` now returns `ImportOutcome { book, created }` instead of a bare `Book`. Return-shape change → major bump.
 >
@@ -13,6 +13,10 @@ The current API version is **6**. Read it at runtime from the frontend via `invo
 > **4 → 5:** plans frontispiece — migration v009 added `name`, `deleted_at` (soft-delete window), and `reached_percent` to `reading_plans`; plan rows and the plans list reshaped around naming + let-go semantics.
 >
 > **5 → 6:** notes export reshaped from one Markdown file **per note** (`Notes/{book}_{note}.md`) to one per-book **literature note** (`Books/{slug}.md`) that re-exports idempotently in place. `cmd_save_note` / `cmd_update_note` / `cmd_save_ai_preview_as_note` / `cmd_save_ai_response_as_note` now write that shared book file (each note's `exported_markdown_path` points at it); delete-note re-merges the file (dropping the note's fence) rather than removing a per-note file; and the new `cmd_export_library` regenerates every book file. The on-disk export contract a JS caller observes changed.
+>
+> **6 → 7:** failure-honest typed outcomes (audit DATA-004/DATA-005) plus the removal of unsolicited AI phrase generation (PRIV-001). `cmd_save_note` / `cmd_update_note` / `cmd_save_ai_preview_as_note` / `cmd_save_ai_response_as_note` return `SavedNote { note, export: { ok, message } }` instead of a bare `Note`; `cmd_delete_note` returns the `ExportOutcome` instead of `null`; `cmd_end_session` returns `SessionEnd { session, export }` instead of a bare `ReadingSession`, validates session/section/locator before mutating, transacts the whole end, and is idempotent on repeat; `cmd_export_library` adds `failed: string[]` naming every book whose export failed. `cmd_set_ai_settings` dropped the `ai_phrases` argument and `SettingsDto` dropped `ai_phrases` (background phrase generation was removed outright — no command spawns AI work without a reader action). Additive in the same version: `cmd_outbound_envelope` (the consent sheet's exact outbound-envelope preview, PRIV-A11Y-009); `cmd_undo_restore` + `BackupStatus.undo_available` (one-shot undo of the last restore, REC-011); `cmd_stage_restore_source` (match a re-imported file to a backup row by full SHA-256 and stage it under the historical id); `cmd_stage_note_delete`/`cmd_unstage_note_delete` + `cmd_stage_book_delete`/`cmd_unstage_book_delete` (durable pending-delete ledger, committed by the launch sweep — a confirmed removal survives quit/relaunch, TRUST-029); and `cmd_restore_backup`/`cmd_undo_restore` now run one shared coherence preflight that proves every book row READS through the production path, rejecting incoherent restores with the precise re-import fix.
+>
+> **7 → 8:** first-cloud consent is bound to the exact ask (R6-1 / CORE-1177). `cmd_confirm_cloud_send` is **removed** — it was a global consent write that raced the send it authorized (a provider/selection change between confirm and ask could send something the reader never reviewed). `cmd_outbound_envelope` now returns `provider` and `fingerprint` alongside the envelope, and `cmd_ai_ask` takes an optional `consent: { provider, host, fingerprint }` — the sheet passes back exactly what the preview issued, and the send boundary re-resolves the call and validates all three before anything egresses. The matching binding is the only writer of the remembered-consent flag.
 
 ---
 
@@ -20,7 +24,7 @@ The current API version is **6**. Read it at runtime from the frontend via `invo
 
 - **Patch** (1 → 1): bug fixes, internal refactors, no contract change. The integer constant does not move.
 - **Minor** (1 → 1): strictly-additive changes — new commands or new *optional* arguments to existing commands. The constant does not move. New additions are documented here and called out in `README.md` / `CHANGELOG.md`.
-- **Major** (1 → 2): renames, removed commands, changed argument types, changed return types, or anything else that could break an existing JS caller. The constant moves. Frontends compare against their expected version on startup; the version mismatch is the surfaced error.
+- **Major** (1 → 2): renames, removed commands, changed argument types, changed return types, or anything else that could break an existing JS caller. The constant moves. A frontend MAY compare against its expected version via `cmd_api_version` (see the example at the bottom of this document) — the SHIPPED frontend performs no startup version check, because frontend and backend ship in one binary.
 
 If a change is unclear, treat it as major.
 
@@ -38,7 +42,7 @@ type AppError =
   | { kind: "Validation"; message: string }
   | { kind: "Config";     message: string }
   | { kind: "NotFound";   resource: string; id: string | null }
-  | { kind: "NeedsCloudConsent"; message: string }
+  | { kind: "NeedsCloudConsent"; message: string; host: string }
   | { kind: "CapExhausted"; message: string }
   | { kind: "Internal";   message: string };
 ```
@@ -53,10 +57,13 @@ type AppError =
 
 #### `cmd_api_version`
 - args: none
-- returns: `number` — the value of `COMMAND_API_VERSION` (currently `6`)
+- returns: `number` — the value of `COMMAND_API_VERSION` (currently `8`)
 - errors: never
 
-Use this from the frontend on startup to detect a backend that has moved to a major version your build doesn't understand.
+Exposed for tooling and future split deployments. The SHIPPED frontend performs
+no startup version check (see "Frontend version check" at the bottom — a
+recommended example, not wired), because frontend and backend ship in one
+binary and cannot drift in a released build.
 
 #### `cmd_paths_info`
 - args: none
@@ -116,7 +123,7 @@ this command. Additive; `COMMAND_API_VERSION` stays `6`.
   - `NotFound` — no plan for the book
   - `Db` — sqlite error
 
-Configures a freshly imported book's plan from the Book Setup Sheet: clamps and stores the chosen sitting length, names the attempt (reader-provided or a friendly default), builds the derived `sittings` cache, and kicks off the optional phrase prefetch for the first sittings. **Does NOT activate the plan** — status stays `plan_ready` until `cmd_start_session`, so there is still no "behind" state before the reader begins.
+Configures a freshly imported book's plan from the Book Setup Sheet: clamps and stores the chosen sitting length, names the attempt (reader-provided or a friendly default), and builds the derived `sittings` cache. Local work only — configuring a plan never spawns AI or network work of any kind (PRIV-001). **Does NOT activate the plan** — status stays `plan_ready` until `cmd_start_session`, so there is still no "behind" state before the reader begins.
 
 #### `cmd_today`
 - args: none
@@ -161,6 +168,48 @@ This is the list both readers index into. Frontends MUST use this, not `cmd_list
 
 Makes `bookId` the active book by bumping its `last_opened_at`, so the next `cmd_today` composes that book's card. This is what the Today-header book switcher calls; the frontend re-invokes `cmd_today` afterward. Added in 0.1.x — additive, `COMMAND_API_VERSION` stays `1`.
 
+#### `cmd_library`
+- args: none
+- returns: `LibraryEntry[]` — one per book: `{ id, title, author, provenance ("imported" | "catalogue"), has_cover, finished, fraction, is_active, ... }` (see types.ts). `fraction` is a qualitative 0..1 position rendered as a length, never a number.
+- errors: `Db`
+
+Backs the library shelf and the book switcher. Progress and `finished` derive from `reading_position` against the section spans.
+
+#### `cmd_delete_book`
+- args: `{ bookId: string }`
+- returns: void
+- errors: `Db`; `Io` when the book's on-disk directory could not be removed (the rows are already gone; a durable ledger mark keeps the directory removal retried at the next launch — DATA-005)
+
+The REAL removal: cascades every book-scoped row in one transaction (plans, sections, sessions, notes, AI history, position caches), then removes the book's directory. Idempotent — deleting an id that is already gone is a clean no-op. Shared by the first-run "undo my pick" back-nav and the timer commit of a confirmed "Remove from library".
+
+#### `cmd_stage_book_delete` / `cmd_unstage_book_delete`
+- args: `{ bookId: string }`
+- returns: void
+- errors: `Db`
+
+TRUST-029: a CONFIRMED removal is staged durably the moment the reader confirms — the frontend AWAITS the stage before hiding the book or offering Undo, so a quit inside the Undo window still commits the removal at the next launch (the launch sweep). Undo calls the unstage. Additive; `COMMAND_API_VERSION` stays `7`.
+
+#### `cmd_read_book_cover`
+- args: `{ bookId: string }`
+- returns: `string | null` — a `data:` URI for the embedded cover, or null (catalogue books and coverless imports)
+- errors: `Io` (invalid book id)
+
+Imported books only — catalogue books always wear the cloth cover in the UI.
+
+#### `cmd_book_origin`
+- args: `{ bookId: string }`
+- returns: `BookOriginInfo { provenance: "imported" | "catalogue"; original_path: string | null; original_missing: boolean }`
+- errors: `Validation` (traversal/invalid id)
+
+Provenance for the book detail view, from the per-book sidecar. `original_missing` is true only for an imported book whose recorded original file is no longer at its path (drives the calm "Still here, still readable" note + re-link offer).
+
+#### `cmd_relink_book`
+- args: `{ bookId: string; path: string }`
+- returns: void
+- errors: `Validation` (invalid id); `Io` (sidecar write failed — the error never echoes the path)
+
+Records the new location of a moved original file. Display metadata only: reading always uses Throughline's own immutable copy.
+
 ---
 
 ### Discover (public-domain catalogue)
@@ -180,6 +229,13 @@ The full search index is `src-tauri/resources/discover_catalogue.tsv`; the idle 
 - args: `{ query?: string | null; page?: number | null }`
 - returns: `DiscoverPage` from the smaller bundled shelf set, with `offline: true` retained for wire compatibility.
 - errors: none
+
+#### `cmd_discover_books_by_ids`
+- args: `{ ids: number[] }` — catalogue ids, e.g. from a curated shelf
+- returns: `DiscoverBook[]` — the matching catalogue rows, in the order given; unknown ids are skipped
+- errors: none
+
+On-device lookup into the bundled catalogue (no network).
 
 #### `cmd_import_from_gutendex`
 - args: `{ book: { txt_url: string | null; epub_url: string | null } }` — pass the chosen row's URLs verbatim
@@ -263,17 +319,17 @@ Side effects: inserts a row in `reading_sessions`, stamps the current live `read
 
 #### `cmd_end_session`
 - args: `{ sessionId: string; endLocator?: string; minutes?: number; completedSectionIds?: string[]; summarySentence?: string }`
-- returns: `ReadingSession` — the updated row
-- errors: `Db`, `Io` (export failure non-fatal)
+- returns: `SessionEnd` — `{ session: ReadingSession; export: { ok: boolean; message: string | null } }` (v7)
+- errors: `NotFound` (session/section), `Validation` (cross-book section id, non-bare-digit locator), `Db`
 
-Side effects: marks every section in `completedSectionIds` as complete in `section_progress`; exports a Markdown session file.
+DATA-005 contract: everything is validated BEFORE anything mutates (session exists; every completed section belongs to the session's book; the locator parses), then session end + section completion + position + plan state commit in ONE transaction. A repeated end is idempotent — the first end's values win; a repeat only re-attempts the (idempotent) Markdown session export, which is also the retry path when `export.ok` came back false. The sitting is durable in SQLite whenever `session` returns; `export` reports the Markdown file separately and honestly.
 
 #### `cmd_save_section_progress`
 - args: `{ bookId: string; sectionId: string; locator: string; percent?: number }`
 - returns: void
-- errors: `Db`
+- errors: `NotFound` (section), `Validation` (cross-book section id, non-bare-digit locator), `Db`
 
-Saves mid-session position for resume and advances `reading_position` with the global body offset.
+Validates ownership and the locator BEFORE any write, then transacts the section-progress row and the `reading_position` advance together; a failed position save surfaces (never a silent skip) — DATA-005.
 
 #### `cmd_restart_current_section`
 - args: `{ bookId: string; sectionId: string }`
@@ -287,16 +343,16 @@ Recovery action — clears `section_progress` for one section.
 ### Notes
 
 #### `cmd_save_note`
-- args: `{ bookId: string; sessionId?: string; noteType: string; locator: string; chapterLabel?: string; body: string; shortQuote?: string }`
-- returns: `Note`
-- errors: `Db`, `Io` (export failure non-fatal)
+- args: `{ bookId: string; sessionId?: string; noteType: string; locator: string; chapterLabel?: string; body: string; shortQuote?: string; anchorStart?: string; anchorEnd?: string; anchoredText?: string }`
+- returns: `SavedNote` — `{ note: Note; export: { ok: boolean; message: string | null } }` (v7)
+- errors: `Db`
 
-Side effects: inserts a `notes` row, then regenerates the book's **literature note** at `{export_root}/Books/{slug}.md` (one Markdown file per book; the note becomes an atomic, fenced unit inside it). The returned note's `exported_markdown_path` points at that shared book file.
+Side effects: inserts a `notes` row, then regenerates the book's **literature note** at `{export_root}/Books/{slug}.md` (one Markdown file per book; the note becomes an atomic, fenced unit inside it). The returned note's `exported_markdown_path` points at that shared book file. DATA-004: the row's durability and the Markdown file's freshness are separate facts — `export.ok: false` means saved-in-Throughline with the export needing a retry (any later save/update of the book re-merges idempotently).
 
 #### `cmd_update_note`
 - args: `{ noteId: string; noteType?: string; body?: string; shortQuote?: string; anchoredText?: string; clearShortQuote?: boolean; clearAnchoredText?: boolean }`
-- returns: `Note` — the updated row
-- errors: `NotFound` (note), `Db`, `Io` (re-export failure)
+- returns: `SavedNote` — `{ note: Note; export: { ok: boolean; message: string | null } }` (v7)
+- errors: `NotFound` (note), `Db`
 
 COALESCE semantics: an absent field is left unchanged, so autosave can PATCH just the `body` without clobbering type/quote. Because absent means "unchanged", the `clearShortQuote` / `clearAnchoredText` booleans are the only way to NULL `short_quote` / `anchored_text` once set — the clears apply AFTER the COALESCE patch, even in the same call (CORE-1023). Both flags are **additive/optional** (a minor change — no version bump). Re-merges the book's `Books/{slug}.md` literature note idempotently — the note's fenced block is replaced in place and any reader edits OUTSIDE the fences survive.
 
@@ -307,10 +363,17 @@ COALESCE semantics: an absent field is left unchanged, so autosave can PATCH jus
 
 #### `cmd_delete_note`
 - args: `{ noteId: string }`
-- returns: void
-- errors: `Db`, `Io` (re-export failure non-fatal)
+- returns: `ExportOutcome` — `{ ok: boolean; message: string | null }` (v7)
+- errors: `Db`
 
-Deletes the row idempotently and regenerates the owning book's literature note, removing that note's fenced block while preserving reader edits outside Throughline fences.
+Deletes the row idempotently, clears any staged pending-delete for it, and regenerates the owning book's literature note, removing that note's fenced block while preserving reader edits outside Throughline fences. `ok: false` means the row is gone but the file still shows the fence until a retry.
+
+#### `cmd_stage_note_delete` / `cmd_unstage_note_delete`
+- args: `{ noteId: string }`
+- returns: void
+- errors: `Db`
+
+TRUST-029 (additive, v7): a CONFIRMED removal is staged durably the moment the reader confirms (the settings-table ledger), so quitting inside the Undo window still removes it — the launch sweep commits staged ids. Undo unstages. `cmd_delete_note` clears the stage when it commits.
 
 #### `cmd_quote_warns`
 - args: `{ quote: string }`
@@ -319,10 +382,10 @@ Deletes the row idempotently and regenerates the owning book's literature note, 
 
 #### `cmd_export_library`
 - args: none
-- returns: `{ exported: number; root: string }` — how many book literature notes were (re)generated and the export root they landed under
+- returns: `{ exported: number; failed: string[]; root: string }` — books written, the display titles of every book whose export FAILED (v7 — never a misleading all-good count), and the export root
 - errors: `Db`
 
-Regenerates EVERY book's literature note (`{export_root}/Books/{slug}.md`) idempotently — the "Export library" action. Each book file is re-merged in place, so reader edits outside the note fences survive. New in `COMMAND_API_VERSION` 6.
+Regenerates EVERY book's literature note (`{export_root}/Books/{slug}.md`) idempotently — the "Export library" action. Each book file is re-merged in place, so reader edits outside the note fences survive.
 
 ---
 
@@ -346,17 +409,28 @@ Reader-facing, network-free prompt fallback used by the setup sheet's "copy prom
 
 #### `cmd_save_ai_preview_as_note`
 - args: `{ aiRequestId: string; noteType: string; body: string; locator: string; chapterLabel?: string; anchorStart?: string; anchorEnd?: string; anchoredText?: string; sessionId?: string }`
-- returns: `Note`
-- errors: `Validation` (empty body); `NotFound` (ai_request); `Db`, `Io`
+- returns: `SavedNote` — `{ note: Note; export: { ok: boolean; message: string | null } }` (v7)
+- errors: `Validation` (empty body); `NotFound` (ai_request); `Db`
 
 Side effects: regenerates the book's literature note at `…/Books/{slug}.md` (the saved card becomes a fenced `> [!abstract] Tutor` unit inside it) and flips `ai_requests.wrote_to_memory` to 1.
 
 The four optional fields are **additive** (a minor change — no integer API bump): legacy callers that send only the first five args still work (absent options deserialize to `null`). When present, `anchorStart`/`anchorEnd`/`anchoredText` pin the saved card in the Companion Margin — this is the path the text reader's margin **tutor card** uses, saving a `noteType: "TutorNote"` anchored to the selected passage.
 
+#### `cmd_outbound_envelope`
+- args: `{ bookId: string; mode: string; selection: string; chapter?: string; userNote?: string; depth?: string }`
+- returns: `{ host: string; provider: string; fingerprint: string; envelope: { book_title: string; author: string | null; chapter: string | null; selection_bounded: string; prompt: string } }`
+- errors: `Validation` (unknown mode), `NotFound` (book), `Db`
+
+PRIV-A11Y-009 (additive, v7): the consent sheet's EXACT preview — the destination host, every book-derived field exactly as sanitized/fenced, the FULL bounded selection, and the complete prompt. Built by the same constructor `cmd_ai_ask` sends from, so the preview is byte-identical to the send. Pure read: writes no consent, no audit row, sends nothing.
+
+v8: `provider` and `fingerprint` are the backend-issued **consent binding**. `fingerprint` is a SHA-256 over the provider id, the canonical destination host, and the complete prompt. The consent sheet passes all three back verbatim as `cmd_ai_ask`'s `consent` argument; the send boundary recomputes them for that very call and compares — so a confirm can only ever authorize the exact send the reader reviewed.
+
 #### `cmd_ai_ask`
-- args: `{ bookId: string; mode: string; selection: string; chapter?: string; locator?: string; userNote?: string; onEvent: Channel<StreamEvent> }`
+- args: `{ bookId: string; mode: string; selection: string; chapter?: string; locator?: string; userNote?: string; depth?: string; consent?: { provider: string; host: string; fingerprint: string }; onEvent: Channel<StreamEvent> }`
 - returns: `AskHandle { ai_request_id: string; prompt_sent: string; provider_host: string }`
-- errors: `Validation`, `Config` (no provider/model/key), `NeedsCloudConsent` (first cloud send not confirmed), `CapExhausted` (included assistant allowance exhausted), `NotFound` (book), `Ai` (URL refused, transport failure, circuit open)
+- errors: `Validation`, `Config` (no provider/model/key), `NeedsCloudConsent` (first cloud send not confirmed, or the supplied `consent` binding no longer matches this call), `CapExhausted` (included assistant allowance exhausted), `NotFound` (book), `Ai` (URL refused, transport failure, circuit open)
+
+**First-cloud consent (v8).** Without remembered consent, a remote ask rejects `NeedsCloudConsent` naming the canonical destination host. The frontend shows the consent sheet with `cmd_outbound_envelope`'s exact preview, then retries **this same command** with `consent` set to the preview's `{ provider, host, fingerprint }`. The send boundary re-resolves the call and validates all three; on a match it records the remembered-consent flag and dispatches — on any drift (provider switched, destination changed, selection edited) it rejects `NeedsCloudConsent` with the CURRENT host, sends nothing, and records nothing. There is no separate confirm command, so no window exists between confirming and sending.
 
 **The bytes in `messages[0].content` of the actual HTTP request equal `prompt_sent` byte-for-byte.** That invariant is pinned by `preview_text_equals_sent_payload` in the test suite.
 
@@ -369,13 +443,6 @@ type StreamEvent =
 ```
 
 The call is fronted by a circuit breaker (3 failures / 60s window / 30s cool-down). When Open, the command errors immediately with `AppError::Ai { message: "AI service unavailable: circuit open …" }` instead of hanging.
-
-#### `cmd_confirm_cloud_send`
-- args: none
-- returns: void
-- errors: `Db`
-
-Records first-cloud-call consent. After this, `cmd_ai_ask` no longer returns `NeedsCloudConsent` for the chosen remote provider.
 
 #### `cmd_model_catalog`
 - args: `{ provider: string }`
@@ -415,7 +482,7 @@ Sets the reader's local BYO cloud spend cap in whole cents (`0` = off). Company 
 - returns: `CompanyStatus { provider_active: boolean; has_license: boolean }`
 - errors: `Validation` (bad token), `Ai` (relay unreachable), `Io`/`Config` (Keychain failure)
 
-Exchanges a paid-build activation token for a Keychain-held license, switches `ai_provider` to `company`, resets phrase backoff, and stamps first-cloud consent.
+Exchanges a paid-build activation token for a Keychain-held license and switches `ai_provider` to `company`. It never stamps first-cloud consent (CORE-1177) — the consent sheet still gates the first real send.
 
 #### `cmd_company_status`
 - args: none
@@ -475,7 +542,7 @@ Clears app-owned Codex credentials. It does not modify the Codex CLI's own login
 
 #### `cmd_save_ai_response_as_note`
 - args: `{ aiRequestId: string; noteType: string; body: string; locator: string; chapterLabel?: string; anchorStart?: string; anchorEnd?: string; anchoredText?: string; sessionId?: string }`
-- returns: `Note`
+- returns: `SavedNote` — `{ note: Note; export: { ok: boolean; message: string | null } }` (v7)
 - errors: same as `cmd_save_ai_preview_as_note`
 
 Like `cmd_save_ai_preview_as_note`, the four trailing fields are **additive/optional**; when present they anchor the saved card in the Companion Margin. Privacy note: the saved `body` is user-authored text — the literature-note export writes only that body for non-highlight notes (the AI prompt and the raw selected passage `anchored_text` are stored in the DB only, never exported; `anchored_text` reaches Markdown only as the content of a `Highlight` note, hard-capped at ~300 chars).
@@ -512,6 +579,13 @@ Applies the retention window now ("Forget now"): deletes `ai_requests` rows olde
 
 ### Settings
 
+#### `cmd_reveal_data_folder`
+- args: none
+- returns: void
+- errors: `Io` if the app-support folder cannot be resolved or revealed
+
+Opens the local data folder in Finder (Settings › Files). Creates it first on a brand-new install. Local only — no network, no content.
+
 #### `cmd_get_settings`
 - args: none
 - returns: `SettingsDto`
@@ -538,11 +612,15 @@ type SettingsDto = {
   ai_key_present_openai: boolean;
   ai_key_present_anthropic: boolean;
   ai_codex_creds_present: boolean;
-  ai_phrases: boolean;
   // Appearance (settings redesign; additive)
   ui_theme: "light" | "dark" | "auto" | "";   // "" = never chosen here (frontend migrates legacy tl.theme once, else Auto)
   reading_typeface: "newsreader" | "iowan" | "charter";
   reading_line_spacing: "comfortable" | "compact" | "open";
+  // R5 (additive): the library GENERATION token — an opaque id rotated by
+  // every library replacement (manual restore, Undo restore, automatic
+  // recovery, fresh start). Frontend note drafts record it and never
+  // auto-apply across a rotation. "" on libraries predating the token.
+  library_generation: string;
 };
 ```
 
@@ -561,13 +639,13 @@ type SettingsDto = {
 Launch-time preflight for the effective export root. It does not create the default `~/Documents/Throughline` folder; a missing folder is considered writable until the first reader-initiated export creates it.
 
 #### `cmd_set_ai_settings`
-- args: `{ provider?: string; baseUrl?: string; model?: string; retentionDays?: number; aiPhrases?: boolean }`
+- args: `{ provider?: string; baseUrl?: string; model?: string; retentionDays?: number }`
 - returns: `SettingsDto` (updated)
 - errors: `Validation` (unknown provider), `Config` (non-loopback local base URL), `Db`
 
-`retentionDays` sets the AI audit retention window (adr-001), clamped to ≥ 0 (0 disables the sweep). `aiPhrases` turns AI session phrases on/off (Stage 3, docs/PHRASES_API.md); off means zero phrase network calls, and turning it on (like a provider change, a new key, or re-activation) resets the phrase backoff state. The returned `SettingsDto` carries the matching `ai_phrases: boolean` field. Each arg can be set independently. Additive; `COMMAND_API_VERSION` stays `1`. (The old `localOnly` arg no longer exists — the authoritative switch is `provider`.)
+`retentionDays` sets the AI audit retention window (adr-001), clamped to ≥ 0 (0 disables the sweep). Each arg can be set independently. The `aiPhrases` argument was REMOVED in v7 along with background phrase generation (PRIV-001). (The old `localOnly` arg no longer exists — the authoritative switch is `provider`.)
 
-Backend-emitted event: `tl-phrases-updated` fires after a phrase batch is stored (fire-and-forget upsert); the frontend refreshes the Today card so the phrase slot swaps text in place. Additive, no command-surface change.
+Backend-emitted event: the backend no longer emits `tl-phrases-updated` (phrase generation was removed, PRIV-001); the window event of the same name survives only as the browser harness's hook for the Today phrase slot's zero-CLS swap of already-cached phrases.
 
 #### `cmd_set_ai_key`
 - args: `{ provider: "openai" | "anthropic"; key: string }`
@@ -604,7 +682,7 @@ All local: files live under `{app_support}/backups/`, never the export tree, nev
 
 #### `cmd_backup_status`
 - args: none
-- returns: `{ enabled: boolean; last_backup_at: string | null }` (RFC3339, from the newest backup's filename timestamp)
+- returns: `{ enabled: boolean; last_backup_at: string | null; undo_available: boolean }` (RFC3339, from the newest backup's filename timestamp; `undo_available` is true while a pre-restore snapshot exists — REC-011)
 - errors: `Db`
 
 #### `cmd_set_backups_enabled`
@@ -622,9 +700,23 @@ Gates the launch-time rolling backup AND the in-app daily schedule (settings key
 #### `cmd_restore_backup`
 - args: `{ id: string }` — an id from `cmd_list_backups`, validated (single plain backup-scheme file name; no path can reach the filesystem join)
 - returns: `void`
-- errors: `Validation` (bad id), `Io` (unusable backup / restore failure — the library is unchanged), `Internal`
+- errors: `Validation` (bad id; or an INCOHERENT backup — it names books whose files no longer read on this Mac; the message lists them and the library is unchanged), `Io` (unusable backup / restore failure — the library is unchanged), `Internal`
 
-Restores the library from a chosen backup: the candidate is proven restorable first (opens, integrity-checks, migrates), the CURRENT live DB is snapshotted aside (`pre-restore-*.db`, outside the rolling scheme, newest kept), then the backup is moved into place atomically and the live connection reopens on it. The frontend reloads afterward — every screen's state is stale once the library changed underneath it.
+Restores the library from a chosen backup through THE shared coherence preflight (REC-011 — the same gate the automatic corruption recovery and `cmd_undo_restore` use): the candidate must validate on a disposable copy AND every book row it lists must read through the production read/regeneration path. The CURRENT live DB is snapshotted aside (`pre-restore-*.db`, the undo target), then the backup is moved into place atomically and the live connection reopens on it. The frontend reloads afterward.
+
+#### `cmd_undo_restore`
+- args: none
+- returns: `void`
+- errors: `Validation` (no restore to undo / incoherent snapshot), `Io`, `Internal`
+
+REC-011 (additive, v7): one-shot undo of the last restore — puts the pre-restore snapshot back through the same preflight + atomic-replace path, then consumes the snapshot (the Files pane's undo affordance disappears; `cmd_backup_status.undo_available` flips false).
+
+#### `cmd_stage_restore_source`
+- args: `{ id: string; path: string }` — a backup id + a reader-picked book file
+- returns: `{ title: string; source_type: string }` — the matched backup row
+- errors: `Validation` (no SHA-256 match in that backup / wrong file type / a different file already present)
+
+REC-011 "re-import, then restore" (additive, v7): matches the picked file to a row in the chosen backup by FULL SHA-256 (content, never name), then re-runs the production importer's deterministic derivation INTO that row's historical book id — files only; the live library is untouched. After staging, the restore/undo preflight for that book passes.
 
 ---
 
@@ -650,7 +742,7 @@ Posts the ALLOWLISTED payload (message + 3 diagnostics + optional reply email, n
 
 - **Provider is authoritative:** `ai_provider` decides where AI calls go; the legacy `ai_local_only` key is back-compat only and is not exposed to JS.
 - **Local provider is loopback-only:** when `ai_provider = "local"`, `cmd_ai_ask` and `cmd_list_ai_models` refuse non-loopback URLs at the call site via `ai_client::validate_base_url`. Test: `local_only_rejects_remote_and_allows_loopback`.
-- **Selection/section-only context:** tutor lenses send the selected passage; Deep Study sends only the current section after the reader chose Deep Study, started a session, and consented. The book body is never sent in bulk.
+- **Selection/section-only context:** tutor lenses send the selected passage; Deep Study sends only the current section after the reader chose Deep Study, started a session, and consented. Each request also carries the book's title, author, and chapter label for context — disclosed in the consent sheet's exact envelope preview. The book body is never sent in bulk.
 - **Save-by-approval:** `ai_requests.wrote_to_memory` flips to 1 only via the explicit save commands. No autonomous writes from AI output.
 - **Auditable + bounded (adr-001):** every preview and Ask call is logged to `ai_requests` and visible via `cmd_list_ai_requests`; `provider` distinguishes a preview (never sent) from a real call (the host). A launch sweep + `cmd_forget_ai_history` delete rows older than `ai_requests_retention_days` that never became a note, so discarded previews fade while the save-by-approval trace persists.
 - **No telemetry:** structured logs go to `{app_support}/logs/app.log` and never leave the machine.
@@ -659,12 +751,15 @@ Posts the ALLOWLISTED payload (message + 3 diagnostics + optional reply email, n
 
 ## Frontend version check
 
-Recommended startup pattern:
+A RECOMMENDED example — **not currently wired**: the shipped frontend makes no
+`cmd_api_version` call at startup, because Throughline ships frontend and
+backend in one binary and the two cannot drift in a released build. If the
+deployment model ever splits (remote frontend, plugin host), wire this first:
 
 ```ts
 import { invoke } from "@tauri-apps/api/core";
 
-const FRONTEND_EXPECTED_API_VERSION = 6;
+const FRONTEND_EXPECTED_API_VERSION = 8;
 
 async function checkBackend() {
   try {
@@ -681,4 +776,4 @@ async function checkBackend() {
 }
 ```
 
-(Throughline ships frontend + backend in the same binary, so this is mostly a refactoring safety net rather than a deployment-time check. But it's wired so a future split deploy works.)
+(Throughline ships frontend + backend in the same binary, so this is a refactoring safety net rather than a deployment-time check. It is documentation of the recommended pattern, not shipped behavior.)

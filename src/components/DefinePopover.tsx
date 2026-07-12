@@ -80,6 +80,13 @@ export default function DefinePopover(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A11Y-010: deterministic initial focus — the popover itself takes focus on
+  // mount, so its dialog name + streaming definition are announced and Escape
+  // works immediately without hunting for the popover.
+  useEffect(() => {
+    rootRef.current?.focus();
+  }, []);
+
   // Dismiss on the next click anywhere outside the popover, and on Escape.
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -105,6 +112,7 @@ export default function DefinePopover(props: {
     <div
       ref={rootRef}
       className={props.below ? "tl-define below" : "tl-define"}
+      tabIndex={-1}
       style={{ left: props.x, top: props.y }}
       role="dialog"
       aria-label={`Define ${props.term}`}

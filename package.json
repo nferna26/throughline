@@ -2,7 +2,7 @@
   "name": "throughline",
   "private": true,
   "version": "0.9.2",
-  "description": "Local-first macOS reading app for serious readers — import a book, see today's section, capture durable notes, export to Markdown.",
+  "description": "Local-first macOS reading app for serious readers \u2014 import a book, see today's section, capture durable notes, export to Markdown.",
   "license": "MIT",
   "author": "Nick Fernandez",
   "repository": {
@@ -45,6 +45,7 @@
     "jsdom": "^29.1.1",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
-    "vitest": "^4.1.7"
+    "vitest": "^4.1.7",
+    "wrangler": "4.110.0"
   }
 }

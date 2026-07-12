@@ -2,21 +2,143 @@ name: Release
 
 # Triggered by pushing a version tag, e.g.:
 #   git tag v0.1.0 && git push origin v0.1.0
+#
+# REL-008 — this pipeline FAILS CLOSED. Nothing reader-visible is published
+# until every one of these holds, in order:
+#   1. the tag's exact commit has a SUCCESSFUL full CI run and is an ancestor
+#      of main (gate job);
+#   2. the protected "release" GitHub environment approves the run
+#      (Settings → Environments → release → required reviewers — operator
+#      action; see docs/DISTRIBUTION.md);
+#   3. every signing/notary/updater/R2 secret is present (no unsigned
+#      fallback — a missing secret stops the run before the build);
+#   4. the built artifacts pass codesign (Developer ID + hardened runtime),
+#      universal-arch, exact-version, notarization + stapling, and
+#      CRYPTOGRAPHIC updater-signature checks on the runner;
+#   5. the complete IMMUTABLE release tuple (payload, .sig, DMG — all
+#      content-addressed) is uploaded and read-back-verified in R2;
+#   6. only then is the ONE mutable pointer switched — updates/latest.json, a
+#      single atomic PUT naming the whole tuple (the site's /download resolves
+#      the DMG through it) — with the previous manifest retained as
+#      updates/rollback.json; an interrupted run leaves the complete old
+#      release, never a mixed tuple;
+#   7. the public origin is re-verified end-to-end (including the updater
+#      signature, cryptographically) and the GitHub release is created LAST,
+#      published (never a draft — CORE-1073), from already-verified bytes.
+#
+# Third-party actions are pinned to immutable commit SHAs (reviewed 2026-07-09);
+# the tag comments record the human-readable version each SHA corresponds to.
 on:
   push:
     tags:
       - "v*"
 
+# REL-008: releases are SERIALIZED — two tag pushes can never interleave their
+# publication steps (the in-engine monotonic guard additionally refuses a stale
+# tag that would downgrade the live pointer). Never cancel a publishing run.
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
-  build-dmg:
+  gate:
+    name: Gate — green CI for the exact tag SHA + main ancestry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Tag commit must be an ancestor of main
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag ${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is NOT on main. Releases ship only commits that went through main."
+            exit 1
+          fi
+          echo "✓ ${GITHUB_SHA} is on main"
+
+      - name: Require a successful full CI run for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          GREEN=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=completed&per_page=20" \
+            --jq '[.workflow_runs[] | select(.conclusion=="success")] | length')
+          if [ "${GREEN}" -lt 1 ]; then
+            echo "::error::No successful CI run exists for ${GITHUB_SHA}. Land the commit on main, wait for CI to go green, then tag that exact commit."
+            exit 1
+          fi
+          echo "✓ CI is green for ${GITHUB_SHA} (${GREEN} successful run(s))"
+
+      - name: Require the protected release environment (API-proven, not assumed)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # REL-008: the "release" environment must EXIST and carry a
+          # required-reviewers protection rule before anything may publish.
+          # This is proven from API metadata every run — never assumed.
+          # Operator setup (Nick): Settings → Environments → New environment →
+          # "release" → add required reviewers → move the release secrets onto
+          # it. See docs/DISTRIBUTION.md.
+          if ! ENV_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/environments/release" 2>/dev/null); then
+            echo "::error::The 'release' environment does not exist. Create it with required reviewers and environment-scoped secrets (docs/DISTRIBUTION.md), then re-run."
+            exit 1
+          fi
+          REVIEW_RULES=$(printf '%s' "$ENV_JSON" | jq '[.protection_rules[]? | select(.type=="required_reviewers")] | length')
+          if [ "${REVIEW_RULES}" -lt 1 ]; then
+            echo "::error::The 'release' environment exists but has NO required reviewers — publication would not pause for human approval. Add required reviewers, then re-run."
+            exit 1
+          fi
+          echo "✓ release environment exists with required reviewers"
+
+  build-and-publish:
+    name: Build, verify, publish (fail-closed)
+    needs: gate
     runs-on: macos-latest
+    # REL-008: the protected release environment holds the publication gate.
+    # Configure required reviewers on it so a human approves every release run;
+    # its secrets scope also keeps signing material out of ordinary CI.
+    environment: release
     env:
       DISTRIBUTION_ORIGIN: https://readthroughline.com
       R2_BUCKET: throughline-downloads
     permissions:
-      contents: write # needed to create the GitHub Release + upload release assets
+      contents: write # to create the GitHub Release + upload release assets (last step)
     steps:
-      - uses: actions/checkout@v4
+      - name: Preflight — every release secret must be present (no unsigned fallback)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          MISSING=""
+          for NAME in TAURI_SIGNING_PRIVATE_KEY APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            VALUE=$(printenv "$NAME" || true)
+            if [ -z "$VALUE" ]; then MISSING="$MISSING $NAME"; fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Release secrets missing:$MISSING — a release NEVER falls back to unsigned. Configure them on the release environment (docs/SIGNING.md, docs/DISTRIBUTION.md) and re-run."
+            exit 1
+          fi
+          echo "✓ all release secrets present"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           # CORE-1160: fetch full history + all tags so the ANNOTATED TAG MESSAGE
           # is readable below (git for-each-ref %(contents)) to derive update
@@ -25,43 +147,53 @@ jobs:
           fetch-tags: true
 
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          # Locked wrangler 4.110.0 declares engines.node >=22 — Node 20 would
+          # fail the publish step at the worst possible moment. Keep this in
+          # sync with devDependencies.wrangler's engine requirement (pinned by
+          # src/releasePipeline.test.ts).
+          node-version: 22
           cache: npm
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable branch, reviewed pin
         with:
+          toolchain: stable
           # Build a universal binary so the .dmg runs on both Apple Silicon and Intel.
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: src-tauri
 
       - name: Install JS dependencies
         run: npm ci
 
-      - name: Build + bundle + sign + notarize + publish release
-        uses: tauri-apps/tauri-action@v0
+      - name: Version consistency — repo versions must equal the tag
+        run: |
+          set -euo pipefail
+          npm run version:check
+          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(jq -r .version package.json)
+          if [ "$PKG_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${PKG_VERSION}. Bump versions (npm run version:check) before tagging."
+            exit 1
+          fi
+          echo "✓ versions consistent at ${RELEASE_VERSION}"
+
+      # BUILD ONLY (no tagName/releaseName): tauri-action signs the .app with the
+      # Developer ID cert, notarizes + staples it, and signs the updater
+      # .app.tar.gz with the minisign key (createUpdaterArtifacts). The GitHub
+      # release is deliberately NOT created here — publication of every stable
+      # surface happens only after the verification gates below pass.
+      - name: Build + bundle + sign + notarize (no publication yet)
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # ── Updater signing (REQUIRED) ──
-          # tauri.conf has createUpdaterArtifacts: true, so the bundle step signs
-          # the .app.tar.gz with this minisign key and writes latest.json. Without
-          # it the build FAILS. Set TAURI_SIGNING_PRIVATE_KEY to the contents of
-          # ~/.throughline-updater.key; password is empty (as generated). See
-          # docs/DISTRIBUTION.md. The matching public key is baked into tauri.conf.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # ── macOS code signing + notarization ──
-          # tauri-action signs + notarizes automatically when these are present.
-          # If the repo has no signing secrets set, all of these resolve to empty
-          # strings and the build falls back to UNSIGNED (still produces a .dmg,
-          # but first-open needs right-click → Open). See docs/SIGNING.md for the
-          # one-time setup that populates these secrets.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -69,169 +201,319 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Throughline ${{ github.ref_name }}"
-          # Shown on the optional GitHub release page. Runtime distribution is
-          # R2-backed through readthroughline.com below. The .dmg is a universal
-          # binary — one download runs on both Apple Silicon and Intel Macs.
-          releaseBody: |
-            **Install:** open the `.dmg` and drag **Throughline** into your Applications folder.
-
-            Runs on macOS 11+ (Apple Silicon and Intel). See CHANGELOG.md for what changed.
-          # PUBLISHED on tag, never a draft. The in-app updater only sees
-          # published releases (the endpoint resolves to /releases/latest), and
-          # a draft left unpublished strands every shipped reader on a 404 —
-          # which is exactly what happened for v0.1.0–v0.4.0 (CORE-1073).
-          # Review happens BEFORE tagging; pushing the tag is the release.
-          # See docs/DISTRIBUTION.md.
-          releaseDraft: false
-          prerelease: false
           args: --target universal-apple-darwin
 
-      # ── Notarize the .dmg itself ──
-      # tauri-action notarizes + staples the .app (so the auto-update payload and
-      # the app inside the dmg pass Gatekeeper), but it does NOT notarize the .dmg
-      # CONTAINER. A website download arrives quarantined, and an un-notarized dmg
-      # triggers "can't be opened because Apple cannot check it for malicious
-      # software" on first double-click. So we notarize + staple the dmg here and
-      # replace the asset on the release. Verified necessary: spctl reports
-      # the un-notarized dmg as "rejected, source=Unnotarized Developer ID".
-      # Auto-skips if the Apple secrets aren't set (the unsigned fallback build).
-      - name: Notarize + staple the .dmg (website download must pass Gatekeeper)
+      - name: Locate built artifacts
+        id: artifacts
+        run: |
+          set -euo pipefail
+          APP=$(find src-tauri/target/universal-apple-darwin -type d -name '*.app' -path '*bundle/macos/*' | head -n 1)
+          DMG=$(find src-tauri/target/universal-apple-darwin -path '*bundle/dmg/*.dmg' | head -n 1)
+          UPDATE_TAR=$(find src-tauri/target/universal-apple-darwin -path '*bundle/macos/*.app.tar.gz' | head -n 1)
+          SIG="${UPDATE_TAR}.sig"
+          for VAR in APP DMG UPDATE_TAR; do
+            VALUE=$(eval "echo \"\$$VAR\"")
+            if [ -z "$VALUE" ] || [ ! -e "$VALUE" ]; then
+              echo "::error::built artifact missing: $VAR"; exit 1
+            fi
+          done
+          if [ ! -f "$SIG" ]; then echo "::error::updater signature (.sig) missing beside $UPDATE_TAR"; exit 1; fi
+          # REL-008: the manifest is GENERATED deterministically from the built
+          # artifacts + the tag — never scraped from a build side-effect. The
+          # pub date is the tag commit's own timestamp, so a rerun reproduces
+          # the identical manifest for identical inputs.
+          mkdir -p r2-release
+          PUB_DATE=$(git log -1 --format=%cI "$GITHUB_SHA")
+          node scripts/generate-latest-json.mjs \
+            --sig "$SIG" \
+            --version "$GITHUB_REF_NAME" \
+            --pub-date "$PUB_DATE" \
+            --out r2-release/latest-generated.json
+          {
+            echo "app=$APP"
+            echo "dmg=$DMG"
+            echo "update_tar=$UPDATE_TAR"
+            echo "sig=$SIG"
+            echo "latest_json=$PWD/r2-release/latest-generated.json"
+          } >> "$GITHUB_OUTPUT"
+
+      # ── The pre-publication verification gate ──
+      # Any failure here stops the run with NOTHING published anywhere.
+      - name: Verify signed artifacts (codesign · Developer ID · hardened runtime · universal · version)
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APP: ${{ steps.artifacts.outputs.app }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+
+          echo "── codesign deep/strict verify"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+          echo "── Developer ID identity + team"
+          INFO=$(codesign -dvv "$APP" 2>&1)
+          echo "$INFO" | grep -E "Authority=Developer ID Application" >/dev/null \
+            || { echo "::error::app is not signed with a Developer ID Application identity"; exit 1; }
+          echo "$INFO" | grep -E "TeamIdentifier=${APPLE_TEAM_ID}" >/dev/null \
+            || { echo "::error::app TeamIdentifier does not match APPLE_TEAM_ID"; exit 1; }
+
+          echo "── hardened runtime"
+          codesign -d --verbose=2 "$APP" 2>&1 | grep -E "flags=.*runtime" >/dev/null \
+            || { echo "::error::hardened runtime flag missing from the app signature"; exit 1; }
+
+          echo "── universal architectures"
+          BIN="$APP/Contents/MacOS/$(defaults read "$PWD/$APP/Contents/Info" CFBundleExecutable 2>/dev/null || plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")"
+          ARCHS=$(lipo -archs "$BIN")
+          case "$ARCHS" in
+            *x86_64*arm64*|*arm64*x86_64*) echo "✓ universal: $ARCHS" ;;
+            *) echo "::error::binary is not universal (got: $ARCHS)"; exit 1 ;;
+          esac
+
+          echo "── exact version"
+          APP_VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
+          if [ "$APP_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "::error::app version $APP_VERSION does not match tag $GITHUB_REF_NAME"; exit 1
+          fi
+
+          echo "── app notarization stapled + Gatekeeper assessment"
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute --verbose=2 "$APP"
+
+          echo "✓ signed-artifact verification passed"
+
+      - name: Verify updater signature cryptographically (Rust reference verifier + JS cross-check)
+        env:
+          UPDATE_TAR: ${{ steps.artifacts.outputs.update_tar }}
+          SIG: ${{ steps.artifacts.outputs.sig }}
+          LATEST_JSON: ${{ steps.artifacts.outputs.latest_json }}
+        run: |
+          set -euo pipefail
+          # AUTHORITATIVE: the exact minisign-verify crate + call
+          # tauri-plugin-updater ships with (allow_legacy = true), via
+          # src-tauri/examples/verify_minisign.rs. Run FROM THE REPO ROOT with
+          # --manifest-path: the artifact paths in $UPDATE_TAR/$SIG are
+          # repo-root-relative (src-tauri/target/…), so a `cd src-tauri` would
+          # silently point them at src-tauri/src-tauri/… and fail.
+          cargo run --locked --manifest-path src-tauri/Cargo.toml --example verify_minisign -- \
+            --payload "$UPDATE_TAR" \
+            --sig "$SIG" \
+            --pubkey-from-tauri-conf src-tauri/tauri.conf.json
+          # CROSS-CHECK: the JS verifier (used hermetically in tests and for
+          # the post-publish public check) must agree — semantic drift between
+          # the two implementations fails the release here.
+          node scripts/verify-release-assets.mjs \
+            --local-payload "$UPDATE_TAR" \
+            --local-sig "$SIG" \
+            --local-manifest "$LATEST_JSON" \
+            --pubkey-from-tauri-conf src-tauri/tauri.conf.json \
+            --expected-version "$GITHUB_REF_NAME"
+
+      # tauri-action notarizes + staples the .app, but NOT the .dmg CONTAINER: a
+      # quarantined website download of an un-notarized dmg fails Gatekeeper. So
+      # the dmg is notarized + stapled here, and its stapling is REQUIRED — a
+      # failure stops the release before anything publishes.
+      - name: Notarize + staple + verify the .dmg
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DMG: ${{ steps.artifacts.outputs.dmg }}
         run: |
           set -euo pipefail
-          if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_PASSWORD:-}" ] || [ -z "${APPLE_TEAM_ID:-}" ]; then
-            echo "Apple notary credentials not set — skipping .dmg notarization (unsigned build)."
-            exit 0
-          fi
-          DMG=$(find src-tauri/target -path '*bundle/dmg/*.dmg' | head -1)
-          if [ -z "$DMG" ]; then echo "::error::no .dmg found to notarize"; exit 1; fi
           echo "Notarizing $DMG"
           xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
             --wait
           xcrun stapler staple "$DMG"
           xcrun stapler validate "$DMG"
-          echo "Re-uploading the stapled .dmg over the release asset"
-          gh release upload "${{ github.ref_name }}" "$DMG" --clobber -R "${{ github.repository }}"
-          echo "✓ .dmg notarized, stapled, re-uploaded"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
+          echo "✓ .dmg notarized, stapled, assessed"
 
-      # ── Publish distribution assets to Cloudflare R2 ──
-      # Runtime download/update traffic must not depend on public GitHub Releases:
-      # the repo can go private and readers still fetch from readthroughline.com.
-      # We keep tauri-action's build, minisign signing, notarization, and optional
-      # GitHub Release upload intact. The minisign signature covers the
-      # .app.tar.gz bytes, not the URL, so rehosting the identical payload at R2 is
-      # valid. This step rewrites only latest.json's per-platform url fields.
-      #
-      # Required Actions secrets:
-      #   CLOUDFLARE_API_TOKEN   token with R2 object edit access
-      #   CLOUDFLARE_ACCOUNT_ID  Cloudflare account that owns throughline-downloads
-      - name: Publish download and updater artifacts to Cloudflare R2
+      # ── Staged publication to Cloudflare R2 (scripts/stage-release.mjs) ──
+      # Versioned objects use CONTENT-ADDRESSED keys, so a tag rerun can never
+      # overwrite a URL the live manifest references; identical bytes re-put is
+      # skipped (rerun-safe); every object is read back and hash-compared; the
+      # previous manifest is retained as updates/rollback.json; only then are
+      # the stable pointers (updates/latest.json, Throughline.dmg) switched.
+      # The staging engine is unit-tested (src/stageRelease.test.ts) with an
+      # injected store covering rerun and mid-publication failure.
+      - name: Publish immutable artifacts to R2, verify, then switch THE release pointer
+        id: publish
+        # continue-on-error so ANY failure here — including one after the
+        # pointer PUT was issued — flows into the recovery step below, which
+        # decides (from the durable promotion-attempted marker) whether a
+        # rollback is warranted. The run still ends red on failure.
+        continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DMG: ${{ steps.artifacts.outputs.dmg }}
+          UPDATE_TAR: ${{ steps.artifacts.outputs.update_tar }}
+          SIG: ${{ steps.artifacts.outputs.sig }}
+          LATEST_JSON: ${{ steps.artifacts.outputs.latest_json }}
         run: |
           set -euo pipefail
-          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
-            echo "::error::Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repository secrets before cutting a release."
-            exit 1
-          fi
-
-          DMG=$(find src-tauri/target/universal-apple-darwin -path '*bundle/dmg/*.dmg' -print 2>/dev/null | head -n 1 || true)
-          if [ -z "$DMG" ]; then DMG=$(find src-tauri/target -path '*bundle/dmg/*.dmg' -print | head -n 1); fi
-          if [ -z "$DMG" ]; then echo "::error::no .dmg found to upload to R2"; exit 1; fi
-
-          UPDATE_TAR=$(find src-tauri/target/universal-apple-darwin -path '*bundle/macos/*.app.tar.gz' -print 2>/dev/null | head -n 1 || true)
-          if [ -z "$UPDATE_TAR" ]; then UPDATE_TAR=$(find src-tauri/target -path '*bundle/macos/*.app.tar.gz' -print | head -n 1); fi
-          if [ -z "$UPDATE_TAR" ]; then echo "::error::no updater .app.tar.gz found to upload to R2"; exit 1; fi
-
-          mkdir -p r2-release
-          SIG="${UPDATE_TAR}.sig"
-          LATEST_JSON=$(find src-tauri/target -name latest.json -print 2>/dev/null | head -n 1 || true)
-          if [ ! -f "$SIG" ] || [ -z "$LATEST_JSON" ] || [ ! -f "$LATEST_JSON" ]; then
-            gh release download "${{ github.ref_name }}" \
-              --pattern '*.app.tar.gz.sig' \
-              --pattern 'latest.json' \
-              --dir r2-release \
-              --clobber \
-              -R "${{ github.repository }}"
-          fi
-          if [ ! -f "$SIG" ]; then SIG=$(find r2-release -name '*.app.tar.gz.sig' -print | head -n 1); fi
-          if [ -z "$LATEST_JSON" ] || [ ! -f "$LATEST_JSON" ]; then LATEST_JSON=$(find r2-release -name latest.json -print | head -n 1); fi
-          if [ -z "$SIG" ] || [ ! -f "$SIG" ]; then echo "::error::no updater .sig found to upload to R2"; exit 1; fi
-          if [ -z "$LATEST_JSON" ] || [ ! -f "$LATEST_JSON" ]; then echo "::error::no latest.json found to rewrite and upload to R2"; exit 1; fi
-
-          UPDATE_FILENAME=$(basename "$UPDATE_TAR")
-          REWRITTEN_LATEST_JSON="$PWD/r2-release/latest.json"
-
           # CORE-1160 — derive update severity from the ANNOTATED TAG MESSAGE. A
           # release is critical iff its message has a line matching
           # /^severity:\s*critical\s*$/i (cut with: git tag -a vX -m "severity: critical").
-          # Lightweight tags, or any tag without that line, stay routine (empty SEVERITY).
+          # Lightweight tags, or any tag without that line, stay routine.
           TAG_MESSAGE=$(git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)' 2>/dev/null || true)
           SEVERITY=""
           if printf '%s\n' "$TAG_MESSAGE" | grep -qiE '^severity:[[:space:]]*critical[[:space:]]*$'; then
             SEVERITY="critical"
           fi
-          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
           echo "Release ${GITHUB_REF_NAME} severity: ${SEVERITY:-routine}"
+          echo "SEVERITY=$SEVERITY" >> "$GITHUB_ENV"
 
-          export DISTRIBUTION_ORIGIN UPDATE_FILENAME LATEST_JSON REWRITTEN_LATEST_JSON SEVERITY RELEASE_VERSION
-          node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from "node:fs";
+          # R4 WORKER CAPABILITY PREFLIGHT: the deployed site Worker must
+          # resolve /download THROUGH the manifest (it stamps
+          # x-tl-download-resolution on every /download response). An
+          # undeployed old Worker keeps serving the legacy stable key this
+          # pipeline no longer writes — stop BEFORE anything publishes.
+          CAP=$(curl -sSIL --max-time 30 "$DISTRIBUTION_ORIGIN/download" | tr -d '\r' | grep -i '^x-tl-download-resolution:' | awk '{print $2}' || true)
+          if [ "$CAP" != "manifest" ]; then
+            echo "::error::the deployed site Worker does not advertise manifest-resolved downloads (x-tl-download-resolution=${CAP:-absent}). Deploy throughline-site first — publishing now would strand /download on a stale DMG."
+            exit 1
+          fi
+          echo "✓ site Worker capability preflight: manifest-resolved /download"
 
-          const manifest = JSON.parse(readFileSync(process.env.LATEST_JSON, "utf8"));
-          const platforms = manifest.platforms;
-          if (!platforms || typeof platforms !== "object") {
-            throw new Error("latest.json has no platforms object");
-          }
-          const updateUrl = `${process.env.DISTRIBUTION_ORIGIN}/updates/${process.env.UPDATE_FILENAME}`;
-          for (const value of Object.values(platforms)) {
-            if (value && typeof value === "object" && "url" in value) {
-              value.url = updateUrl;
-            }
-          }
-          // CORE-1160: tag the manifest critical (security) when the annotated tag
-          // marked it so. Routine releases leave both fields unset, so latest.json
-          // stays byte-compatible. The Tauri updater ignores unknown top-level
-          // fields; the app reads severity/criticalBelow via Update.rawJson. The
-          // minisign signature covers the .app.tar.gz bytes, not latest.json, so
-          // this needs no re-sign and cannot invalidate the update.
-          if (process.env.SEVERITY === "critical") {
-            manifest.severity = "critical";
-            manifest.criticalBelow = process.env.RELEASE_VERSION;
-          }
-          writeFileSync(process.env.REWRITTEN_LATEST_JSON, `${JSON.stringify(manifest, null, 2)}\n`);
-          NODE
+          # Tooling comes from package-lock via `npm ci` above; stage-release
+          # resolves the LOCKED local wrangler executable itself — publication
+          # credentials never run `npx --yes` downloads.
+          node scripts/stage-release.mjs \
+            --payload "$UPDATE_TAR" \
+            --sig "$SIG" \
+            --dmg "$DMG" \
+            --manifest "$LATEST_JSON" \
+            --version "$GITHUB_REF_NAME" \
+            --origin "$DISTRIBUTION_ORIGIN" \
+            --bucket "$R2_BUCKET" \
+            --severity "$SEVERITY" \
+            --summary-out r2-release/stage-summary.json \
+            --pre-stage-out r2-release/pre-stage.json
+          DMG_SHA256=$(jq -r .dmgSha256 r2-release/stage-summary.json)
+          echo "DMG_SHA256=$DMG_SHA256" >> "$GITHUB_ENV"
 
-          npx wrangler@4 r2 object put "$R2_BUCKET/Throughline.dmg" \
-            --remote \
-            --file "$DMG" \
-            --content-type "application/octet-stream" \
-            --content-disposition 'attachment; filename="Throughline.dmg"' \
-            --cache-control "public, max-age=300"
-          npx wrangler@4 r2 object put "$R2_BUCKET/updates/$UPDATE_FILENAME" \
-            --remote \
-            --file "$UPDATE_TAR" \
-            --content-type "application/octet-stream" \
-            --cache-control "public, max-age=300"
-          npx wrangler@4 r2 object put "$R2_BUCKET/updates/$(basename "$SIG")" \
-            --remote \
-            --file "$SIG" \
-            --content-type "application/octet-stream" \
-            --cache-control "public, max-age=300"
-          npx wrangler@4 r2 object put "$R2_BUCKET/updates/latest.json" \
-            --remote \
-            --file "$REWRITTEN_LATEST_JSON" \
-            --content-type "application/json" \
-            --cache-control "public, max-age=300"
+      # Public end-to-end verification, INCLUDING the cryptographic updater
+      # signature over the served payload bytes. continue-on-error so a failure
+      # flows into the recovery step below — the run still ends red either way.
+      - name: Verify public origin serves the verified release
+        id: postverify
+        if: steps.publish.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          EXTRA=""
+          if [ "${SEVERITY:-}" = "critical" ]; then EXTRA="--expect-severity critical"; fi
+          node scripts/verify-release-assets.mjs \
+            --expected-version "$GITHUB_REF_NAME" \
+            --pubkey-from-tauri-conf src-tauri/tauri.conf.json \
+            --dmg-sha256 "$DMG_SHA256" \
+            $EXTRA
 
-      - name: Verify R2-hosted updater and download assets resolve
-        run: node scripts/verify-release-assets.mjs --expected-version "${{ github.ref_name }}"
+      # R9-3: the write-ahead release guard (updates/unresolved.json) was
+      # armed BEFORE the pointer switch and stays armed through the public
+      # verification above. Only now — with the public origin proven to serve
+      # this exact release — is THIS release's guard resolved (matched by
+      # release id + pointer digest; a different release's guard is refused
+      # and keeps blocking). If this step fails, the run ends red and every
+      # later release stays blocked until an operator resolves the guard.
+      - name: Resolve the release guard (public verification confirmed)
+        if: steps.publish.outcome == 'success' && steps.postverify.outcome == 'success'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          # R11-1: this step runs under the release-publish concurrency
+          # group — the serialization the resolver requires asserted.
+          node scripts/stage-release.mjs --resolve-guard r2-release/pre-stage.json --bucket "$R2_BUCKET" --quiescence release-lease
+
+      # R5: the FAILURE RECOVERY. Runs when the publish step failed at any
+      # point (including after the pointer PUT was issued but before its
+      # read-back, or after promotion but before postverify started) or when
+      # the public verification failed. It NEVER blindly rolls back: the
+      # durable promotion-attempted marker distinguishes failures provably
+      # before promotion (live release untouched — say so and stop) from
+      # failures after the pointer may have moved (restore the EXACT pre-stage
+      # pointer bytes and verify the public origin serves that release,
+      # including the DMG BYTES via the captured pre-stage hash). Every path
+      # ends the run red with the honest live state.
+      - name: Recover the release pointer (publish or verification failed)
+        if: always() && (steps.publish.outcome == 'failure' || steps.postverify.outcome == 'failure')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ ! -f r2-release/pre-stage.json ]; then
+            echo "::error::publish failed before the pre-stage state was captured — nothing was uploaded or promoted; the live release is untouched. NOT rolling back."
+            exit 1
+          fi
+          ATTEMPTED=$(jq -r '.promotionAttempted' r2-release/pre-stage.json)
+          if [ "${{ steps.publish.outcome }}" = "failure" ] && [ "$ATTEMPTED" != "true" ]; then
+            echo "::error::publish failed provably BEFORE the pointer promotion — the live release is untouched (immutable staging is rerun-safe). NOT rolling back."
+            exit 1
+          fi
+          echo "::error::${GITHUB_REF_NAME} failed after the pointer may have moved — analyzing the live pointer state"
+          # R7-6: the wrangler-backed store offers no conditional write
+          # (compare-and-swap), so restorePointer never auto-writes over a
+          # potentially concurrent release here — a warranted restore is
+          # REPORTED with the exact live state and the operator performs it.
+          # (Report-only and already-safe outcomes both exit nonzero below.)
+          if ! node scripts/stage-release.mjs --restore-pointer r2-release/pre-stage.json --bucket "$R2_BUCKET" --restore-report r2-release/restore-report.json; then
+            echo "::error::NOT AUTO-RESTORED — see the report above for the live pointer state and the exact operator recovery step (inspect updates/latest.json vs updates/rollback.json, restore conditionally, re-verify)."
+            exit 1
+          fi
+          ACTION=$(jq -r '.action' r2-release/restore-report.json)
+          RESTORED_VERSION=$(jq -r '.version // empty' r2-release/restore-report.json)
+          PREV_DMG_SHA=$(jq -r '.previousDmgSha256 // empty' r2-release/restore-report.json)
+          if [ "$ACTION" = "still-absent" ]; then
+            echo "::error::nothing was ever promoted (first release; pointer still absent). ${GITHUB_REF_NAME} was not released."
+            exit 1
+          fi
+          # Prove the restored state end-to-end — the manifest AND the DMG
+          # BYTES (via the manifest's own dmg.sha256, plus the captured
+          # pre-stage hash when the previous release predates dmg metadata).
+          EXTRA=""
+          if [ -n "$PREV_DMG_SHA" ]; then EXTRA="--dmg-sha256 $PREV_DMG_SHA"; fi
+          node scripts/verify-release-assets.mjs \
+            --expected-version "v${RESTORED_VERSION}" \
+            --pubkey-from-tauri-conf src-tauri/tauri.conf.json \
+            $EXTRA
+          # R10-3: only NOW — with the restored origin cryptographically
+          # verified (payload hash, DMG hash, .sig equality, minisign) — is
+          # the write-ahead guard resolved, and only the EXACT guard this
+          # run armed (release id + pointer digest + verified restored
+          # digest). A failed verification above leaves it pending.
+          RESTORED_DIGEST=$(jq -r '.restoredPointerSha256 // empty' r2-release/restore-report.json)
+          if [ -n "$RESTORED_DIGEST" ]; then
+            node scripts/stage-release.mjs --resolve-restored-guard r2-release/pre-stage.json \
+              --restored-digest "$RESTORED_DIGEST" --bucket "$R2_BUCKET" --quiescence release-lease \
+              || echo "::error::the release guard could not be resolved — it stays pending (later releases blocked) until an operator resolves it."
+          fi
+          echo "::error::live pointer ${ACTION} at ${RESTORED_VERSION} and the public origin VERIFIED serving it (DMG bytes included). ${GITHUB_REF_NAME} was not released."
+          exit 1
+
+      # The GitHub release is created LAST, from bytes every gate above already
+      # verified, and PUBLISHED on creation — never a draft (CORE-1073: four
+      # consecutive releases stalled as drafts and stranded the updater).
+      - name: Create the published GitHub release (verified bytes, never a draft)
+        if: steps.publish.outcome == 'success' && steps.postverify.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DMG: ${{ steps.artifacts.outputs.dmg }}
+          UPDATE_TAR: ${{ steps.artifacts.outputs.update_tar }}
+          SIG: ${{ steps.artifacts.outputs.sig }}
+        run: |
+          set -euo pipefail
+          NOTES="**Install:** open the \`.dmg\` and drag **Throughline** into your Applications folder.
+
+          Runs on macOS 11+ (Apple Silicon and Intel). See CHANGELOG.md for what changed."
+          gh release create "${GITHUB_REF_NAME}" \
+            "$DMG" "$UPDATE_TAR" "$SIG" \
+            --verify-tag \
+            --title "Throughline ${GITHUB_REF_NAME}" \
+            --notes "$NOTES" \
+            -R "${GITHUB_REPOSITORY}"
+          echo "✓ GitHub release ${GITHUB_REF_NAME} published"

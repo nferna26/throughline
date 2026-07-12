@@ -70,7 +70,10 @@ fn section_bounds(body_len: usize, sections: &[BookSection]) -> Vec<SecBound> {
     out
 }
 
-fn parse_loc(s: Option<&str>) -> Option<usize> {
+/// THE parse for the stored bare-digit locator dialect (invariant 4a: one
+/// owner). Also used by the restore preflight (`backup.rs`) so a candidate
+/// backup's sections are judged by exactly the interpretation production uses.
+pub(crate) fn parse_loc(s: Option<&str>) -> Option<usize> {
     s.and_then(|x| x.trim().parse::<usize>().ok())
 }
 

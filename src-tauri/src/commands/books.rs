@@ -91,7 +91,7 @@ pub fn import_or_dedup(
     // duplicate. Hashing the source directly matches the stored hash because
     // both importers store the hash of the raw copied file.
     if let Ok(sha) = import::hash_file(src) {
-        let conn = state.0.lock()?;
+        let conn = state.lock()?;
         if let Some(existing) = fetch_book_by_sha(&conn, &sha)? {
             tracing::info!(
                 category = "import",
@@ -127,7 +127,7 @@ pub fn import_or_dedup(
         sections = result.sections.len(),
         "import_or_dedup: imported"
     );
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     let default_plan = plan::build_default_plan(&result.book.id);
     // #6 (CORE-1156): the book row, its sections, the default plan, and the
     // active-book bump go in as ONE transaction. A crash or constraint failure
@@ -148,7 +148,9 @@ pub fn import_or_dedup(
         tracing::warn!(category = "import", book_id = %result.book.id, "origin sidecar write failed");
     }
     let now_export = chrono::Utc::now().to_rfc3339();
-    if let Ok(path) = export::export_book_literature_note(
+    // Best-effort at import time, but through the durable wrapper: a failure
+    // marks the book dirty so the launch retry creates the file later.
+    if let Ok(path) = export::export_book_durably(
         &conn,
         &export::root_for(&conn),
         &result.book.id,
@@ -183,11 +185,22 @@ pub fn cmd_configure_plan(
     sitting_length_minutes: i64,
     name: Option<String>,
     state: State<DbState>,
-    app: tauri::AppHandle,
 ) -> Result<ReadingPlan, AppError> {
-    let conn = state.0.lock()?;
-    let plan = fetch_plan_for_book(&conn, &book_id)?
-        .ok_or_else(|| AppError::not_found("plan", Some(book_id.clone())))?;
+    let conn = state.lock()?;
+    configure_plan_impl(&conn, &book_id, sitting_length_minutes, name)
+}
+
+/// `cmd_configure_plan`'s actual body, extracted so the no-unsolicited-AI
+/// integration test can drive it against an isolated DB (PRIV-001: configuring
+/// a plan must never spawn AI work of any kind).
+pub fn configure_plan_impl(
+    conn: &Connection,
+    book_id: &str,
+    sitting_length_minutes: i64,
+    name: Option<String>,
+) -> Result<ReadingPlan, AppError> {
+    let plan = fetch_plan_for_book(conn, book_id)?
+        .ok_or_else(|| AppError::not_found("plan", Some(book_id.to_string())))?;
     let mins = sitting_length_minutes.clamp(5, 120);
 
     // Name the plan: the reader's name wins; else keep an existing one; else a
@@ -208,21 +221,20 @@ pub fn cmd_configure_plan(
     )?;
 
     // Build the sittings cache NOW (it otherwise builds lazily on first Today)
-    // so the import-time phrase batch has opening hashes to work from, then
-    // fire-and-forget phrases for the first sittings (docs/PHRASES_API.md
-    // timing). The response path never waits on any of this.
-    let sections = list_sections(&conn, &book_id)?;
-    let body = read_txt_section(&book_id, 0, None).unwrap_or_default();
+    // so the first Today render is instant. Local work only — configuring a
+    // plan must never spawn AI or network work of any kind (PRIV-001).
+    let sections = list_sections(conn, book_id)?;
+    let body = read_txt_section(book_id, 0, None).unwrap_or_default();
     let now = chrono::Utc::now().to_rfc3339();
-    let _ = sittings::rebuild_if_stale(&conn, &book_id, &body, &sections, mins, &now);
-    crate::phrases::spawn_first_batch(&app, &conn, &book_id, &sections);
+    let _ = sittings::rebuild_if_stale(conn, book_id, &body, &sections, mins, &now);
 
-    fetch_plan_for_book(&conn, &book_id)?.ok_or_else(|| AppError::not_found("plan", Some(book_id)))
+    fetch_plan_for_book(conn, book_id)?
+        .ok_or_else(|| AppError::not_found("plan", Some(book_id.to_string())))
 }
 
 #[tauri::command]
 pub fn cmd_today(state: State<DbState>) -> Result<Option<TodayCard>, AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     today_card(&conn)
 }
 
@@ -759,7 +771,7 @@ pub fn cmd_read_section_text(
     section_id: String,
     state: State<DbState>,
 ) -> Result<String, AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     // Lazy one-time backfill: EPUBs imported before the text pivot have an
     // immutable source.epub but no derived source.txt (and NULL section locators).
     // Generate the text + fill locators in place on first open. Best-effort — on
@@ -878,7 +890,7 @@ pub fn cmd_list_sections(
     book_id: String,
     state: State<DbState>,
 ) -> Result<Vec<BookSection>, AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     Ok(list_sections(&conn, &book_id)?)
 }
 
@@ -895,7 +907,7 @@ pub fn cmd_assignable_sections(
     book_id: String,
     state: State<DbState>,
 ) -> Result<Vec<BookSection>, AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     Ok(canonical_assignable_sections(&conn, &book_id)?)
 }
 
@@ -1088,7 +1100,7 @@ fn walk_toc_for_labels(nav: &[epub::doc::NavPoint], out: &mut Vec<(String, Strin
 
 #[tauri::command]
 pub fn cmd_list_books(state: State<DbState>) -> Result<Vec<Book>, AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     Ok(list_all_books(&conn)?)
 }
 
@@ -1099,7 +1111,7 @@ pub fn cmd_list_books(state: State<DbState>) -> Result<Vec<Book>, AppError> {
 /// Library tab must not change which book is "active".
 #[tauri::command]
 pub fn cmd_library(state: State<DbState>) -> Result<Vec<models::LibraryEntry>, AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     library_entries(&conn)
 }
 
@@ -1238,7 +1250,7 @@ fn activate_book(conn: &Connection, book_id: &str) -> Result<(), AppError> {
 /// `cmd_today` returns it. Returns `()` — the frontend re-invokes `cmd_today`.
 #[tauri::command]
 pub fn cmd_set_active_book(book_id: String, state: State<DbState>) -> Result<(), AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     activate_book(&conn, &book_id)
 }
 
@@ -1266,21 +1278,81 @@ pub fn cmd_set_active_book(book_id: String, state: State<DbState>) -> Result<(),
 #[tauri::command]
 pub fn cmd_delete_book(book_id: String, state: State<DbState>) -> Result<(), AppError> {
     {
-        let conn = state.0.lock()?;
-        delete_book_cascade(&conn, &book_id)?;
-    }
-    // Best-effort: the rows are already gone, so a failure here only leaves an
-    // inert directory behind (a no-op re-delete clears it). `book_dir` rejects
-    // empty/traversal ids — for those there is nothing on disk to remove.
-    if let Ok(dir) = paths::book_dir(&book_id) {
-        if dir.exists() {
-            if let Err(e) = fs::remove_dir_all(&dir) {
-                // Never log the path (content-adjacent metadata — invariant 1).
-                tracing::warn!(category = "delete", "book dir removal skipped: {e}");
-            }
-        }
+        let conn = state.lock()?;
+        delete_book_completely(&conn, &book_id)?;
     }
     Ok(())
+}
+
+/// Stage a CONFIRMED book removal durably (TRUST-029): written the moment the
+/// reader confirms, so quitting inside the Undo window cannot resurrect the
+/// book — the launch sweep commits it. Undo calls the unstage command.
+#[tauri::command]
+pub fn cmd_stage_book_delete(book_id: String, state: State<DbState>) -> Result<(), AppError> {
+    let conn = state.lock()?;
+    crate::settings::ledger_add(&conn, crate::settings::KEY_PENDING_BOOK_DELETES, &book_id)
+        .map_err(AppError::from)
+}
+
+/// Undo within the window: remove the staged id (the book was never deleted).
+#[tauri::command]
+pub fn cmd_unstage_book_delete(book_id: String, state: State<DbState>) -> Result<(), AppError> {
+    let conn = state.lock()?;
+    crate::settings::ledger_remove(&conn, crate::settings::KEY_PENDING_BOOK_DELETES, &book_id)
+        .map_err(AppError::from)
+}
+
+/// The COMPLETE removal — row cascade + book directory + pending-delete stage —
+/// shared by `cmd_delete_book` and the launch sweep that commits staged
+/// removals after a quit inside the Undo window.
+pub(crate) fn delete_book_completely(conn: &Connection, book_id: &str) -> Result<(), AppError> {
+    delete_book_completely_with(conn, book_id, remove_book_dir_from_disk)
+}
+
+/// [`delete_book_completely`] with the directory remover injectable, so tests
+/// can fail the FS step at will and prove the durability contract:
+///
+/// 1. The durable removal intent is (re)written FIRST — even a direct (never
+///    staged) delete leaves a retryable ledger mark if anything below fails.
+/// 2. Rows cascade in one transaction.
+/// 3. The dirty-export mark is cleared (a removed book has no mirror to heal).
+/// 4. The book directory is removed. A FAILURE HERE IS AN ERROR, not a warn:
+///    the caller sees it, and —
+/// 5. — the ledger entry is cleared ONLY after the directory removal succeeds,
+///    so the launch sweep retries the removal (the cascade re-run is a clean
+///    no-op) instead of stranding reader files on disk forever.
+fn delete_book_completely_with(
+    conn: &Connection,
+    book_id: &str,
+    remove_dir: impl FnOnce(&str) -> Result<(), AppError>,
+) -> Result<(), AppError> {
+    crate::settings::ledger_add(conn, crate::settings::KEY_PENDING_BOOK_DELETES, book_id)?;
+    delete_book_cascade(conn, book_id)?;
+    let _ =
+        crate::settings::ledger_remove(conn, crate::settings::KEY_PENDING_BOOK_EXPORTS, book_id);
+    remove_dir(book_id)?;
+    crate::settings::ledger_remove(conn, crate::settings::KEY_PENDING_BOOK_DELETES, book_id)?;
+    Ok(())
+}
+
+/// The production directory remover. Absent directory (or an id `book_dir`
+/// rejects — empty/traversal, for which nothing can be on disk) is success;
+/// any real FS failure propagates so the ledger keeps the retry alive. Never
+/// logs or returns the path (content-adjacent metadata — invariant 1); the
+/// io::Error Display carries no path.
+fn remove_book_dir_from_disk(book_id: &str) -> Result<(), AppError> {
+    let Ok(dir) = paths::book_dir(book_id) else {
+        return Ok(());
+    };
+    if !dir.exists() {
+        return Ok(());
+    }
+    fs::remove_dir_all(&dir).map_err(|e| {
+        tracing::warn!(category = "delete", "book dir removal failed: {e}");
+        AppError::from(anyhow::anyhow!(
+            "the book's files could not be removed ({e}); Throughline will retry on the next launch"
+        ))
+    })
 }
 
 /// The row-level cascade for [`cmd_delete_book`], extracted so it is testable
@@ -2012,5 +2084,186 @@ mod tests {
         );
         assert_eq!(count_where(&conn, "reading_position", "book_id", "keep"), 1);
         assert!(settings::get_string(&conn, &classify_version_key("keep")).is_some());
+    }
+
+    /// TRUST-029: a CONFIRMED book removal staged in the ledger survives a quit —
+    /// the launch sweep commits it (rows AND the book directory) — while an
+    /// Undone (unstaged) one is untouched.
+    #[test]
+    fn staged_book_delete_commits_at_launch_and_unstage_restores() {
+        let _g = crate::paths::lock_env_for_test();
+        let conn = delete_conn();
+        seed_full_book(&conn, "bk_doomed");
+        seed_full_book(&conn, "bk_spared");
+        for id in ["bk_doomed", "bk_spared"] {
+            let dir = paths::book_dir(id).unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("source.txt"), "words").unwrap();
+        }
+
+        crate::settings::ledger_add(
+            &conn,
+            crate::settings::KEY_PENDING_BOOK_DELETES,
+            "bk_doomed",
+        )
+        .unwrap();
+        crate::settings::ledger_add(
+            &conn,
+            crate::settings::KEY_PENDING_BOOK_DELETES,
+            "bk_spared",
+        )
+        .unwrap();
+        crate::settings::ledger_remove(
+            &conn,
+            crate::settings::KEY_PENDING_BOOK_DELETES,
+            "bk_spared",
+        )
+        .unwrap();
+
+        let (notes_done, books_done) = crate::commands::commit_pending_deletes(&conn).unwrap();
+        assert_eq!((notes_done, books_done), (0, 1));
+
+        let count = |id: &str| -> i64 {
+            conn.query_row("SELECT COUNT(*) FROM books WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            count("bk_doomed"),
+            0,
+            "confirmed removal is REMOVED after relaunch"
+        );
+        assert!(
+            !paths::book_dir("bk_doomed").unwrap().exists(),
+            "book dir removed too"
+        );
+        assert_eq!(count("bk_spared"), 1, "Undo (unstage) kept the other book");
+        assert!(paths::book_dir("bk_spared").unwrap().exists());
+        assert_eq!(
+            crate::commands::commit_pending_deletes(&conn).unwrap(),
+            (0, 0)
+        );
+        let _ = std::fs::remove_dir_all(paths::book_dir("bk_spared").unwrap());
+    }
+
+    /// Serialize + isolate THROUGHLINE_DATA_DIR for a test, restoring the prior
+    /// value even on panic (Drop), so a failing assertion can't leak an
+    /// override into tests that expect the real resolution.
+    struct DataDirGuard {
+        prev: Option<String>,
+        dir: std::path::PathBuf,
+        _env: std::sync::MutexGuard<'static, ()>,
+    }
+    impl DataDirGuard {
+        fn new(label: &str) -> Self {
+            let env = crate::paths::lock_env_for_test();
+            let prev = std::env::var("THROUGHLINE_DATA_DIR").ok();
+            let dir = std::env::temp_dir().join(format!("tl-{label}-{}", std::process::id()));
+            std::fs::remove_dir_all(&dir).ok();
+            std::fs::create_dir_all(&dir).unwrap();
+            // SAFETY: env vars are process-global; the lock above serializes access.
+            unsafe { std::env::set_var("THROUGHLINE_DATA_DIR", &dir) };
+            DataDirGuard {
+                prev,
+                dir,
+                _env: env,
+            }
+        }
+    }
+    impl Drop for DataDirGuard {
+        fn drop(&mut self) {
+            // SAFETY: still holding the env lock.
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var("THROUGHLINE_DATA_DIR", v),
+                    None => std::env::remove_var("THROUGHLINE_DATA_DIR"),
+                }
+            }
+            std::fs::remove_dir_all(&self.dir).ok();
+        }
+    }
+
+    /// DATA-005: INJECTED directory-removal failure. The rows cascade, but the
+    /// ledger entry must SURVIVE the failed dir removal (cleared only after the
+    /// directory is actually gone) and the failure must be an ERROR the caller
+    /// sees — then the "relaunch" sweep retries and finishes the job. Before
+    /// this contract, a warn-and-clear stranded reader files on disk forever.
+    #[test]
+    fn dir_removal_failure_keeps_ledger_and_relaunch_finishes_the_removal() {
+        let _dd = DataDirGuard::new("delete-dirfail");
+        let conn = delete_conn();
+        seed_full_book(&conn, "bk_stuck");
+        let dir = paths::book_dir("bk_stuck").unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("source.txt"), b"words").unwrap();
+        // A pre-existing dirty-export mark: a removed book has no mirror to heal.
+        crate::settings::ledger_add(&conn, crate::settings::KEY_PENDING_BOOK_EXPORTS, "bk_stuck")
+            .unwrap();
+
+        let result = delete_book_completely_with(&conn, "bk_stuck", |_| {
+            Err(crate::error::AppError::from(anyhow::anyhow!(
+                "injected dir-removal failure"
+            )))
+        });
+        assert!(result.is_err(), "the FS failure is an error, never a warn");
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM books WHERE id = 'bk_stuck'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0,
+            "rows cascaded before the FS step"
+        );
+        assert!(dir.exists(), "the injected failure left the directory");
+        assert_eq!(
+            crate::settings::ledger_ids(&conn, crate::settings::KEY_PENDING_BOOK_DELETES),
+            vec!["bk_stuck".to_string()],
+            "ledger cleared ONLY after dir removal succeeds — retry stays alive"
+        );
+        assert!(
+            crate::settings::ledger_ids(&conn, crate::settings::KEY_PENDING_BOOK_EXPORTS)
+                .is_empty(),
+            "a removed book sheds its dirty-export mark"
+        );
+
+        // "Relaunch": the sweep re-runs the removal with the REAL remover — the
+        // cascade re-run is a clean no-op and the directory finally goes.
+        assert_eq!(
+            crate::commands::commit_pending_deletes(&conn).unwrap(),
+            (0, 1)
+        );
+        assert!(!dir.exists(), "relaunch finished the interrupted removal");
+        assert!(
+            crate::settings::ledger_ids(&conn, crate::settings::KEY_PENDING_BOOK_DELETES)
+                .is_empty(),
+            "ledger drained once the directory is actually gone"
+        );
+    }
+
+    /// Even a DIRECT (never staged) delete writes the durable intent first, so
+    /// a mid-flight failure leaves a retryable mark instead of vanishing.
+    #[test]
+    fn direct_delete_stages_intent_before_the_fs_step() {
+        let _dd = DataDirGuard::new("delete-direct");
+        let conn = delete_conn();
+        seed_full_book(&conn, "bk_direct");
+        let result = delete_book_completely_with(&conn, "bk_direct", |_| {
+            Err(crate::error::AppError::from(anyhow::anyhow!("injected")))
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            crate::settings::ledger_ids(&conn, crate::settings::KEY_PENDING_BOOK_DELETES),
+            vec!["bk_direct".to_string()],
+            "the never-staged direct path still left a durable retry mark"
+        );
+        // Success path (no dir on disk → remover is a no-op success): drained.
+        delete_book_completely(&conn, "bk_direct").unwrap();
+        assert!(
+            crate::settings::ledger_ids(&conn, crate::settings::KEY_PENDING_BOOK_DELETES)
+                .is_empty()
+        );
     }
 }

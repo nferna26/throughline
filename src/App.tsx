@@ -19,7 +19,8 @@ import ThroughlineMark from "./components/ThroughlineMark";
 import UpdateChecker from "./components/UpdateChecker";
 import "./App.css";
 import "./tl-theme.css";
-import type { TodayCard, Book, ImportOutcome, ExportPathStatus, PlanSummary, Provenance } from "./types";
+import type { TodayCard, Book, ImportOutcome, ExportPathStatus, PlanSummary, Provenance, Note, SettingsDto } from "./types";
+import { reconcileNoteDrafts, setDraftGeneration } from "./noteDrafts";
 import { errorMessage } from "./types";
 import { purgeLegacyBriefings } from "./sectionBriefing";
 import { migrateLegacyLocalStorageKeys } from "./legacyStorage";
@@ -113,6 +114,26 @@ export default function App() {
     };
     window.addEventListener(THEME_PREF_EVENT, onPref);
     return () => window.removeEventListener(THEME_PREF_EVENT, onPref);
+  }, []);
+
+  // R4 startup reconciliation: quarantine retained note drafts whose note no
+  // longer exists (a deletion the quit-time launch sweep committed in Rust),
+  // BEFORE any card can mount them — otherwise a later restore could bring
+  // the note id back with a matching updated_at and silently resurrect
+  // deleted words. Fire-and-forget; a failed lookup keeps drafts untouched.
+  useEffect(() => {
+    void (async () => {
+      // R5: load the LIBRARY GENERATION first — reconciliation quarantines
+      // drafts typed under a different generation (any restore/undo/recovery
+      // since), even when a restored row's updated_at coincidentally matches.
+      try {
+        const s = await invoke<SettingsDto>("cmd_get_settings");
+        setDraftGeneration(s.library_generation ?? "");
+      } catch {
+        setDraftGeneration(null); // unknown — reconcile on note existence only
+      }
+      await reconcileNoteDrafts((bookId) => invoke<Note[]>("cmd_list_notes", { bookId }));
+    })();
   }, []);
 
   // Follow the system while on Auto (live, not just at launch).
@@ -273,11 +294,10 @@ export default function App() {
     };
   }, []);
 
-  // Phrases land in the background (fire-and-forget upserts after import or a
-  // finished sitting). Refresh the card so the phrase slot swaps its text in
-  // place — the slot's reserved height makes the swap zero-CLS. The window
-  // event mirrors the Tauri one for the browser harness (same idiom as
-  // tl-company-activated).
+  // Refresh Today when a phrase-cache change is signalled. Background phrase
+  // GENERATION was removed (PRIV-001) — the backend no longer emits this event;
+  // previously cached phrases still display, and the window event remains as
+  // the browser harness's hook for exercising the slot's zero-CLS swap.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     (async () => {
@@ -447,6 +467,8 @@ export default function App() {
     provenance: Provenance;
   } | null>(null);
   const [pendingRemoval, setPendingRemoval] = useState<{ id: string; title: string } | null>(null);
+  // R4: a failed Undo-unstage, announced inside the toast (Undo = retry).
+  const [removalUndoIssue, setRemovalUndoIssue] = useState<string | null>(null);
   const removalTimer = useRef<number | null>(null);
   const removalWasActiveRef = useRef(false);
 
@@ -513,14 +535,29 @@ export default function App() {
     }
   }
 
-  // Confirmed Remove: hide the book and start the undo window. Removing the
-  // book on Today moves "active" to the next book first (or, if it was the last
-  // book, suppresses it so Today shows the front door) — so the shelf, switcher,
-  // and Today never point at a book that's mid-removal.
+  // Confirmed Remove: durably stage the removal FIRST, and only then hide the
+  // book and start the undo window. Removing the book on Today moves "active"
+  // to the next book first (or, if it was the last book, suppresses it so
+  // Today shows the front door) — so the shelf, switcher, and Today never
+  // point at a book that's mid-removal.
   async function confirmRemoveBook() {
     const target = removeTarget;
     if (!target) return;
     setRemoveTarget(null);
+
+    // DATA-005: the durable stage is AWAITED before anything is hidden. If it
+    // fails, nothing changed — the book stays visible, no Undo window opens,
+    // and the reader is told (a hidden book whose staging silently failed
+    // would resurrect on relaunch after the toast said "removed"). Because the
+    // Undo toast only exists after staging succeeded, Undo can never race an
+    // in-flight stage call.
+    try {
+      await invoke("cmd_stage_book_delete", { bookId: target.id });
+    } catch (e) {
+      setNotice(`Couldn't remove that book (${errorMessage(e)}). It's still in your library — try again.`);
+      return;
+    }
+
     await flushPendingRemoval();
 
     const isActive = today != null && today.book.id === target.id;
@@ -541,6 +578,7 @@ export default function App() {
       }
     }
 
+    setRemovalUndoIssue(null); // a fresh toast never wears a stale undo error
     setPendingRemoval({ id: target.id, title: target.title });
     await refreshToday();
 
@@ -567,13 +605,30 @@ export default function App() {
   // Undo within the window: nothing was deleted, so restoring is just un-hiding
   // the book — and re-activating it if it was the book on Today, dropping the
   // reader back exactly where they were.
+  //
+  // R4: the unstage is AWAITED and failure-visible. The book stays hidden and
+  // the Undo toast stays up until the unstage DURABLY succeeds — un-hiding on
+  // a failed unstage told the reader "it's back" while the relaunch sweep
+  // would still remove it. On failure the toast announces it and Undo becomes
+  // the retry.
+  const undoRemovalInFlight = useRef(false);
   async function undoRemoval() {
+    const p = pendingRemoval;
+    if (!p || undoRemovalInFlight.current) return;
     if (removalTimer.current) {
       clearTimeout(removalTimer.current);
       removalTimer.current = null;
     }
-    const p = pendingRemoval;
-    if (!p) return;
+    undoRemovalInFlight.current = true;
+    try {
+      await invoke("cmd_unstage_book_delete", { bookId: p.id });
+    } catch (e) {
+      setRemovalUndoIssue(`Couldn't undo that (${errorMessage(e)}). Try again.`);
+      return;
+    } finally {
+      undoRemovalInFlight.current = false;
+    }
+    setRemovalUndoIssue(null);
     setPendingRemoval(null);
     suppressBookIdRef.current = null;
     const wasActive = removalWasActiveRef.current;
@@ -868,11 +923,19 @@ export default function App() {
         {pendingRemoval && (
           // The brief, quiet undo. Announced politely; its action is keyboard-
           // reachable for the whole window. Nothing has actually been deleted
-          // yet — Undo simply cancels the pending commit.
-          <div className="tl-undo-toast" role="status" aria-live="polite">
-            <span className="tl-undo-msg">{pendingRemoval.title} removed from your library.</span>
+          // yet — Undo simply cancels the pending commit. A FAILED undo is
+          // announced in place and the button becomes the retry (R4): the
+          // toast never clears until the unstage durably succeeded.
+          <div
+            className="tl-undo-toast"
+            role={removalUndoIssue ? "alert" : "status"}
+            aria-live={removalUndoIssue ? "assertive" : "polite"}
+          >
+            <span className="tl-undo-msg">
+              {removalUndoIssue ?? `${pendingRemoval.title} removed from your library.`}
+            </span>
             <button type="button" className="tl-undo-btn" onClick={() => { void undoRemoval(); }}>
-              Undo
+              {removalUndoIssue ? "Retry undo" : "Undo"}
             </button>
           </div>
         )}

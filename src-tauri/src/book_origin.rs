@@ -177,23 +177,59 @@ pub fn original_missing(origin: &BookOrigin) -> bool {
 mod tests {
     use super::*;
 
-    // app_support_dir() under cfg(test) resolves to a per-process temp dir, so
-    // book_dir() writes are isolated and never touch a real book.
-    fn fresh_book_id(tag: &str) -> String {
+    /// Every test here reads `THROUGHLINE_DATA_DIR` indirectly through
+    /// `paths::book_dir`, so it must hold the crate-wide env lock for its
+    /// WHOLE body (the paths.rs contract) — other tests mutate that env var
+    /// under the same lock, and a mid-test change would split directory
+    /// creation and sidecar I/O across two different roots (the TEST-006
+    /// flake). Each pin also sets its own UNIQUE data dir, so a stale override
+    /// left behind by a panicked test can never leak in, and removes it on
+    /// drop (while still holding the lock — Drop::drop runs before the guard
+    /// field is dropped).
+    struct EnvPin {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        root: std::path::PathBuf,
+    }
+
+    impl EnvPin {
+        fn new(tag: &str) -> Self {
+            let guard = paths::lock_env_for_test();
+            let root = std::env::temp_dir()
+                .join("throughline-test")
+                .join(format!("book-origin-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            unsafe {
+                std::env::set_var("THROUGHLINE_DATA_DIR", &root);
+            }
+            EnvPin {
+                _guard: guard,
+                root,
+            }
+        }
+    }
+
+    impl Drop for EnvPin {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var("THROUGHLINE_DATA_DIR");
+            }
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// Pin the env, then create a fresh per-test book dir under it.
+    fn fresh_book(tag: &str) -> (EnvPin, String) {
+        let pin = EnvPin::new(tag);
         let id = format!("book_origin_test_{tag}");
         let dir = paths::book_dir(&id).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
-        // Start clean so re-runs in the same process don't see a stale sidecar.
-        let _ = std::fs::remove_file(dir.join("origin.json"));
-        for (ext, _) in COVER_FORMATS {
-            let _ = std::fs::remove_file(dir.join(format!("cover.{ext}")));
-        }
-        id
+        (pin, id)
     }
 
     #[test]
     fn absent_sidecar_is_conservative_imported() {
-        let id = fresh_book_id("absent");
+        let (_pin, id) = fresh_book("absent");
         let o = read(&id);
         assert_eq!(o.provenance, IMPORTED);
         assert!(o.original_path.is_none());
@@ -205,7 +241,7 @@ mod tests {
 
     #[test]
     fn imported_round_trips_with_original_path() {
-        let id = fresh_book_id("imported");
+        let (_pin, id) = fresh_book("imported");
         write(
             &id,
             &BookOrigin::imported(Some("/Users/me/Walden.epub".into())),
@@ -220,7 +256,7 @@ mod tests {
 
     #[test]
     fn catalogue_never_reports_moved_file() {
-        let id = fresh_book_id("catalogue");
+        let (_pin, id) = fresh_book("catalogue");
         write(&id, &BookOrigin::catalogue()).unwrap();
         let o = read(&id);
         assert_eq!(o.provenance, CATALOGUE);
@@ -230,7 +266,7 @@ mod tests {
 
     #[test]
     fn relink_updates_path_keeps_provenance() {
-        let id = fresh_book_id("relink");
+        let (_pin, id) = fresh_book("relink");
         write(&id, &BookOrigin::imported(Some("/old/path.epub".into()))).unwrap();
         set_original_path(&id, "/new/path.epub").unwrap();
         let o = read(&id);
@@ -240,7 +276,7 @@ mod tests {
 
     #[test]
     fn cover_present_only_when_file_written() {
-        let id = fresh_book_id("cover");
+        let (_pin, id) = fresh_book("cover");
         assert!(!has_cover(&id));
         let dir = paths::book_dir(&id).unwrap();
         std::fs::write(dir.join("cover.png"), b"\x89PNG fake bytes").unwrap();

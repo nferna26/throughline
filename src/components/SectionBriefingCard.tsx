@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { invoke, Channel } from "@tauri-apps/api/core";
 import TLIcon from "./TLIcon";
 import AiSetupSheet from "./AiSetupSheet";
-import { aiProviderLabel, errorMessage, type AskHandle, type SettingsDto, type StreamEvent } from "../types";
+import CloudConsentSheet, { type ConsentBinding, type EnvelopePreview } from "./CloudConsentSheet";
+import { aiProviderLabel, errorMessage, providerIdForHost, type AskHandle, type SettingsDto, type StreamEvent } from "../types";
 import { humanizeError, looksUnavailable } from "../aiErrors";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
 import {
@@ -12,6 +13,9 @@ import {
   getBriefingAttempt,
   setBriefingAttempt,
   clearBriefingAttempt,
+  getBriefingPending,
+  setBriefingPending,
+  clearBriefingPending,
   parseBriefing,
 } from "../sectionBriefing";
 import "../tl-tutor.css";
@@ -33,6 +37,10 @@ import "../tl-tutor.css";
  * durable only when the reader saves it as a note.
  */
 type Phase = "consent" | "thinking" | "streaming" | "done" | "error" | "blocked";
+
+// R10-4: attempt tokens are process-global so a remounted card can never
+// collide with (or accidentally reconcile) a previous instance's attempt.
+let briefingAttemptCounter = 0;
 
 function InlineMd({ text }: { text: string }): ReactNode {
   const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g);
@@ -69,19 +77,45 @@ export default function SectionBriefingCard(props: {
   // re-fire just because the reader remounted the card (nav / re-entry). Mount
   // straight into the error state and wait for a deliberate [Try again].
   const priorFailed = !cached && getBriefingAttempt(bookId, sectionId, sourceSha, mode) === "failed";
+  // R10-4: a PENDING marker (armed immediately before a dispatch) with no
+  // cache means an ask for this section is already in flight or was
+  // interrupted by an unmount — remounting must NOT auto-fire a second one.
+  const pendingInterrupted =
+    !cached && !priorFailed && getBriefingPending(bookId, sectionId, sourceSha, mode) != null;
 
   const [phase, setPhase] = useState<Phase>(
-    cached ? "done" : priorFailed ? "error" : isTutorEnabled() ? "thinking" : "consent",
+    cached
+      ? "done"
+      : priorFailed || pendingInterrupted
+        ? "error"
+        : isTutorEnabled()
+          ? "thinking"
+          : "consent",
   );
-  const [text, setText] = useState(cached ?? "");
+  const [text, setText] = useState(cached?.text ?? "");
   const [errorMsg, setErrorMsg] = useState(
-    priorFailed ? "The briefing couldn't be prepared this time. Try again." : "",
+    priorFailed
+      ? "The briefing couldn't be prepared this time. Try again."
+      : pendingInterrupted
+        ? "The briefing was interrupted before it finished. Try again to prepare it."
+        : "",
   );
+  const mountedRef = useRef(true);
+  // R11-4: the instance's CURRENT attempt token (see generate()).
+  const attemptSeqRef = useRef(0);
   // Provider posture, loaded from settings. Drives WHERE the section text goes
   // (badge + consent copy). The briefing is disabled only when no provider is
   // chosen; "local" keeps the on-device promise, a chosen cloud provider was
   // explicitly opted into with disclosure. null = not yet known.
   const [provider, setProvider] = useState<string | null>(null);
+  // R7-9/R8-4: the provider the SETTLED briefing actually came from —
+  // handle-derived on a fresh stream, CACHE-derived on replay, never
+  // mount-time Settings state. Null renders neutral, never "local".
+  const [answeredProvider, setAnsweredProvider] = useState<string | null>(
+    cached?.answeredProvider ?? null,
+  );
+  const answeredProviderRef = useRef<string | null>(cached?.answeredProvider ?? null);
+  const settledRef = useRef(cached != null);
   useEffect(() => {
     invoke<SettingsDto>("cmd_get_settings")
       .then((s) => setProvider(s.ai_provider || "none"))
@@ -89,8 +123,38 @@ export default function SectionBriefingCard(props: {
   }, []);
 
   const channelRef = useRef<Channel<StreamEvent> | null>(null);
-  const textRef = useRef<string>(cached ?? "");
+  const textRef = useRef<string>(cached?.text ?? "");
   const cardRef = useRef<HTMLDivElement | null>(null);
+
+  // First-cloud-send consent (PRIV-A11Y-009 / TRUST-002): when this briefing is
+  // the reader's FIRST cloud action, cmd_ai_ask returns NeedsCloudConsent and
+  // the SAME fail-closed sheet the lenses use opens here — with the exact
+  // SECTION envelope, since a briefing sends the section, not a selection.
+  const [cloudConsent, setCloudConsent] = useState<{
+    host: string;
+    /** undefined while loading, null when the fetch failed (Send stays disabled). */
+    envelope?: EnvelopePreview | null;
+  } | null>(null);
+  const fetchConsentEnvelope = useCallback(() => {
+    setCloudConsent((cur) => (cur ? { ...cur, envelope: undefined } : cur));
+    invoke<EnvelopePreview>("cmd_outbound_envelope", {
+      bookId,
+      mode: "section_briefing",
+      selection: props.sectionText,
+      chapter: props.chapter || null,
+      userNote: null,
+      depth: "brief",
+    })
+      // R5: the envelope's host is authoritative at preview time (see
+      // MarginTutorCard) — re-bind host + preview together on drift. A
+      // null/hostless response is a failed preview (Send stays disabled).
+      .then((env) =>
+        setCloudConsent((cur) =>
+          cur ? { ...cur, host: env?.host ?? cur.host, envelope: env ?? null } : cur,
+        ),
+      )
+      .catch(() => setCloudConsent((cur) => (cur ? { ...cur, envelope: null } : cur)));
+  }, [bookId, props.sectionText, props.chapter]);
 
   const ensureModel = useCallback(async () => {
     try {
@@ -104,10 +168,29 @@ export default function SectionBriefingCard(props: {
     } catch { /* the call below surfaces a clear error if this didn't help */ }
   }, []);
 
-  const generate = useCallback(async () => {
+  const generate = useCallback(async (consent?: ConsentBinding) => {
+    // R10-4/R11-4: this RUN's identity, taken before any await. Superseded
+    // means unmounted OR no longer the instance's CURRENT attempt — a run
+    // overtaken during its preflights never dispatches and never mutates the
+    // newer attempt's state.
+    const attempt = ++briefingAttemptCounter;
+    attemptSeqRef.current = attempt;
+    const superseded = () => !mountedRef.current || attemptSeqRef.current !== attempt;
+    // R11-4: the moment a newer generation begins, the OLD channel is dead —
+    // its stream events are dropped immediately, not merely after this run's
+    // preflights finish and install a new channel.
+    channelRef.current = null;
     setPhase("thinking");
     setErrorMsg("");
     setText(""); textRef.current = "";
+    // R9-6: EVERY generation starts with fresh settle + attribution state. A
+    // stale settledRef=true from the previous answer would let this run's
+    // post-invoke patch write PARTIAL streamed text into the cache as
+    // completed; a stale provider ref would attribute the new text to the
+    // previous destination.
+    settledRef.current = false;
+    answeredProviderRef.current = null;
+    setAnsweredProvider(null);
 
     // PROVIDER GATE (authoritative, just before sending). The briefing sends the
     // section's text, so a provider must be explicitly chosen. Local stays
@@ -118,17 +201,23 @@ export default function SectionBriefingCard(props: {
     let liveProvider = "none";
     try {
       const s = await invoke<SettingsDto>("cmd_get_settings");
+      // R10-4: identity check after EVERY awaited preflight — an unmount
+      // during a delayed settings read must produce ZERO asks.
+      if (superseded()) return;
       if (!s.ai_provider || s.ai_provider === "none") { setPhase("blocked"); return; }
       liveProvider = s.ai_provider;
     } catch {
+      if (superseded()) return;
       setPhase("blocked"); return; // can't read settings → fail closed
     }
 
     await ensureModel();
+    if (superseded()) return; // R10-4: same check after the model preflight
 
     const channel = new Channel<StreamEvent>();
     channelRef.current = channel;
     let first = true;
+    let errored = false;
     channel.onmessage = (ev) => {
       if (channelRef.current !== channel) return; // superseded → drop
       if (ev.kind === "delta") {
@@ -136,20 +225,41 @@ export default function SectionBriefingCard(props: {
         textRef.current += ev.text ?? "";
         setText(textRef.current);
       } else if (ev.kind === "done") {
+        // R9-6: a done AFTER an error is not a completion — partial text is
+        // never cached as a completed briefing.
+        if (errored) return;
+        clearBriefingPending(bookId, sectionId, sourceSha, mode, attempt);
         setPhase((p) => (p === "error" ? p : "done"));
+        settledRef.current = true;
         if (textRef.current.trim()) {
-          setCachedBriefing(bookId, sectionId, sourceSha, mode, textRef.current);
+          // R8-4: the cache carries the attribution the ask REPORTED. If the
+          // AskHandle resolves after this done event, the post-invoke patch
+          // below rewrites the entry with it.
+          setCachedBriefing(
+            bookId,
+            sectionId,
+            sourceSha,
+            mode,
+            textRef.current,
+            answeredProviderRef.current,
+          );
           setBriefingAttempt(bookId, sectionId, sourceSha, mode, "ok");
         }
       } else if (ev.kind === "error") {
+        errored = true;
+        clearBriefingPending(bookId, sectionId, sourceSha, mode, attempt);
         setBriefingAttempt(bookId, sectionId, sourceSha, mode, "failed");
         setErrorMsg(humanizeError(liveProvider, ev.message ?? "The briefing couldn't be prepared this time."));
         setPhase("error");
       }
     };
 
+    // R10-4: the SESSION pending marker is armed IMMEDIATELY BEFORE the
+    // dispatch — a dispatch → unmount → remount sequence finds it and does
+    // not auto-fire a second ask (exactly one ask per deliberate action).
+    setBriefingPending(bookId, sectionId, sourceSha, mode, attempt);
     try {
-      await invoke<AskHandle>("cmd_ai_ask", {
+      const handle = await invoke<AskHandle>("cmd_ai_ask", {
         bookId,
         mode: "section_briefing",
         depth: "brief",
@@ -157,22 +267,71 @@ export default function SectionBriefingCard(props: {
         chapter: props.chapter || null,
         locator: props.locator,
         userNote: null,
+        // R6-1: the confirmed retry carries the sheet's binding; the backend
+        // validates it against THIS call at the send boundary and records
+        // consent only on a match. Drift returns NeedsCloudConsent below.
+        consent: consent ?? null,
         onEvent: channel,
       });
-    } catch (e) {
+      // R7-9/R8-4: attribution follows the destination the backend REPORTED.
       if (channelRef.current === channel) {
+        answeredProviderRef.current = providerIdForHost(handle.provider_host);
+        setAnsweredProvider(answeredProviderRef.current);
+        // done-before-AskHandle ordering: the cache entry written by the
+        // done handler predates this handle — patch its attribution in.
+        if (settledRef.current && textRef.current.trim()) {
+          setCachedBriefing(
+            bookId,
+            sectionId,
+            sourceSha,
+            mode,
+            textRef.current,
+            answeredProviderRef.current,
+          );
+        }
+      }
+    } catch (e) {
+      // R10-4/R11-5: LATE terminal outcomes reconcile by attempt identity.
+      // ONLY NeedsCloudConsent is proven PRE-egress (the backend refused
+      // before anything left the Mac): its pending marker clears so the next
+      // remount may auto-generate and walk the consent path again.
+      // CapExhausted is POST-egress — the section already reached the relay
+      // (the 402 came back from it) — so it settles as a TERMINAL failed
+      // state: no marker-clear-and-rearm, no silent resend; only a
+      // deliberate Try again re-sends. Any other late outcome leaves the
+      // marker standing, and a NEWER attempt's marker is never touched
+      // (token match).
+      if (channelRef.current !== channel) {
+        const lateErr = e as { kind?: string };
+        if (lateErr?.kind === "NeedsCloudConsent") {
+          clearBriefingPending(bookId, sectionId, sourceSha, mode, attempt);
+        } else if (lateErr?.kind === "CapExhausted") {
+          setBriefingAttempt(bookId, sectionId, sourceSha, mode, "failed");
+          clearBriefingPending(bookId, sectionId, sourceSha, mode, attempt);
+        }
+        return;
+      }
+      if (channelRef.current === channel) {
+        clearBriefingPending(bookId, sectionId, sourceSha, mode, attempt);
         setBriefingAttempt(bookId, sectionId, sourceSha, mode, "failed");
         // P1-2: branch on the AppError kind. NeedsCloudConsent and CapExhausted have
         // no `message` historically, so the old String(e) rendered "[object Object]"
         // and Try again re-fired the identical rejection forever. Give each an
         // actionable line, and otherwise fall back to errorMessage() (which reads the
         // now-backstopped `message`) so no reject ever surfaces as garbage.
-        const err = e as { kind?: string };
+        const err = e as { kind?: string; host?: string };
         if (err?.kind === "NeedsCloudConsent") {
-          setErrorMsg(
-            "Deep Study uses the cloud tutor. Ask the tutor about a passage once and confirm the cloud send, then prepare the briefing.",
-          );
-        } else if (err?.kind === "CapExhausted") {
+          // First cloud send, and this briefing is the first cloud action —
+          // open the SAME fail-closed consent sheet the lenses use, with the
+          // exact SECTION envelope (never a detour to "go ask the tutor
+          // somewhere else first"). Nothing was sent; the attempt marker is
+          // cleared so a confirmed consent can regenerate immediately.
+          clearBriefingAttempt(bookId, sectionId, sourceSha, mode);
+          setCloudConsent({ host: err.host ?? "the cloud provider" });
+          fetchConsentEnvelope();
+          return;
+        }
+        if (err?.kind === "CapExhausted") {
           setErrorMsg(
             "You've used your Throughline AI for now. Add your own key or a local model in Settings to keep going.",
           );
@@ -187,9 +346,10 @@ export default function SectionBriefingCard(props: {
   // A deliberate reader action (Prepare / Try again / regenerate / setup
   // recovery) clears any failed marker so the one explicit send is allowed; the
   // mount effect itself never clears it (FT-13). One marker, two guards.
-  const retry = useCallback(() => {
+  const retry = useCallback((consent?: ConsentBinding) => {
     clearBriefingAttempt(bookId, sectionId, sourceSha, mode);
-    generate();
+    clearBriefingPending(bookId, sectionId, sourceSha, mode); // deliberate action
+    generate(consent);
   }, [bookId, sectionId, sourceSha, mode, generate]);
 
   // Auto-prepare once on mount when already consented and not cached — but only
@@ -197,8 +357,14 @@ export default function SectionBriefingCard(props: {
   // with no call; a remembered failure mounts into the error state above and
   // waits for [Try again]. Without consent we wait for the tap.
   useEffect(() => {
-    if (!cached && !priorFailed && isTutorEnabled()) generate();
-    return () => { channelRef.current = null; };
+    // R10-4: re-arm on every effect setup (StrictMode runs
+    // setup → cleanup → setup on the same instance).
+    mountedRef.current = true;
+    if (!cached && !priorFailed && !pendingInterrupted && isTutorEnabled()) generate();
+    return () => {
+      mountedRef.current = false; // R10-4: silences in-flight preflights
+      channelRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -215,12 +381,14 @@ export default function SectionBriefingCard(props: {
   const enableAndPrepare = useCallback(async () => {
     setTutorEnabled(true);
     clearBriefingAttempt(bookId, sectionId, sourceSha, mode);
+    clearBriefingPending(bookId, sectionId, sourceSha, mode); // deliberate action
     await generate();
   }, [bookId, sectionId, sourceSha, mode, generate]);
 
   const regenerate = useCallback(() => {
     clearCachedBriefing(bookId, sectionId, sourceSha, mode);
     clearBriefingAttempt(bookId, sectionId, sourceSha, mode);
+    clearBriefingPending(bookId, sectionId, sourceSha, mode); // deliberate action
     generate();
   }, [bookId, sectionId, sourceSha, mode, generate]);
 
@@ -237,17 +405,20 @@ export default function SectionBriefingCard(props: {
   const parts = parseBriefing(text);
 
   return (
-    <div ref={cardRef} className="tl-card tl-tutor tl-briefing" role="complementary" aria-label="Section briefing">
+    <div ref={cardRef} tabIndex={-1} className="tl-card tl-tutor tl-briefing" role="complementary" aria-label="Section briefing">
       <div className="tl-tutor-head">
         <span className="tl-tutor-badge"><TLIcon name="sparkle" size={13} /> Section briefing</span>
         <span className="tl-tutor-status">
           {streaming ? (
             <span className="tl-tutor-live"><span className="tl-tutor-livedot" /><span className="tl-tutor-liveword">Preparing</span><span className="tl-tutor-liveell">…</span></span>
           ) : phase === "done" ? (
-            provider === "local" ? (
+            // R7-9/R8-4: the settled badge names where the briefing ACTUALLY
+            // came from — cache/handle-derived, NEUTRAL when unknown, and
+            // NEVER current Settings (nor "local" for an unknown host).
+            answeredProvider === "local" ? (
               <span className="tl-tutor-local"><TLIcon name="shield" size={12} /> On this Mac</span>
             ) : (
-              <span className="tl-tutor-remote" title={`Answered by ${aiProviderLabel(provider ?? "")}`}>{aiProviderLabel(provider ?? "")}</span>
+              <span className="tl-tutor-remote" title={`Answered by ${aiProviderLabel(answeredProvider ?? "")}`}>{aiProviderLabel(answeredProvider ?? "")}</span>
             )
           ) : null}
         </span>
@@ -376,12 +547,41 @@ export default function SectionBriefingCard(props: {
           {phase === "done" && (
             <p className="tl-briefing-prov">
               <TLIcon name="shield" size={11} />{" "}
-              {provider === "local"
+              {answeredProvider === "local"
                 ? "Prepared on this Mac for today's section."
-                : `Prepared via ${aiProviderLabel(provider ?? "")} for today's section.`}
+                : `Prepared via ${aiProviderLabel(answeredProvider ?? "")} for today's section.`}
             </p>
           )}
         </div>
+      )}
+
+      {cloudConsent && (
+        <CloudConsentSheet
+          host={cloudConsent.host}
+          subject="section"
+          disclosure={`Today's section (below) is sent to ${cloudConsent.host} so Deep Study can prepare the briefing, with the book's title, author, and chapter name for context — never the whole book.`}
+          envelope={cloudConsent.envelope}
+          returnFocus={cardRef}
+          onRetryEnvelope={fetchConsentEnvelope}
+          onCancel={() => {
+            setCloudConsent(null);
+            setErrorMsg("Cloud AI wasn't confirmed — enable it anytime in Settings.");
+            setPhase("error");
+          }}
+          onConfirm={async () => {
+            // R6-1: no confirm-then-send race (see MarginTutorCard). The
+            // confirmed ask carries the binding the backend issued with THIS
+            // preview; the send boundary validates provider + host + envelope
+            // fingerprint and records consent only on a match. Drift comes
+            // back as NeedsCloudConsent: generate's catch reopens this sheet
+            // with the new destination and its fresh matching preview.
+            const c = cloudConsent;
+            const env = c.envelope;
+            if (!env) throw new Error("the preview hasn't loaded — nothing was sent");
+            setCloudConsent(null);
+            retry({ provider: env.provider, host: env.host, fingerprint: env.fingerprint });
+          }}
+        />
       )}
     </div>
   );

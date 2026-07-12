@@ -6,10 +6,10 @@ import MarginTutorCard, { type TutorDraft, type TutorMode, type TutorCache } fro
 import DefinePopover from "../components/DefinePopover";
 import SectionBriefingCard from "../components/SectionBriefingCard";
 import { briefingTextReady, type MarginHelp } from "../sectionBriefing";
-import { segmentParagraph, blockRoleFor, blockRoleClass, isContentsItem, openerLength, type StyleRange } from "../paragraphStructure";
+import { segmentParagraph, blockRoleFor, blockRoleClass, headingLevelFor, isContentsItem, openerLength, type StyleRange } from "../paragraphStructure";
 import { useDialog } from "../hooks/useDialog";
 import { anchorCardTop, guardScroll } from "../tutorAnchor";
-import type { BookSection, Note, ReadingSession, TodayCard, SettingsDto } from "../types";
+import type { BookSection, ExportOutcome, Note, ReadingSession, SavedNote, SessionEnd, TodayCard, SettingsDto } from "../types";
 import { NOTE_TYPES, errorMessage, makeCharLocator, parseLocator } from "../types";
 import { locatorHint } from "../locatorHint";
 import { endReached } from "../sectionCompletion";
@@ -157,6 +157,31 @@ export default function TextReader({ today, onExit }: Props) {
   const resumeAppliedRef = useRef<boolean>(false);
   const [endingPrompt, setEndingPrompt] = useState(false);
   const [summary, setSummary] = useState("");
+  // ── DATA-005: failure-honest ending ──
+  // `endFailure` renders an announced sheet. durable=false → the end itself
+  // failed (Try again / explicit Exit without saving). durable=true → the
+  // sitting IS saved and only its Markdown export needs attention.
+  const [endFailure, setEndFailure] = useState<{ durable: boolean; message: string } | null>(null);
+  const [endBusy, setEndBusy] = useState(false);
+  // The recap takeaway must become a durable note exactly ONCE across retries.
+  const takeawaySavedRef = useRef(false);
+  // If the takeaway note saved but its Markdown merge failed, retry it by id.
+  const pendingNoteExportRef = useRef<string | null>(null);
+  // The takeaway of the failed exit, so Try again repeats the same completion.
+  const exitTakeawayRef = useRef<string | null>(null);
+  // A failed anchored-note save keeps the selection and says so (role=alert).
+  const [selError, setSelError] = useState<string | null>(null);
+  // The last attempted selection action, so the error's Try again can repeat it.
+  const lastSelActionRef = useRef<string | null>(null);
+  // "Saved in Throughline, Markdown export needs attention" toast (DATA-004).
+  // `noteId` present → retry re-merges that note's book; absent (a delete) →
+  // retry re-merges the whole library.
+  const [exportIssue, setExportIssue] = useState<{ noteId: string | null; message: string } | null>(null);
+  // R5: a FAILED REMOVAL (stage or commit), kept apart from export issues so
+  // its retry retries the deletion — never cmd_export_library.
+  const [removalIssue, setRemovalIssue] = useState<{ noteId: string; phase: "stage" | "commit"; message: string } | null>(null);
+  // A failed reading-position save surfaces once (it self-retries on scroll).
+  const [progressIssue, setProgressIssue] = useState<string | null>(null);
   // ── Companion Margin: anchored notes/highlights/tutor cards beside the text ──
   const [notes, setNotes] = useState<Note[]>([]);
   // Soft-delete (FT-32): the margin card's X hides the note optimistically and
@@ -206,6 +231,10 @@ export default function TextReader({ today, onExit }: Props) {
   const pinned = marginState.pinned;
   const readerRef = useRef<HTMLElement | null>(null);
   const colRef = useRef<HTMLDivElement | null>(null);
+  // A11Y-010: the reading sheet (focus restore target after toolbar dismiss)
+  // and the selection action toolbar (deterministic Tab target).
+  const articleRef = useRef<HTMLElement | null>(null);
+  const selToolbarRef = useRef<HTMLDivElement | null>(null);
 
   // Margin-help mode (quiet | guided | deep_study) drives how present the margin
   // is. Loaded from settings once; defaults to "guided" until it resolves.
@@ -225,11 +254,17 @@ export default function TextReader({ today, onExit }: Props) {
       .catch(() => {});
   }, []);
 
-  const refreshNotes = useCallback(async () => {
+  // R6-6: the refresh REPORTS its outcome — callers that gate reader-visible
+  // state transitions on fresh rows (the delete-Undo unhide) must be able to
+  // tell "refreshed" from "silently stale".
+  const refreshNotes = useCallback(async (): Promise<boolean> => {
     try {
       const all = await invoke<Note[]>("cmd_list_notes", { bookId: book.id });
       setNotes(all);
-    } catch { /* notes are non-critical to reading */ }
+      return true;
+    } catch {
+      return false; // notes are non-critical to READING; callers decide the rest
+    }
   }, [book.id]);
   useEffect(() => { refreshNotes(); }, [refreshNotes]);
 
@@ -450,7 +485,14 @@ export default function TextReader({ today, onExit }: Props) {
       // the position inside the sitting span, so nothing persists beyond it.
       const globalBytes = byteWinBase + u16ToByte(text, off);
       const pct = Math.min(100, Math.max(0, ((globalBytes - secStart) / total) * 100));
-      throttledSaveProgress(book.id, sec.id, String(globalBytes), pct);
+      throttledSaveProgress(
+        book.id,
+        sec.id,
+        String(globalBytes),
+        pct,
+        (m) => setProgressIssue(m),
+        () => setProgressIssue(null),
+      );
     }
   }
 
@@ -544,49 +586,52 @@ export default function TextReader({ today, onExit }: Props) {
     return completed;
   }
 
-  // Flush the sitting to the backend: end the session (completed sections +
-  // minutes) so completion state isn't lost. Idempotent via endedRef — the recap
-  // path AND the toolbar back button both call this, and only the first wins.
-  // When the session never started, there's nothing to end (but a takeaway may
-  // still be saved by finalizeSession before this runs).
+  // P0 quit-flush ONLY: a best-effort durable end while the app is closing —
+  // no UI can render here. endedRef flips ONLY on success (DATA-005), so a
+  // failed quit-flush leaves the session open for the honest launch orphan
+  // sweep instead of pretending it ended.
   async function flushSession() {
     // A trailing throttled save firing AFTER the end would rewrite the resume
     // point with a stale position — drop it before anything else.
     cancelPendingProgressSave();
     if (endedRef.current) return;
     if (!session) return;
-    endedRef.current = true;
     const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
     try {
-      await invoke<ReadingSession>("cmd_end_session", {
+      await invoke<SessionEnd>("cmd_end_session", {
         sessionId: session.id,
         endLocator: sessionEndLocator(),
         minutes,
         completedSectionIds: completedSectionIds(),
         summarySentence: summary.trim() ? summary.trim() : null,
       });
-    } catch { /* ending is best-effort; never trap the reader in the reader */ }
+      endedRef.current = true;
+    } catch { /* app is closing; the launch sweep will close the row honestly */ }
   }
   // Keep the quit-flush listener pointed at the latest flushSession closure.
   useEffect(() => {
     flushSessionRef.current = flushSession;
   });
 
-  // `takeaway` is passed explicitly (not read from state) so Skip can end with
-  // null without racing a setState. A takeaway is never forced — a short
-  // sitting still counts.
-  async function finalizeSession(takeaway: string | null) {
+  // Complete the sitting and leave the reader (DATA-005, failure-honest):
+  // 1. the recap takeaway becomes a durable note (exactly once across retries),
+  // 2. the session ends in one durable backend transaction (endedRef flips only
+  //    on SUCCESS — never before the IPC),
+  // 3. only then does the screen exit. Any durable failure keeps every piece of
+  //    the reader's work (summary text, selection, session) and shows an
+  //    announced sheet with Try again; "Exit without saving" is offered there,
+  //    explicitly, never implicitly. A Markdown-export failure after a durable
+  //    end is reported separately — the sitting is saved; the file needs a retry.
+  async function completeExit(takeaway: string | null) {
     cancelPendingProgressSave();
     const tk = takeaway && takeaway.trim() ? takeaway.trim() : null;
-    // The recap's "one sentence to remember" is a first-class Takeaway: it stays
-    // in the session export AND becomes a durable, user-authored Takeaway note,
-    // so it surfaces in the chapter notebook and on Today's "Last time". Skipping
-    // (blank) saves nothing. The body is the reader's own words — privacy-safe.
-    // Saved BEFORE the session guard so a failed session-start can't silently
-    // discard the reader's typed takeaway (sessionId null is a legal arg).
-    if (tk) {
+    exitTakeawayRef.current = tk;
+    setEndBusy(true);
+    setEndFailure(null);
+    let exportMsg: string | null = null;
+    if (tk && !takeawaySavedRef.current) {
       try {
-        await invoke<Note>("cmd_save_note", {
+        const saved = await invoke<SavedNote>("cmd_save_note", {
           bookId: book.id,
           sessionId: session?.id ?? null,
           noteType: "Takeaway",
@@ -598,30 +643,92 @@ export default function TextReader({ today, onExit }: Props) {
           anchorEnd: null,
           anchoredText: null,
         });
-      } catch { /* recap takeaway is best-effort; never block ending a session */ }
+        takeawaySavedRef.current = true;
+        if (!saved.export.ok) {
+          pendingNoteExportRef.current = saved.note.id;
+          exportMsg = saved.export.message ?? "The Markdown export needs attention.";
+        }
+      } catch (e) {
+        setEndBusy(false);
+        setEndFailure({
+          durable: false,
+          message: `Your takeaway couldn't be saved (${errorMessage(e)}). Nothing was lost — it's still in the box below.`,
+        });
+        return;
+      }
     }
-    if (!session) return onExit();
-    if (!endedRef.current) {
-      endedRef.current = true;
+    if (session && !endedRef.current) {
       const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
       try {
-        await invoke<ReadingSession>("cmd_end_session", {
+        const r = await invoke<SessionEnd>("cmd_end_session", {
           sessionId: session.id,
           endLocator: sessionEndLocator(),
           minutes,
           completedSectionIds: completedSectionIds(),
           summarySentence: tk,
         });
-      } catch { /* ending is best-effort; never trap the reader in the reader */ }
+        endedRef.current = true;
+        if (!r.export.ok) {
+          exportMsg = r.export.message ?? exportMsg ?? "The Markdown export needs attention.";
+        }
+      } catch (e) {
+        setEndBusy(false);
+        setEndFailure({ durable: false, message: errorMessage(e) });
+        return;
+      }
+    }
+    setEndBusy(false);
+    if (exportMsg) {
+      setEndingPrompt(false);
+      setEndFailure({ durable: true, message: exportMsg });
+      return;
     }
     onExit();
   }
 
-  // Toolbar "‹ Today" is not plain navigation — it flushes the sitting first so
-  // the sections read this sitting are recorded (FT-29), then exits.
+  // Retry ONLY the Markdown exports after a durable end: re-merge the takeaway
+  // note's book (if that's what failed) and repeat the idempotent session end,
+  // which re-attempts the session file without re-mutating anything.
+  async function retryEndExports() {
+    setEndBusy(true);
+    let message: string | null = null;
+    try {
+      if (pendingNoteExportRef.current) {
+        const r = await invoke<SavedNote>("cmd_update_note", { noteId: pendingNoteExportRef.current });
+        if (r.export.ok) pendingNoteExportRef.current = null;
+        else message = r.export.message ?? "The Markdown export still needs attention.";
+      }
+      if (session && !message) {
+        const minutes = Math.max(1, Math.round((Date.now() - startedAt.current) / 60000));
+        const r = await invoke<SessionEnd>("cmd_end_session", {
+          sessionId: session.id,
+          endLocator: sessionEndLocator(),
+          minutes,
+          completedSectionIds: completedSectionIds(),
+          summarySentence: exitTakeawayRef.current,
+        });
+        if (!r.export.ok) message = r.export.message ?? "The Markdown export still needs attention.";
+      }
+    } catch (e) {
+      message = errorMessage(e);
+    }
+    setEndBusy(false);
+    if (message) setEndFailure({ durable: true, message });
+    else onExit();
+  }
+
+  // `takeaway` is passed explicitly (not read from state) so Skip can end with
+  // null without racing a setState. A takeaway is never forced — a short
+  // sitting still counts.
+  async function finalizeSession(takeaway: string | null) {
+    await completeExit(takeaway);
+  }
+
+  // Toolbar "‹ Today" is not plain navigation — it completes the sitting first
+  // so the sections read this sitting are recorded (FT-29), then exits. A
+  // failed end shows the announced sheet instead of silently leaving (DATA-005).
   async function handleBackExit() {
-    await flushSession();
-    onExit();
+    await completeExit(null);
   }
 
   const targetSection = assignedSection;
@@ -891,6 +998,9 @@ export default function TextReader({ today, onExit }: Props) {
   const dismissSelection = useCallback(() => {
     setSel(null);
     try { window.getSelection?.()?.removeAllRanges(); } catch { /* ignore */ }
+    // A11Y-010: dismissing the toolbar returns focus to the reading sheet so a
+    // keyboard reader lands back where they were, never on document.body.
+    articleRef.current?.focus();
   }, []);
 
   // Escape dismisses the selection toolbar — the keyboard escape hatch the
@@ -927,16 +1037,21 @@ export default function TextReader({ today, onExit }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sel]);
 
-  // Capture a selection inside the reading column → show the action toolbar.
-  function onTextMouseUp() {
+  // Centralized selection capture (A11Y-010): pointer (mouseup), keyboard
+  // (Shift+arrows via selectionchange), and assistive-tech selection all land
+  // here — the toolbar is no longer pointer-only. `clearOnEmpty` is true for
+  // the pointer path (its old clear-on-empty behavior); the selectionchange
+  // path never clears, so focusing/clicking the toolbar (which collapses the
+  // DOM selection) cannot wipe the toolbar out from under the reader.
+  function captureSelection(opts: { clearOnEmpty: boolean }) {
     const s = window.getSelection?.();
-    if (!s || s.isCollapsed || s.rangeCount === 0) { setSel(null); return; }
+    if (!s || s.isCollapsed || s.rangeCount === 0) { if (opts.clearOnEmpty) setSel(null); return; }
     const range = s.getRangeAt(0);
     const col = colRef.current;
     const reader = readerRef.current;
-    if (!col || !reader || !col.contains(range.commonAncestorContainer)) { setSel(null); return; }
+    if (!col || !reader || !col.contains(range.commonAncestorContainer)) { if (opts.clearOnEmpty) setSel(null); return; }
     const text = s.toString();
-    if (text.trim().length < 1) { setSel(null); return; }
+    if (text.trim().length < 1) { if (opts.clearOnEmpty) setSel(null); return; }
     const start = charOffsetWithinSection(range.startContainer, range.startOffset, col);
     const end = charOffsetWithinSection(range.endContainer, range.endOffset, col);
     if (start == null || end == null) { setSel(null); return; }
@@ -963,11 +1078,70 @@ export default function TextReader({ today, onExit }: Props) {
     // never the margin panel. The margin opens when the reader actually captures
     // something, so selecting a passage never crowds the text with an empty panel.
   }
+  function onTextMouseUp() {
+    captureSelection({ clearOnEmpty: true });
+  }
+  // Keep a ref to the freshest capture closure for the document-level listener.
+  const captureSelectionRef = useRef(captureSelection);
+  useEffect(() => {
+    captureSelectionRef.current = captureSelection;
+  });
+  // A11Y-010: keyboard/AT selection support. `selectionchange` is debounced so
+  // the toolbar appears when a Shift+arrow (or VoiceOver) selection SETTLES,
+  // not on every keystroke of it.
+  useEffect(() => {
+    let t: number | null = null;
+    function onSelectionChange() {
+      if (t) window.clearTimeout(t);
+      t = window.setTimeout(() => {
+        t = null;
+        const s = window.getSelection?.();
+        const col = colRef.current;
+        if (!s || !col || s.isCollapsed || s.rangeCount === 0) return;
+        if (!col.contains(s.getRangeAt(0).commonAncestorContainer)) return;
+        captureSelectionRef.current({ clearOnEmpty: false });
+      }, 200);
+    }
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", onSelectionChange);
+      if (t) window.clearTimeout(t);
+    };
+  }, []);
+  // A11Y-010: deterministic toolbar focus — while a selection is active, Tab
+  // from the reading column (or the page body) lands on the toolbar's first
+  // action instead of wherever the tab order happens to wander.
+  useEffect(() => {
+    if (!sel) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Tab" || e.shiftKey) return;
+      const bar = selToolbarRef.current;
+      if (!bar) return;
+      const active = document.activeElement;
+      // Keyboard selection leaves focus on the scroll container (tabIndex=0) —
+      // that state, the column itself, and a bare body all redirect into the
+      // toolbar; focus inside the margin rail or a modal never does.
+      const inReader =
+        !!active &&
+        (active === document.body ||
+          active === containerRef.current ||
+          !!colRef.current?.contains(active) ||
+          !!articleRef.current?.contains(active));
+      if (inReader && !bar.contains(active)) {
+        e.preventDefault();
+        bar.querySelector("button")?.focus();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [sel]);
 
   async function createAnchoredNote(noteType: string): Promise<Note | null> {
     if (!sel) return null;
+    lastSelActionRef.current = noteType;
+    setSelError(null);
     try {
-      const note = await invoke<Note>("cmd_save_note", {
+      const saved = await invoke<SavedNote>("cmd_save_note", {
         bookId: book.id,
         sessionId: session?.id ?? null,
         noteType,
@@ -981,15 +1155,48 @@ export default function TextReader({ today, onExit }: Props) {
       });
       window.getSelection?.()?.removeAllRanges();
       setSel(null);
+      if (!saved.export.ok) {
+        setExportIssue({
+          noteId: saved.note.id,
+          message: saved.export.message ?? "The Markdown export needs attention.",
+        });
+      }
       await refreshNotes();
-      return note;
-    } catch {
-      setSel(null);
+      return saved.note;
+    } catch (e) {
+      // DATA-005: the selection and range are the reader's work — keep BOTH and
+      // say what happened (announced), with the toolbar still up for a retry.
+      setSelError(errorMessage(e));
       return null;
     }
   }
 
-  async function onHighlight() { dispatchMargin("capture"); await createAnchoredNote("Highlight"); }
+  // Retry the Markdown merge behind an export-issue toast: by note id when we
+  // have one (an empty cmd_update_note patch re-merges the book idempotently),
+  // else — after a delete — re-merge the whole library.
+  async function retryExportIssue() {
+    if (!exportIssue) return;
+    try {
+      if (exportIssue.noteId) {
+        const r = await invoke<SavedNote>("cmd_update_note", { noteId: exportIssue.noteId });
+        if (r.export.ok) setExportIssue(null);
+        else setExportIssue({ ...exportIssue, message: r.export.message ?? exportIssue.message });
+      } else {
+        const r = await invoke<{ exported: number; failed: string[]; root: string }>("cmd_export_library");
+        if (r.failed.length === 0) setExportIssue(null);
+        else setExportIssue({ ...exportIssue, message: `Still couldn't export: ${r.failed.join(", ")}.` });
+      }
+    } catch (e) {
+      setExportIssue({ ...exportIssue, message: errorMessage(e) });
+    }
+  }
+
+  async function onHighlight() {
+    dispatchMargin("capture");
+    const n = await createAnchoredNote("Highlight");
+    // A11Y-010: a highlight spawns no card — focus returns to the labelled sheet.
+    if (n) articleRef.current?.focus();
+  }
   async function onMarginNote() {
     dispatchMargin("capture");
     const n = await createAnchoredNote("MarginNote");
@@ -1085,8 +1292,14 @@ export default function TextReader({ today, onExit }: Props) {
   // CORE-1163: persist a draft's completed answer at the PARENT so reopening a
   // collapsed card REPLAYS it instantly and never re-calls the model (no re-spend,
   // no lost deep tier). Updated as the stream completes / sub-state changes.
-  const onTutorCached = useCallback((draftId: string, cache: TutorCache) => {
-    setTutorDrafts((d) => d.map((x) => (x.draftId === draftId ? { ...x, cache } : x)));
+  // R10-4: `cache: null` CLEARS a persisted snapshot — the card uses it when
+  // a delayed pre-egress refusal (NeedsCloudConsent) proves the interrupted
+  // snapshot it persisted at unmount never billed anything, restoring the
+  // consent path on reopen.
+  const onTutorCached = useCallback((draftId: string, cache: TutorCache | null) => {
+    setTutorDrafts((d) =>
+      d.map((x) => (x.draftId === draftId ? { ...x, cache: cache ?? undefined } : x)),
+    );
   }, []);
   // The X on a margin card is a DISMISS-then-commit, never a one-click destroy
   // (FT-32). The card hides at once, a 6s Undo toast appears, and the real
@@ -1095,10 +1308,35 @@ export default function TextReader({ today, onExit }: Props) {
   const commitDelete = useCallback(async (id: string) => {
     deleteTimer.current = null;
     setPendingDelete((cur) => (cur === id ? null : cur));
-    try { await invoke("cmd_delete_note", { noteId: id }); } catch { /* ignore */ }
+    try {
+      const out = await invoke<ExportOutcome>("cmd_delete_note", { noteId: id });
+      // The note is truly gone — only NOW may its retained draft go with it
+      // (an Undo before this point keeps the draft; and a stale draft left
+      // behind could resurrect words onto a restored-from-backup note).
+      localStorage.removeItem(`tl.noteDraft.${id}`);
+      setRemovalIssue(null);
+      // The row deletion is durable; a failed re-merge means the exported file
+      // still shows the removed note until a retry (DATA-004) — say so.
+      if (!out.ok) {
+        setExportIssue({ noteId: null, message: out.message ?? "The Markdown export needs attention." });
+      }
+    } catch (e) {
+      // R5: a failed DELETE is not an export problem. Its own toast retries
+      // the DELETION — routing it through the export-retry (cmd_export_library)
+      // cleared the warning while the launch sweep still planned to delete
+      // the note.
+      setRemovalIssue({
+        noteId: id,
+        phase: "commit",
+        message: `The note couldn't be removed (${errorMessage(e)}). It's still scheduled for removal — try again.`,
+      });
+    }
     await refreshNotes();
   }, [refreshNotes]);
-  function deleteNote(id: string) {
+  // Ids with a stage call currently in flight (double-tap guard).
+  const stagingDeletes = useRef<Set<string>>(new Set());
+  async function deleteNote(id: string) {
+    if (stagingDeletes.current.has(id)) return;
     // A second delete supersedes the first: commit the still-pending one now so
     // its 6s window doesn't outlive its toast.
     if (deleteTimer.current) {
@@ -1106,12 +1344,66 @@ export default function TextReader({ today, onExit }: Props) {
       deleteTimer.current = null;
       if (pendingDelete && pendingDelete !== id) void commitDelete(pendingDelete);
     }
-    if (activeNoteId === id) setActiveNoteId(null);
+    // DATA-005: the durable stage is AWAITED before the card is hidden. If it
+    // fails, the card stays put and the reader is told — a hidden note whose
+    // staging silently failed would resurrect on relaunch after the toast said
+    // "removed". Because the Undo toast only exists after staging succeeded,
+    // Undo can never race an in-flight stage call. The note's retained draft
+    // is deliberately untouched here: Undo brings the card back with the
+    // reader's words (the draft is cleared only by the committed delete).
+    stagingDeletes.current.add(id);
+    try {
+      await invoke("cmd_stage_note_delete", { noteId: id });
+    } catch (e) {
+      // R5: a failed STAGE is a removal problem, not an export problem — its
+      // toast retries the removal itself (see removalIssue).
+      setRemovalIssue({
+        noteId: id,
+        phase: "stage",
+        message: `The note couldn't be removed (${errorMessage(e)}). It's still in your margin — try again.`,
+      });
+      return;
+    } finally {
+      stagingDeletes.current.delete(id);
+    }
+    setActiveNoteId((cur) => (cur === id ? null : cur));
+    setRemovalIssue(null); // the removal is progressing again
+    setUndoIssue(null); // a fresh toast never wears a stale undo error
     setPendingDelete(id);
     deleteTimer.current = window.setTimeout(() => { void commitDelete(id); }, 6000);
   }
-  function undoDelete() {
+  // R4: Undo is AWAITED and failure-visible. The toast stays and the note
+  // stays hidden until the unstage DURABLY succeeds — clearing the toast on a
+  // failed unstage told the reader "undone" while the relaunch sweep would
+  // still delete the note. On failure the toast announces it and Undo becomes
+  // the retry.
+  const [undoIssue, setUndoIssue] = useState<string | null>(null);
+  const undoInFlight = useRef(false);
+  async function undoDelete() {
+    const id = pendingDelete;
+    if (!id || undoInFlight.current) return;
     if (deleteTimer.current) { clearTimeout(deleteTimer.current); deleteTimer.current = null; }
+    undoInFlight.current = true;
+    try {
+      await invoke("cmd_unstage_note_delete", { noteId: id });
+    } catch (e) {
+      setUndoIssue(`Couldn't undo that (${errorMessage(e)}). Try again.`);
+      return;
+    } finally {
+      undoInFlight.current = false;
+    }
+    // R5: the hidden card's unmount flush may have SAVED a pending edit —
+    // refresh the rows BEFORE unhiding, so the remounted card renders the
+    // flushed body instead of stale parent state (which a later autosave
+    // would silently write back over the flushed words).
+    // R6-6: a FAILED refresh must not unhide either — that would remount the
+    // exact stale state the refresh exists to prevent. The card stays hidden
+    // and the toast becomes the retry (the re-run's unstage is idempotent).
+    if (!(await refreshNotes())) {
+      setUndoIssue("Undone, but the note couldn't be reloaded — Retry to finish bringing it back.");
+      return;
+    }
+    setUndoIssue(null);
     setPendingDelete(null);
   }
 
@@ -1134,11 +1426,15 @@ export default function TextReader({ today, onExit }: Props) {
     const cls = p.pre
       ? "tl-block tl-pre"
       : [roleClass, isBodyFirst ? "tl-body-first" : null, isConnective ? "tl-tp-and" : null].filter(Boolean).join(" ") || undefined;
+    // A11Y-010: imported/inferred headings expose role=heading + aria-level on
+    // the SAME p[data-offset] — semantics without moving a single char offset.
+    const headingLevel = p.pre ? null : headingLevelFor(role);
     return (
       <p
         key={p.offset}
         data-offset={p.offset}
         className={cls}
+        {...(headingLevel != null ? { role: "heading", "aria-level": headingLevel } : {})}
         ref={(el) => {
           if (el) paragraphRefs.current.set(p.offset, el);
           else paragraphRefs.current.delete(p.offset);
@@ -1260,7 +1556,12 @@ export default function TextReader({ today, onExit }: Props) {
           className="tl-spread"
           data-margin={marginIsVisible ? "open" : "closed"}
         >
-          <article className={isDivider ? "tl-sheet is-divider" : "tl-sheet"}>
+          <article
+            className={isDivider ? "tl-sheet is-divider" : "tl-sheet"}
+            aria-label={`${book.title}${currentSection ? `, ${currentSection.label}` : ""}`}
+            tabIndex={-1}
+            ref={articleRef}
+          >
             {textError ? (
               <div className="tl-readcol" style={{ maxWidth: `${lineWidth}px` }}>
                 <div className="tl-read-error" role="alert">
@@ -1344,6 +1645,7 @@ export default function TextReader({ today, onExit }: Props) {
                       onActivate={() => setActiveNoteId(n.id)}
                       onSaved={refreshNotes}
                       onDelete={() => deleteNote(n.id)}
+                      onExportIssue={(noteId, message) => setExportIssue({ noteId, message })}
                     />
                   </div>
                 ) : (
@@ -1376,6 +1678,7 @@ export default function TextReader({ today, onExit }: Props) {
                       active
                       onActivate={() => setActiveNoteId(d.draftId)}
                       onSaved={(note) => onTutorSaved(d.draftId, note.id)}
+                      onExportIssue={(noteId, message) => setExportIssue({ noteId, message })}
                       onDiscard={() => onTutorDiscard(d.draftId)}
                       onCached={onTutorCached}
                     />
@@ -1425,7 +1728,7 @@ export default function TextReader({ today, onExit }: Props) {
       </div>
 
       {sel && (
-        <div className={sel.below ? "tl-seltoolbar below" : "tl-seltoolbar"} style={{ left: sel.x, top: sel.y }} role="toolbar" aria-label="Selection actions — press Escape to dismiss" aria-keyshortcuts="Escape">
+        <div ref={selToolbarRef} className={sel.below ? "tl-seltoolbar below" : "tl-seltoolbar"} style={{ left: sel.x, top: sel.y }} role="toolbar" aria-label="Selection actions — press Tab to reach them, Escape to dismiss" aria-keyshortcuts="Tab Escape">
           <button className="tl-seltoolbar-btn" onClick={onHighlight}><TLIcon name="pencil" size={15} /> Highlight</button>
           <button className="tl-seltoolbar-btn" onClick={onMarginNote}><TLIcon name="pencil" size={15} /> Note</button>
           <button className="tl-seltoolbar-btn" onClick={onQuestion}><TLIcon name="help" size={15} /> Question</button>
@@ -1433,6 +1736,23 @@ export default function TextReader({ today, onExit }: Props) {
           <button className="tl-seltoolbar-btn" onClick={() => spawnTutorDraft("explain")}><TLIcon name="sparkle" size={15} /> Explain</button>
           <button className="tl-seltoolbar-btn" onClick={() => spawnTutorDraft("historical")}>Context</button>
           <button className="tl-seltoolbar-btn" onClick={onDefine}>Define</button>
+        </div>
+      )}
+
+      {/* DATA-005: a failed capture keeps the selection AND says so, with a
+          real retry — never a silently cleared selection. */}
+      {sel && selError && (
+        <div className="tl-plans-toast" role="alert">
+          <span>Couldn't save that ({selError}).</span>
+          <button
+            onClick={() => {
+              const t = lastSelActionRef.current;
+              if (t) void createAnchoredNote(t);
+            }}
+          >
+            Try again
+          </button>
+          <button onClick={() => setSelError(null)}>Dismiss</button>
         </div>
       )}
 
@@ -1448,7 +1768,13 @@ export default function TextReader({ today, onExit }: Props) {
           x={define.x}
           y={define.y}
           below={define.below}
-          onClose={() => setDefine(null)}
+          onClose={() => {
+            // A11Y-010: closing/Escaping the popover returns focus to the
+            // labelled reading sheet (an escalated margin card then takes it
+            // on its own mount).
+            setDefine(null);
+            articleRef.current?.focus();
+          }}
           onOpenInMargin={() => spawnVocabFromDefine(define)}
         />
       )}
@@ -1461,14 +1787,84 @@ export default function TextReader({ today, onExit }: Props) {
           locator={locator}
           positionHint={locatorHint(locator, { start: secStart, length: Math.max(0, secNominalEnd - secStart) })}
           onClose={() => setShowNote(false)}
+          onExportIssue={(noteId, message) => setExportIssue({ noteId, message })}
         />
       )}
 
-      {/* Soft-delete Undo toast (FT-32) — the same idiom as PlansView "Let go". */}
+      {/* Soft-delete Undo toast (FT-32) — the same idiom as PlansView "Let go".
+          A failed Undo is ANNOUNCED in place and the button becomes the retry
+          (R4): the toast never clears until the unstage durably succeeded. */}
       {pendingDelete && (
-        <div className="tl-plans-toast" role="status" aria-live="polite">
-          <span>Note removed.</span>
-          <button onClick={undoDelete}>Undo</button>
+        <div className="tl-plans-toast" role={undoIssue ? "alert" : "status"} aria-live={undoIssue ? "assertive" : "polite"}>
+          <span>{undoIssue ?? "Note removed."}</span>
+          <button onClick={() => void undoDelete()}>{undoIssue ? "Retry undo" : "Undo"}</button>
+        </div>
+      )}
+
+      {/* DATA-004: durable-in-DB but Markdown-export-pending — actionable, honest. */}
+      {/* R5: a failed REMOVAL retries the removal itself — its own toast,
+          never routed through the export retry. */}
+      {removalIssue && !pendingDelete && (
+        <div className="tl-plans-toast" role="alert">
+          <span>{removalIssue.message}</span>
+          <button
+            onClick={() => {
+              const issue = removalIssue;
+              if (!issue) return;
+              if (issue.phase === "stage") void deleteNote(issue.noteId);
+              else void commitDelete(issue.noteId);
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      )}
+
+      {exportIssue && !removalIssue && !pendingDelete && (
+        <div className="tl-plans-toast" role="alert">
+          <span>{exportIssue.message}</span>
+          <button onClick={() => void retryExportIssue()}>Try again</button>
+          <button onClick={() => setExportIssue(null)}>Dismiss</button>
+        </div>
+      )}
+
+      {/* DATA-005: a failed reading-position save is said out loud once — it
+          retries automatically with the next scroll. */}
+      {progressIssue && !exportIssue && !removalIssue && !pendingDelete && (
+        <div className="tl-plans-toast" role="alert">
+          <span>Your reading position couldn't be saved ({progressIssue}). It retries as you read.</span>
+          <button onClick={() => setProgressIssue(null)}>Dismiss</button>
+        </div>
+      )}
+
+      {/* DATA-005: ending failed — announced, actionable, nothing lost. */}
+      {endFailure && (
+        <div className="tl-modal-backdrop">
+          <div className="tl-modal" role="alertdialog" aria-modal="true" aria-labelledby="tl-endfail-title" aria-describedby="tl-endfail-msg">
+            {endFailure.durable ? (
+              <>
+                <div className="tl-modal-head"><span className="t" id="tl-endfail-title">Your sitting is saved</span></div>
+                <p id="tl-endfail-msg" role="alert">{endFailure.message}</p>
+                <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+                  <button className="tl-btn-quiet" disabled={endBusy} onClick={onExit}>Continue</button>
+                  <button className="tl-btn tl-btn-primary" disabled={endBusy} onClick={() => void retryEndExports()}>
+                    {endBusy ? "Retrying…" : "Try export again"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="tl-modal-head"><span className="t" id="tl-endfail-title">This sitting couldn't be saved</span></div>
+                <p id="tl-endfail-msg" role="alert">{endFailure.message}</p>
+                <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+                  <button className="tl-btn-quiet" disabled={endBusy} onClick={onExit}>Exit without saving</button>
+                  <button className="tl-btn tl-btn-primary" disabled={endBusy} onClick={() => void completeExit(exitTakeawayRef.current)}>
+                    {endBusy ? "Saving…" : "Try again"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -1843,13 +2239,24 @@ function cancelPendingProgressSave() {
     saveProgressTimer = null;
   }
 }
-function throttledSaveProgress(bookId: string, sectionId: string, locator: string, percent: number) {
+function throttledSaveProgress(
+  bookId: string,
+  sectionId: string,
+  locator: string,
+  percent: number,
+  onError?: (message: string) => void,
+  onOk?: () => void,
+) {
   const now = Date.now();
   if (saveProgressTimer != null) window.clearTimeout(saveProgressTimer);
   const fire = () => {
     lastSaveAt = Date.now();
     saveProgressTimer = null;
-    invoke("cmd_save_section_progress", { bookId, sectionId, locator, percent }).catch(() => {});
+    // DATA-005: a rejected position save SURFACES (announced by the caller)
+    // instead of vanishing into an empty catch. The next scroll retries it.
+    invoke("cmd_save_section_progress", { bookId, sectionId, locator, percent })
+      .then(() => onOk?.())
+      .catch((e) => onError?.(errorMessage(e)));
   };
   if (now - lastSaveAt > 800) fire();
   else saveProgressTimer = window.setTimeout(fire, 800);
@@ -1864,6 +2271,8 @@ function NotePanel(props: {
   /** Reader-facing "32% in"-style position, or null when it adds nothing. */
   positionHint: string | null;
   onClose: () => void;
+  /** DATA-004: the note saved durably but its Markdown export failed. */
+  onExportIssue?: (noteId: string, message: string) => void;
 }) {
   const [noteType, setNoteType] = useState<string>("Reflection");
   const [body, setBody] = useState("");
@@ -1890,7 +2299,7 @@ function NotePanel(props: {
     setSaving(true);
     setSaveErr(null);
     try {
-      await invoke<Note>("cmd_save_note", {
+      const saved = await invoke<SavedNote>("cmd_save_note", {
         bookId: props.bookId,
         sessionId: props.sessionId,
         noteType,
@@ -1899,6 +2308,9 @@ function NotePanel(props: {
         body: body.trim(),
         shortQuote: shortQuote.trim() || null,
       });
+      if (!saved.export.ok) {
+        props.onExportIssue?.(saved.note.id, saved.export.message ?? "The Markdown export needs attention.");
+      }
       props.onClose();
     } catch (e) {
       setSaveErr(errorMessage(e));

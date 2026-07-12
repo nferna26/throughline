@@ -33,10 +33,10 @@ function fullDto(dto: Partial<SettingsDto>): SettingsDto {
     ai_key_present_openai: false,
     ai_key_present_anthropic: false,
     ai_codex_creds_present: false,
-    ai_phrases: true,
     ui_theme: "light",
     reading_typeface: "newsreader",
     reading_line_spacing: "comfortable",
+    library_generation: "gen_test",
     ...dto,
   };
 }
@@ -56,7 +56,7 @@ function wire(
       ? { status: "active", remaining_fraction: 0.74, approx_questions_left: 220 }
       : opts.credits;
   const requests = opts.requests ?? [];
-  const backup = opts.backup ?? { enabled: true, last_backup_at: "2026-07-08T09:12:00-07:00" };
+  const backup = opts.backup ?? { enabled: true, last_backup_at: "2026-07-08T09:12:00-07:00", undo_available: false };
   const backups = opts.backups ?? [];
   mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
     switch (cmd) {
@@ -237,29 +237,21 @@ describe("Appearance pane", () => {
 /* ═══════════════ Assistant pane ═══════════════ */
 
 describe("Assistant pane", () => {
-  it("keeps the tutor and session-names switches, keyboard-operable role=switch", async () => {
+  it("keeps the tutor switch, keyboard-operable role=switch", async () => {
     wire({});
     render(<Settings />);
     await openPane("Assistant");
     const tutor = await screen.findByRole("switch", { name: "Tutor in the margin" });
-    const names = screen.getByRole("switch", { name: "Session names" });
     expect(tutor.tagName).toBe("BUTTON"); // native button = Enter/Space operable
-    expect(names).toHaveAttribute("aria-checked", "true");
   });
 
-  it("session-names toggle round-trips aiPhrases through cmd_set_ai_settings", async () => {
+  it("offers no session-names control — background phrase generation was removed (PRIV-001)", async () => {
     wire({});
     render(<Settings />);
     await openPane("Assistant");
-    const toggle = await screen.findByRole("switch", { name: "Session names" });
-    fireEvent.click(toggle);
-    await waitFor(() => {
-      const call = mockInvoke.mock.calls.find(
-        (c) => c[0] === "cmd_set_ai_settings" && (c[1] as { aiPhrases?: boolean })?.aiPhrases !== undefined,
-      );
-      expect(call).toBeTruthy();
-      expect((call![1] as { aiPhrases: boolean }).aiPhrases).toBe(false);
-    });
+    await screen.findByRole("switch", { name: "Tutor in the margin" });
+    expect(screen.queryByRole("switch", { name: "Session names" })).toBeNull();
+    expect(screen.queryByText(/opening lines are sent/i)).toBeNull();
   });
 
   it("shows a calm qualitative Included-tutoring status — no bar, no number, no percent", async () => {
@@ -370,7 +362,7 @@ describe("Assistant pane", () => {
         case "cmd_list_ai_requests": return Promise.resolve([]);
         case "cmd_activate_company": return Promise.resolve({ provider_active: true, has_license: true });
         case "cmd_get_reading_pace": return Promise.resolve({ minutes: 25, chosen: true });
-        case "cmd_backup_status": return Promise.resolve({ enabled: true, last_backup_at: null });
+        case "cmd_backup_status": return Promise.resolve({ enabled: true, last_backup_at: null, undo_available: false });
         default: return Promise.resolve(undefined);
       }
     });
@@ -393,11 +385,16 @@ describe("Privacy pane", () => {
     wire({});
     render(<Settings />);
     await openPane("Privacy");
-    expect(await screen.findByText("Everything stays on this Mac")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Your books and notes stay on this Mac"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Always")).toBeInTheDocument();
     expect(
-      screen.getByText(/Books never leave this computer\. When you ask about a passage/i),
+      screen.getByText(/Book files and notes never leave this computer on their own/i),
     ).toBeInTheDocument();
+    // The categorical everything-local claim is gone: a passage CAN leave,
+    // deliberately, after confirmation (PRIV-001 copy repair).
+    expect(screen.queryByText("Everything stays on this Mac")).toBeNull();
   });
 
   it("the mode-aware line affirms nothing is sent in On this Mac only", async () => {
@@ -412,7 +409,7 @@ describe("Privacy pane", () => {
     wire({ ai_provider: "company" });
     const { container } = render(<Settings />);
     await openPane("Privacy");
-    await screen.findByText("Everything stays on this Mac");
+    await screen.findByText("Your books and notes stay on this Mac");
     expect(screen.getByText(/included assistant/)).toBeInTheDocument();
     expect(container.textContent ?? "").not.toMatch(/run on a local model/i);
   });
@@ -472,9 +469,9 @@ describe("Files pane", () => {
     mockInvoke.mockImplementation((cmd: string) => {
       switch (cmd) {
         case "cmd_get_settings": return Promise.resolve(base);
-        case "cmd_export_library": return Promise.resolve({ exported: 3, root: "/Users/x/Documents/Reading" });
+        case "cmd_export_library": return Promise.resolve({ exported: 3, failed: [], root: "/Users/x/Documents/Reading" });
         case "cmd_list_ai_requests": return Promise.resolve([]);
-        case "cmd_backup_status": return Promise.resolve({ enabled: true, last_backup_at: null });
+        case "cmd_backup_status": return Promise.resolve({ enabled: true, last_backup_at: null, undo_available: false });
         case "cmd_get_reading_pace": return Promise.resolve({ minutes: 25, chosen: true });
         default: return Promise.resolve(undefined);
       }
@@ -487,6 +484,29 @@ describe("Files pane", () => {
     expect(msg.textContent).not.toMatch(/\/Users\/x\/Documents\/Reading/);
   });
 
+  it("names every failed book instead of a misleading success count (DATA-004)", async () => {
+    wire({ export_path: "/Users/x/Documents/Reading" });
+    const base = fullDto({ export_path: "/Users/x/Documents/Reading" });
+    mockInvoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "cmd_get_settings": return Promise.resolve(base);
+        case "cmd_export_library": return Promise.resolve({ exported: 1, failed: ["Broken Book"], root: "/Users/x/Documents/Reading" });
+        case "cmd_list_ai_requests": return Promise.resolve([]);
+        case "cmd_backup_status": return Promise.resolve({ enabled: true, last_backup_at: null, undo_available: false });
+        case "cmd_get_reading_pace": return Promise.resolve({ minutes: 25, chosen: true });
+        default: return Promise.resolve(undefined);
+      }
+    });
+    render(<Settings />);
+    await openPane("Files");
+    fireEvent.click(await screen.findByRole("button", { name: /Export/ }));
+    const msg = await screen.findByText(/couldn't be exported: Broken Book/i);
+    expect(msg.textContent).toMatch(/Exported 1 book/);
+    expect(msg.textContent).toMatch(/safe in Throughline/i);
+    // No plain "Exported N books." success line may render alongside.
+    expect(screen.queryByText(/^Exported 1 book to your/)).toBeNull();
+  });
+
   it("shows a calm, blame-free message when the library export fails", async () => {
     wire({});
     const base = fullDto({});
@@ -495,7 +515,7 @@ describe("Files pane", () => {
         case "cmd_get_settings": return Promise.resolve(base);
         case "cmd_export_library": return Promise.reject(new Error("The export folder is read-only."));
         case "cmd_list_ai_requests": return Promise.resolve([]);
-        case "cmd_backup_status": return Promise.resolve({ enabled: true, last_backup_at: null });
+        case "cmd_backup_status": return Promise.resolve({ enabled: true, last_backup_at: null, undo_available: false });
         case "cmd_get_reading_pace": return Promise.resolve({ minutes: 25, chosen: true });
         default: return Promise.resolve(undefined);
       }
@@ -510,7 +530,7 @@ describe("Files pane", () => {
   });
 
   it("automatic backups: shows the live last-backup line and round-trips the toggle", async () => {
-    wire({}, { backup: { enabled: true, last_backup_at: new Date().toISOString() } });
+    wire({}, { backup: { enabled: true, last_backup_at: new Date().toISOString(), undo_available: false } });
     render(<Settings />);
     await openPane("Files");
     const toggle = await screen.findByRole("switch", { name: "Automatic backups" });
@@ -524,7 +544,7 @@ describe("Files pane", () => {
   });
 
   it("says 'no backup yet' honestly when none exists", async () => {
-    wire({}, { backup: { enabled: false, last_backup_at: null } });
+    wire({}, { backup: { enabled: false, last_backup_at: null, undo_available: false } });
     render(<Settings />);
     await openPane("Files");
     expect(await screen.findByText(/no backup yet/i)).toBeInTheDocument();
@@ -544,8 +564,13 @@ describe("Files pane", () => {
     await openPane("Files");
     fireEvent.click(await screen.findByRole("button", { name: "Choose a backup" }));
     const sheet = await screen.findByRole("dialog", { name: "Restore from backup" });
-    // Reassurance: the current library is kept safe first.
-    expect(within(sheet).getByText(/Today's copy is kept safe first/i)).toBeInTheDocument();
+    // REC-011 honest scope: DB-only backup, book files excluded, undo real.
+    const sub = within(sheet).getByText(/notes, plans, and reading history/i);
+    expect(sub.textContent).toMatch(/Book files aren't part of backups/i);
+    expect(sub.textContent).toMatch(/undo the restore/i);
+    // The categorical whole-library promise is gone.
+    expect(within(sheet).queryByText(/Your library goes back/i)).toBeNull();
+    expect(within(sheet).queryByText(/nothing is lost/i)).toBeNull();
     const restore = within(sheet).getByRole("button", { name: "Restore" });
     expect(restore).toBeDisabled();
     const rows = await within(sheet).findAllByRole("radio");
@@ -556,6 +581,24 @@ describe("Files pane", () => {
     await waitFor(() =>
       expect(mockInvoke).toHaveBeenCalledWith("cmd_restore_backup", { id: "reading-20260708-091200.db" }),
     );
+  });
+
+  it("offers Undo last restore only when a pre-restore snapshot exists, and calls cmd_undo_restore (REC-011)", async () => {
+    wire({}, { backup: { enabled: true, last_backup_at: new Date().toISOString(), undo_available: true } });
+    render(<Settings />);
+    await openPane("Files");
+    const undo = await screen.findByRole("button", { name: "Undo" });
+    expect(screen.getByText(/Undo last restore/)).toBeInTheDocument();
+    fireEvent.click(undo);
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("cmd_undo_restore"));
+  });
+
+  it("hides the undo affordance when there is nothing to undo", async () => {
+    wire({}, { backup: { enabled: true, last_backup_at: new Date().toISOString(), undo_available: false } });
+    render(<Settings />);
+    await openPane("Files");
+    await screen.findByRole("switch", { name: "Automatic backups" });
+    expect(screen.queryByText(/Undo last restore/)).toBeNull();
   });
 
   it("restore with no backups explains instead of a dead list", async () => {
@@ -599,7 +642,7 @@ describe("Send feedback destination", () => {
     wire({});
     render(<Settings />);
     await openPane("Privacy");
-    await screen.findByText("Everything stays on this Mac");
+    await screen.findByText("Your books and notes stay on this Mac");
     await openPane("Send feedback");
     expect(await screen.findByRole("heading", { name: "Send feedback" })).toBeInTheDocument();
     expect(screen.getByText(/A note goes straight to the people building Throughline\./)).toBeInTheDocument();
