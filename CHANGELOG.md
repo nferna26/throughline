@@ -2,10 +2,99 @@
 
 All notable changes to Throughline are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver. The
-Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 6)
+Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 8)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
-## [Unreleased]
+## [0.9.3] - 2026-07-12
+
+Public-beta blocker repairs from the 2026-07 end-to-end audit
+(`COMMAND_API_VERSION` 6 → 8 — see docs/IPC.md for the full contract diff).
+
+### Changed
+
+- **First-cloud consent is bound to the exact ask (`COMMAND_API_VERSION` 7 → 8).**
+  `cmd_confirm_cloud_send` is removed: it recorded consent globally, in a
+  separate call from the send it authorized, so a provider or selection change
+  in that window could send something the reader never reviewed. The consent
+  sheet's preview (`cmd_outbound_envelope`) now carries a backend-issued
+  binding (`provider`, `host`, `fingerprint`), and the confirmed
+  `cmd_ai_ask` passes it back for validation at the send boundary — consent
+  is recorded exactly when the confirmed send is the send that happens; any
+  drift sends nothing, arms nothing, and reopens a fresh preview.
+
+### Removed
+
+- **Background AI session phrases (PRIV-001/TRUST-002).** Plan configuration
+  and session end no longer spawn any AI request; `ai_phrases` defaults off,
+  its Settings toggle is gone, and previously cached phrases still display.
+  Trust copy now says precisely what can leave the Mac (a selected passage, or
+  the Deep Study section) and only after explicit confirmation.
+
+### Fixed
+
+- **Codex sign-in stays private (CRED-002).** A token refresh writes
+  `~/.codex/auth.json` exclusively at owner-only permissions (0600), fsynced
+  and atomic; a legacy 0644 file is normalized back to 0600 by the refresh.
+- **Plan retention never deletes your book file (DATA-003).** The 30-day sweep
+  re-merges the shared `Books/{slug}.md` instead of unlinking it — your own
+  prose in that file survives.
+- **Saves are failure-honest (DATA-004/005).** Notes, session ends, exports,
+  and reading-position saves are validated + transactional, report Markdown
+  export trouble separately from the durable save, keep your words on failure,
+  and always offer a real retry. Session ends are idempotent.
+- **Restore is truthful and undoable (REC-011).** Backups are named for what
+  they are (your reading database, not book files); a restore that would
+  resurrect unreadable books is refused with the exact fix; "Add a missing
+  book's file" matches your original file back by content (SHA-256); the last
+  restore is one-click undoable; a corrupt database plus its WAL/SHM sidecars
+  is always preserved (uniquely, fsynced) before any recovery may touch it.
+- **Confirmed removals survive quitting (TRUST-029).** Removing a note or book
+  is staged durably the moment you confirm; quitting inside the Undo window no
+  longer resurrects it, and Undo still restores instantly. Margin-note drafts
+  are retained durably across failed saves, unmounts, and relaunches.
+- **The cloud consent sheet is accessible and exact (PRIV-A11Y-009).** A real
+  modal (focus trapped, Escape cancels, focus restored) that shows the full
+  bounded passage and every field exactly as sent — byte-identical to the real
+  request — and fails CLOSED (Send disabled) when the preview can't load.
+- **Reading is keyboard/VoiceOver operable (A11Y-010).** Keyboard and
+  assistive-tech selections raise the action toolbar (Tab reaches it); all six
+  passage actions work without a mouse and hand focus to the new card/popover;
+  book headings expose real heading semantics without moving a single anchor.
+- **Releases fail closed (REL-008).** A tag publishes nothing unless the exact
+  commit has green CI on main, the protected release environment approves,
+  every signing secret is present, and the artifacts pass Developer ID /
+  notarization / universal / version and cryptographic updater-signature
+  verification (the exact `minisign-verify` semantics the updater ships with,
+  run by a Rust reference verifier plus an independent JS cross-check); R2
+  publication is content-addressed, immutable, and rerun-safe, promoted by ONE
+  atomic manifest write (`updates/latest.json` names the payload, signature,
+  and DMG; the website's `/download` resolves the DMG through it), serialized
+  per-release with a monotonic downgrade guard, rollback-retaining, and
+  performed only with lockfile-pinned tooling (never `npx --yes` under
+  publication credentials).
+- **Deletion and its mirrors are durable end-to-end (DATA-005 hardening).** A
+  confirmed removal is staged and awaited BEFORE the item hides or Undo is
+  offered (a failed stage says so and changes nothing); a book's on-disk
+  directory removal that fails keeps its durable retry mark and finishes on
+  the next launch; a failed Markdown mirror leaves a durable dirty mark that
+  launch self-heals; note drafts record the row state they were typed against,
+  so a restore-from-backup can never resurrect post-backup words.
+- **Recovery preserves first, restores deeply (REC-011 hardening).** Corrupt-
+  database preservation is copy-based — the damaged files are never touched
+  until a complete fsynced copy exists (proven by injected failure at every
+  file-operation boundary); the restore preflight now validates every
+  section's source hash, bounds, ordering, and production readability (a
+  truncated book whose first page still reads is caught); re-import staging
+  refuses a file that derives a different sectionization and remaps its
+  typography onto the backup's historical section ids; a restore whose
+  swapped-in database cannot reopen rolls back to the pre-restore snapshot
+  instead of serving an empty in-memory library.
+- **Deep Study's first cloud send asks properly (PRIV-A11Y-009/TRUST-002).**
+  When a section briefing is the first-ever cloud action, the same fail-closed
+  consent sheet opens with the exact SECTION about to be sent; a failed
+  consent write keeps the sheet open and recoverable. The website's privacy
+  copy now discloses both sends (a selected passage, or the one Deep Study
+  section — never the whole book).
 
 ## [0.9.2] - 2026-07-09
 

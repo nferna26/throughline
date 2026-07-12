@@ -1,6 +1,6 @@
 [package]
 name = "throughline"
-version = "0.9.2"
+version = "0.9.3"
 description = "Throughline — local-first macOS reading app for serious readers"
 authors = ["Nick Fernandez"]
 edition = "2021"
@@ -74,3 +74,8 @@ objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSA
 # overlap/gaps, char-boundary locators, no degenerate sections). Test-only —
 # never compiled into the shipped app.
 proptest = "1"
+# REL-008: the release pipeline's REFERENCE updater-signature verifier
+# (examples/verify_minisign.rs) uses the EXACT crate tauri-plugin-updater
+# verifies with — already in the lockfile transitively at this same version, so
+# this pins no new code, only makes it nameable from an example. Test-only.
+minisign-verify = "0.2.5"

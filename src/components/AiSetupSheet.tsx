@@ -439,14 +439,16 @@ export default function AiSetupSheet(props: {
               </label>
               <p style={sx.disclosure}>
                 Stored in macOS Keychain. Throughline sends only the passage or section you ask
-                about. You pay your provider directly.
+                about, with the book's title, author, and chapter name for context. You pay your
+                provider directly.
               </p>
             </>
           ) : (
             <div>
               <p style={sx.disclosure}>
                 Sign in once with your ChatGPT account — no API key needed. Stored in your Keychain.
-                Throughline sends only the passage or section you ask about.
+                Throughline sends only the passage or section you ask about, with the book's
+                title, author, and chapter name for context.
               </p>
               <CodexLogin
                 present={codexPresent}

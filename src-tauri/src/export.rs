@@ -671,13 +671,125 @@ pub fn export_book_literature_note(
     let notes = fetch_notes_for_book(conn, book_id)?;
     let dest = book_note_path(root, &book);
 
+    // DATA-004: only a genuinely ABSENT file may be rendered from scratch.
+    // Every other read error — invalid UTF-8, permissions, a transient I/O
+    // fault, dest-is-a-directory — must propagate WITHOUT touching the
+    // destination: treating those as "absent" replaced the reader's own prose
+    // with a fresh render. The file may be stale after an error, never gone.
     let content = match fs::read_to_string(&dest) {
         Ok(existing) => merge_into_existing(&existing, &book, &notes, now),
-        Err(_) => render_full(&book, &notes, now),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => render_full(&book, &notes, now),
+        Err(e) => {
+            return Err(anyhow::Error::from(e).context(format!(
+                "export_book_literature_note: could not read the existing note file {:?}; \
+                 leaving it untouched",
+                dest
+            )));
+        }
     };
 
     paths::atomic_write_string(&dest, &content)?;
     Ok(dest)
+}
+
+/// DATA-005: [`export_book_literature_note`] plus the durable dirty-book
+/// bookkeeping, so a failed Markdown mirror is never only a toast the reader
+/// can lose by quitting. On failure the book_id is written to the
+/// `pending_book_exports` ledger BEFORE the failure is reported (the mark is
+/// durable in the same DB as the rows that made the file stale); on success
+/// the mark is cleared. Launch retries every marked book
+/// (`commands::retry_pending_exports`), so a stale mirror self-heals on the
+/// next run even if the reader never presses "try again". Every durable
+/// mutation's export goes through HERE — calling the raw export directly
+/// would reintroduce the losable-failure hole.
+pub fn export_book_durably(
+    conn: &Connection,
+    root: &Path,
+    book_id: &str,
+    now: &str,
+) -> Result<PathBuf> {
+    export_book_durably_with(conn, root, book_id, now, |parent| {
+        std::fs::File::open(parent)?.sync_all()
+    })
+}
+
+/// [`export_book_durably`] with the parent-directory fsync injectable (R5).
+/// The atomic writer renames the fresh mirror into place, but a rename alone
+/// is not durable — a crash could lose it while the dirty mark had already
+/// been cleared, leaving a stale mirror NO launch retry would ever heal. So
+/// the destination's parent is fsynced BEFORE the mark is cleared; an fsync
+/// failure keeps the mark (the file is present but not proven durable, and
+/// the launch retry re-exports idempotently).
+pub(crate) fn export_book_durably_with(
+    conn: &Connection,
+    root: &Path,
+    book_id: &str,
+    now: &str,
+    fsync_parent: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<PathBuf> {
+    match export_book_literature_note(conn, root, book_id, now).and_then(|path| {
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("export path has no parent"))?;
+        fsync_parent(parent)
+            .map_err(|e| anyhow::anyhow!(e).context("fsync export dir after rename"))?;
+        Ok(path)
+    }) {
+        Ok(path) => {
+            // The mirror is fresh AND durable — the dirty mark (if any) has served.
+            let _ = crate::settings::ledger_remove(
+                conn,
+                crate::settings::KEY_PENDING_BOOK_EXPORTS,
+                book_id,
+            );
+            Ok(path)
+        }
+        Err(e) => {
+            if let Err(mark) = crate::settings::ledger_add(
+                conn,
+                crate::settings::KEY_PENDING_BOOK_EXPORTS,
+                book_id,
+            ) {
+                // Even the durable mark failed (DB trouble): the caller still
+                // surfaces the export failure; nothing is silently green.
+                tracing::warn!(category = "export", "dirty-book mark failed: {mark:#}");
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Typed outcome of a Markdown-mirror write that rides along with a durable DB
+/// mutation (DATA-004). The row's durability and the file's freshness are
+/// SEPARATE facts and must never be conflated into one boolean success.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExportOutcome {
+    /// true → the Markdown mirror was updated. false → the change IS saved in
+    /// Throughline's database, but the Markdown export failed and needs a retry.
+    pub ok: bool,
+    /// Reader-facing explanation when `ok` is false: what happened and what to
+    /// do next. Never carries book content.
+    pub message: Option<String>,
+}
+
+impl ExportOutcome {
+    pub fn exported() -> Self {
+        ExportOutcome {
+            ok: true,
+            message: None,
+        }
+    }
+    /// A reader-facing failure. `err` is an I/O-level error chain — paths are
+    /// fine (it is the reader's own export folder), book content never appears.
+    pub fn failed(err: &anyhow::Error) -> Self {
+        ExportOutcome {
+            ok: false,
+            message: Some(format!(
+                "Saved in Throughline, but the Markdown file couldn't be updated ({err:#}). \
+                 Check the export folder in Settings → Files, then try again."
+            )),
+        }
+    }
 }
 
 // ── Session export (unchanged, out of scope) ─────────────────────────────────
@@ -1354,5 +1466,133 @@ mod tests {
         assert!(md.contains("source_sha256: sha-abc"));
         // Every consecutive run of book-letters is within the cap.
         assert!(!md.contains(&"z".repeat(QUOTE_WARN_LIMIT + 1)));
+    }
+
+    // ── DATA-004: failure-safe, prose-preserving export ──
+
+    /// Only a genuinely ABSENT file may be rendered from scratch. An existing
+    /// file whose bytes are not valid UTF-8 (a reader edit, a disk fault, a
+    /// foreign tool) must make the export FAIL with the file untouched — the
+    /// old behavior treated every read error as "absent" and REPLACED the file,
+    /// destroying any reader prose in it.
+    #[test]
+    fn invalid_utf8_existing_file_fails_and_is_left_byte_identical() {
+        let conn = migrated_with_book();
+        insert_note(
+            &conn,
+            "n1",
+            "MarginNote",
+            "char:0",
+            None,
+            "words",
+            None,
+            None,
+        );
+        let root = std::env::temp_dir().join(format!("tl-litnote-utf8-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(root.join("Books")).unwrap();
+        let book = crate::commands::db_helpers::fetch_book(&conn, "b1")
+            .unwrap()
+            .unwrap();
+        let dest = book_note_path(&root, &book);
+        let evil_bytes: Vec<u8> = vec![b'#', b' ', 0xFF, 0xFE, b'!', b'\n'];
+        std::fs::write(&dest, &evil_bytes).unwrap();
+
+        let result = export_book_literature_note(&conn, &root, "b1", NOW);
+
+        assert!(result.is_err(), "a non-NotFound read error must propagate");
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            evil_bytes,
+            "the existing file must be left byte-identical on failure"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A `Books` that is a stray FILE (not a directory) must fail the export
+    /// before anything is written — never silently succeed.
+    #[test]
+    fn books_target_as_file_fails_the_export() {
+        let conn = migrated_with_book();
+        insert_note(
+            &conn,
+            "n1",
+            "MarginNote",
+            "char:0",
+            None,
+            "words",
+            None,
+            None,
+        );
+        let root = std::env::temp_dir().join(format!("tl-litnote-bfile-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Books"), b"i am in the way").unwrap();
+
+        let result = export_book_literature_note(&conn, &root, "b1", NOW);
+        assert!(result.is_err(), "Books-as-file must fail, not swallow");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A read-only (or unmounted) target must fail the ATOMIC write step and
+    /// leave the previous export bytes fully intact — reader prose included.
+    #[cfg(unix)]
+    #[test]
+    fn readonly_target_write_failure_preserves_prior_bytes_and_prose() {
+        use std::os::unix::fs::PermissionsExt;
+        let conn = migrated_with_book();
+        insert_note(
+            &conn,
+            "n1",
+            "MarginNote",
+            "char:0",
+            None,
+            "first words",
+            None,
+            None,
+        );
+        let root = std::env::temp_dir().join(format!("tl-litnote-ro-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        let dest = export_book_literature_note(&conn, &root, "b1", NOW).expect("first export");
+        // The reader adds prose outside the fences.
+        let mut md = std::fs::read_to_string(&dest).unwrap();
+        md.push_str("\nSENTINEL reader prose.\n");
+        std::fs::write(&dest, &md).unwrap();
+        let before = std::fs::read(&dest).unwrap();
+
+        // Add a second note, then make Books/ read-only so the atomic write
+        // (temp creation) fails — the injected fault before rename.
+        insert_note(
+            &conn,
+            "n2",
+            "MarginNote",
+            "char:5",
+            None,
+            "second words",
+            None,
+            None,
+        );
+        let books = root.join("Books");
+        std::fs::set_permissions(&books, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let perms_enforced = std::fs::write(books.join(".probe"), b"x").is_err();
+        let result = if perms_enforced {
+            Some(export_book_literature_note(&conn, &root, "b1", NOW))
+        } else {
+            None
+        };
+        std::fs::set_permissions(&books, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let after = std::fs::read(&dest).unwrap();
+        std::fs::remove_dir_all(&root).ok();
+        let Some(result) = result else {
+            eprintln!("skipping read-only assertion: permissions not enforced (root?)");
+            return;
+        };
+        assert!(result.is_err(), "unwritable target must error");
+        assert_eq!(
+            before, after,
+            "bytes before the failure must equal bytes after — prose preserved"
+        );
     }
 }

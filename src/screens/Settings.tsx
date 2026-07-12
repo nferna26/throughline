@@ -5,6 +5,7 @@ import ModelSelect from "../components/ModelSelect";
 import CodexLogin from "../components/CodexLogin";
 import FeedbackPanel from "../components/FeedbackPanel";
 import SoftwareUpdatePane from "../components/SoftwareUpdate";
+import QuarantinedDrafts from "../components/QuarantinedDrafts";
 import { isTutorEnabled, setTutorEnabled } from "../tutorConsent";
 import { useDialog } from "../hooks/useDialog";
 import {
@@ -332,6 +333,7 @@ export default function Settings({ jumpToUpdate = false, onJumpConsumed }: Setti
     setRestoreOpen(true);
     setRestoreTarget(null);
     setRestoreMsg(null);
+    setStageMsg(null);
     setBackupsList(null);
     invoke<BackupEntry[]>("cmd_list_backups")
       .then(setBackupsList)
@@ -343,12 +345,55 @@ export default function Settings({ jumpToUpdate = false, onJumpConsumed }: Setti
     setRestoreMsg(null);
     try {
       await invoke("cmd_restore_backup", { id: restoreTarget.id });
-      setRestoreMsg("Library restored. Reopening…");
+      setRestoreMsg("Restored. You can undo this from the Files pane. Reopening…");
       // Every screen's state is stale once the library underneath changed.
       window.setTimeout(() => window.location.reload(), 600);
     } catch (e: any) {
       setRestoreMsg(String(e?.message ?? e));
       setRestoring(false);
+    }
+  }
+  // REC-011 "re-import, then restore": match a picked file to a backup row by
+  // full SHA-256 and stage it under the historical book id, so a backup that
+  // names missing books becomes restorable.
+  const [staging, setStaging] = useState(false);
+  const [stageMsg, setStageMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  async function stageMissingFile() {
+    if (!restoreTarget || staging) return;
+    const path = await openDialog({
+      multiple: false,
+      filters: [{ name: "Books", extensions: ["txt", "epub"] }],
+    });
+    if (!path || typeof path !== "string") return;
+    setStaging(true);
+    setStageMsg(null);
+    try {
+      const r = await invoke<{ title: string; source_type: string }>("cmd_stage_restore_source", {
+        id: restoreTarget.id,
+        path,
+      });
+      setStageMsg({ kind: "ok", text: `Matched “${r.title}” — its file is back. Restore can proceed.` });
+    } catch (e: any) {
+      setStageMsg({ kind: "err", text: String(e?.message ?? e) });
+    } finally {
+      setStaging(false);
+    }
+  }
+
+  // REC-011: one-shot undo of the last restore (the pre-restore snapshot).
+  const [undoingRestore, setUndoingRestore] = useState(false);
+  const [undoMsg, setUndoMsg] = useState<string | null>(null);
+  async function undoRestore() {
+    if (undoingRestore) return;
+    setUndoingRestore(true);
+    setUndoMsg(null);
+    try {
+      await invoke("cmd_undo_restore");
+      setUndoMsg("Restore undone. Reopening…");
+      window.setTimeout(() => window.location.reload(), 600);
+    } catch (e: any) {
+      setUndoMsg(String(e?.message ?? e));
+      setUndoingRestore(false);
     }
   }
 
@@ -529,13 +574,21 @@ export default function Settings({ jumpToUpdate = false, onJumpConsumed }: Setti
     try {
       const r = await invoke<LibraryExportResult>("cmd_export_library");
       const folder = folderDisplayName(r.root) || exportFolderName;
-      setLibExportMsg({
-        kind: "ok",
-        text:
-          r.exported === 0
-            ? `No books to export yet — add a book first, then export to your ${folder} folder.`
-            : `Exported ${r.exported} book${r.exported === 1 ? "" : "s"} to your ${folder} folder.`,
-      });
+      // DATA-004: failures are named, never folded into a success count.
+      if (r.failed.length > 0) {
+        setLibExportMsg({
+          kind: "err",
+          text: `Exported ${r.exported} book${r.exported === 1 ? "" : "s"}, but ${r.failed.length === 1 ? "this book" : "these books"} couldn't be exported: ${r.failed.join(", ")}. Your books and notes are safe in Throughline — check the export folder above, then try again.`,
+        });
+      } else {
+        setLibExportMsg({
+          kind: "ok",
+          text:
+            r.exported === 0
+              ? `No books to export yet — add a book first, then export to your ${folder} folder.`
+              : `Exported ${r.exported} book${r.exported === 1 ? "" : "s"} to your ${folder} folder.`,
+        });
+      }
     } catch (e: any) {
       setLibExportMsg({
         kind: "err",
@@ -550,17 +603,6 @@ export default function Settings({ jumpToUpdate = false, onJumpConsumed }: Setti
     const next = !tutorOn;
     setTutorEnabled(next);
     setTutorOn(next);
-  }
-
-  // Session names (AI phrases) on/off — persisted; off = zero phrase calls.
-  async function togglePhrases() {
-    if (!dto) return;
-    try {
-      const s = await invoke<SettingsDto>("cmd_set_ai_settings", { aiPhrases: !dto.ai_phrases });
-      setDto(s);
-    } catch {
-      /* leave the switch where it was — settings refresh will reconcile */
-    }
   }
 
   // Enter an activation code right here (the same cmd the deep link uses).
@@ -871,18 +913,6 @@ export default function Settings({ jumpToUpdate = false, onJumpConsumed }: Setti
           />
         </div>
         <div className="set-row">
-          <div className="set-row-label">
-            Session names <span className="set-row-detail">· only a chapter's opening lines are sent</span>
-          </div>
-          <button
-            className="toggle"
-            role="switch"
-            aria-checked={dto?.ai_phrases ?? true}
-            aria-label="Session names"
-            onClick={togglePhrases}
-          />
-        </div>
-        <div className="set-row">
           <div className="set-row-label">Answers come from</div>
           <div className="set-row-controls">
             {mode !== "included" && (
@@ -960,12 +990,15 @@ export default function Settings({ jumpToUpdate = false, onJumpConsumed }: Setti
       <div className="set-rows">
         <div className="set-row set-row-stack">
           <div className="set-row-top">
-            <div className="set-row-label">Everything stays on this Mac</div>
+            <div className="set-row-label">Your books and notes stay on this Mac</div>
             <span className="set-row-always">Always</span>
           </div>
           <p className="set-row-explain">
-            Books never leave this computer. When you ask about a passage, only that passage is
-            sent, never the whole book. Nothing is saved unless you keep it as a note.
+            Book files and notes never leave this computer on their own. Only what you
+            deliberately ask about is sent — the passage you selected or, with Deep Study on,
+            the section you're about to read, along with the book's title, author, and chapter
+            name for context — and only after you confirm where it goes. Never the whole book,
+            never in the background.
           </p>
           {/* Mode-aware honesty (kept from the trust card): what "sent" means
               right now, in the reader's own configuration. */}
@@ -1034,6 +1067,7 @@ export default function Settings({ jumpToUpdate = false, onJumpConsumed }: Setti
           </button>
         </div>
         {libExportMsg && <p className={`set-msg ${libExportMsg.kind}`}>{libExportMsg.text}</p>}
+        <QuarantinedDrafts />
         <div className="set-row">
           <div className="set-row-label">
             Automatic backups{" "}
@@ -1054,6 +1088,23 @@ export default function Settings({ jumpToUpdate = false, onJumpConsumed }: Setti
             Choose a backup
           </button>
         </div>
+        {backup?.undo_available && (
+          <div className="set-row">
+            <div className="set-row-label">
+              Undo last restore{" "}
+              <span className="set-row-detail">· puts your library back as it was just before</span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-small"
+              disabled={undoingRestore}
+              onClick={() => void undoRestore()}
+            >
+              {undoingRestore ? "Undoing…" : "Undo"}
+            </button>
+          </div>
+        )}
+        {undoMsg && <p className="set-msg ok" role="status">{undoMsg}</p>}
       </div>
     </>
   );
@@ -1277,7 +1328,7 @@ export default function Settings({ jumpToUpdate = false, onJumpConsumed }: Setti
       <p className="set-sheet-sub">
         {grouped.sentCount === 0
           ? "Nothing has been sent. When you ask about a passage, the single passage you selected is recorded here."
-          : `${grouped.sentCount} passage${grouped.sentCount === 1 ? " was" : "s were"} sent to answer your questions. Each was a single passage you selected — never a whole book.`}
+          : `${grouped.sentCount} passage${grouped.sentCount === 1 ? " was" : "s were"} sent to answer your questions. Each was a single passage or section you chose, with the book's title, author, and chapter name for context — never a whole book.`}
       </p>
 
       {grouped.sentCount > 0 && (
@@ -1345,8 +1396,10 @@ export default function Settings({ jumpToUpdate = false, onJumpConsumed }: Setti
     >
       <h3 className="set-sheet-title">Restore from backup</h3>
       <p className="set-sheet-sub">
-        Your library goes back to how it was when the backup was made. Today's copy is kept safe
-        first, so nothing is lost.
+        Your notes, plans, and reading history go back to how they were when the backup was
+        made. Book files aren't part of backups — a backup that mentions books no longer on
+        this Mac will ask you to re-import them first. Today's copy is kept safe, and you can
+        undo the restore afterwards.
       </p>
       {backupsList === null ? (
         <p className="set-sheet-sub">Looking for backups…</p>
@@ -1369,6 +1422,18 @@ export default function Settings({ jumpToUpdate = false, onJumpConsumed }: Setti
             </button>
           ))}
         </div>
+      )}
+      {restoreTarget && (
+        <div className="field-row" style={{ marginTop: 8 }}>
+          <button type="button" className="btn btn-small" disabled={staging} onClick={() => void stageMissingFile()}>
+            {staging ? "Matching…" : "Add a missing book's file…"}
+          </button>
+        </div>
+      )}
+      {stageMsg && (
+        <p className={`set-msg ${stageMsg.kind}`} role={stageMsg.kind === "err" ? "alert" : "status"}>
+          {stageMsg.text}
+        </p>
       )}
       {restoreMsg && <p className="set-msg ok" role="status">{restoreMsg}</p>}
       <div className="field-row set-sheet-foot">

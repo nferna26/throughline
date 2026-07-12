@@ -48,8 +48,15 @@ describe("FrontDoor — the first-run screen", () => {
     expect(screen.getByRole("button", { name: /Browse the library/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Import a \.txt or \.epub/i })).toBeInTheDocument();
     expect(
-      screen.getByText(/Everything stays on this Mac, no account, no cloud, nothing tracked/i),
+      screen.getByText(/Your books and notes stay on this Mac/i),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/a selected passage, or the section you're starting in Deep Study/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/only after you confirm it/i)).toBeInTheDocument();
+    // The categorical no-cloud claim must stay gone: a remote tutor mode
+    // exists, so absolute "everything…no cloud" copy would be false (PRIV-001).
+    expect(screen.queryByText(/Everything stays on this Mac/i)).toBeNull();
     // The starter covers resolve into real "Start reading" buttons.
     expect(
       await screen.findByRole("button", { name: /Start reading Meditations by Marcus Aurelius/i }),

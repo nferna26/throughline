@@ -16,7 +16,20 @@ import { useEffect, type RefObject } from "react";
  * on the panel element itself. See `pat-interaction-pattern-catalog-seed`
  * "Escape Hatch" + `guard-accessibility-baseline-wcag-aa` keyboard rules.
  */
-export function useDialog(ref: RefObject<HTMLElement | null>, onClose: () => void) {
+export function useDialog(
+  ref: RefObject<HTMLElement | null>,
+  onClose: () => void,
+  /** Optional explicit initial-focus target (e.g. a consent sheet's "Not now",
+   *  so the SAFE choice is focused first regardless of DOM order). Falls back
+   *  to the first focusable element. */
+  initialFocus?: RefObject<HTMLElement | null>,
+  /** Optional DURABLE focus-return target, preferred over whatever happened to
+   *  be focused when the modal opened. For modals that open from transient or
+   *  auto-triggered contexts (R4: Deep Study's consent sheet can open on
+   *  mount), the previously-focused element may be gone or `body` — this
+   *  gives focus a real home to land on. */
+  returnFocus?: RefObject<HTMLElement | null>,
+) {
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
@@ -24,8 +37,9 @@ export function useDialog(ref: RefObject<HTMLElement | null>, onClose: () => voi
     // Remember who had focus before we opened.
     const previouslyFocused = document.activeElement as HTMLElement | null;
 
-    // Initial focus: first focusable inside the panel, or the panel itself.
-    const initial = firstFocusable(node) ?? node;
+    // Initial focus: the explicit target when given, else the first focusable
+    // inside the panel, else the panel itself.
+    const initial = initialFocus?.current ?? firstFocusable(node) ?? node;
     initial.focus();
 
     function handleKey(e: KeyboardEvent) {
@@ -61,7 +75,12 @@ export function useDialog(ref: RefObject<HTMLElement | null>, onClose: () => voi
     node.addEventListener("keydown", handleKey);
     return () => {
       node.removeEventListener("keydown", handleKey);
-      // Restore focus only if the previously-focused element is still in the DOM.
+      // Restore focus: the durable explicit target first (when given and
+      // still in the DOM), else the previously-focused element.
+      const durable = returnFocus?.current;
+      if (durable && document.contains(durable)) {
+        try { durable.focus(); return; } catch { /* fall through */ }
+      }
       if (previouslyFocused && document.contains(previouslyFocused)) {
         try { previouslyFocused.focus(); } catch { /* ignore */ }
       }
@@ -77,6 +96,10 @@ const FOCUSABLE_SELECTOR = [
   "input:not([disabled])",
   "select:not([disabled])",
   "textarea:not([disabled])",
+  // A <details> disclosure's <summary> is natively focusable/activatable —
+  // include it so full-request disclosures stay reachable inside the trap
+  // (PRIV-A11Y-009).
+  "summary",
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 

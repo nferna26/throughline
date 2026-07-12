@@ -109,7 +109,7 @@ The export path is configurable. If you've changed it in Settings, swap that loc
 
 ## Privacy posture
 
-- Raw text and EPUB source files stay local — the whole-book source is never bulk-uploaded to any API. When the reader opts into a remote AI provider, only the passage they selected or the current section is sent (see [AI posture](#ai-posture)). If AI session phrases are enabled, Throughline sends each sitting's chapter label and opening slice, never the full text.
+- Raw text and EPUB source files stay local — the whole-book source is never bulk-uploaded to any API. When the reader opts into a remote AI provider, only the passage they selected — or, in Deep Study, the section they're starting — is sent, together with the book's title, author, and chapter label for context, after an explicit consent sheet shows the exact outbound text and every field (see [AI posture](#ai-posture)). Background AI session-phrase generation was removed entirely: no AI request of any kind fires without a deliberate reader action.
 - Every imported source has a SHA-256 hash stored in the DB.
 - Exported notes carry `source_private: true` in frontmatter.
 - Quote fields longer than ~300 characters trigger a non-blocking warning (fair use has no fixed safe word count; the default posture is short quotes for private study only).
@@ -121,14 +121,14 @@ AI is **reader-initiated** — it never runs on a timer, on launch, or in the ba
 - **Signed build:** the paid app can activate the included Throughline assistant through `ai.readthroughline.com`, with an allowance shown in plain language and a path to BYO/local when needed.
 - **Source build:** bring your own Anthropic/OpenAI key, use ChatGPT/Codex login, choose Local/LM Studio, or leave AI off. Setup appears at the moment you ask for help; there is no forced first-run AI chooser.
 - **Local means loopback.** The Local provider accepts `localhost`, `127.0.0.0/8`, and `::1`; any non-loopback URL is rejected at the call site by `ai_client::validate_base_url`.
-- **Selection or section only — never the whole book.** Tutor lenses use the selected passage; Deep Study uses the current section after the reader chose Deep Study, started a session, and consented. Raw source files are never bulk-uploaded.
+- **Selection or section only — never the whole book.** Tutor lenses use the selected passage; Deep Study uses the current section after the reader chose Deep Study, started a session, and consented. Each request also carries the book's title, author, and chapter label for context — disclosed in the consent sheet — and raw source files are never bulk-uploaded.
 - **Provider is visible.** Settings and the reader show whether answers come from Throughline AI, Anthropic, OpenAI, ChatGPT/Codex, or the model on this Mac. API keys and licenses live in the OS Keychain and are never logged or exported.
 - Save-by-approval: AI responses are ephemeral. Saving a response as a note is opt-in per request and writes a real Note row + Markdown export. `ai_requests.wrote_to_memory` flips to `1` only on approval; the `provider` field stores the host that was actually contacted (e.g. `localhost:1234` or `api.openai.com`).
 - A unit test (`validate_rejects_non_loopback_when_local_only_on`) pins the loopback guard for local-only mode. A mock-HTTP integration test (`mock_server_streams_deltas_to_client`) verifies the exact OpenAI-shape POST + SSE streaming without needing a live model server.
 
 ## IPC contract
 
-The frontend talks to the Rust backend through Tauri commands. The full surface — every command, args, return shape, error shape — is in [`docs/IPC.md`](./docs/IPC.md). Current API version is `6`. Read at runtime via `invoke("cmd_api_version")`.
+The frontend talks to the Rust backend through Tauri commands. The full surface — every command, args, return shape, error shape — is in [`docs/IPC.md`](./docs/IPC.md). Current API version is `8`, exposed at runtime via `cmd_api_version` for tooling — the shipped frontend performs no startup version check (frontend and backend ship in one binary; see docs/IPC.md).
 
 Semver commitment: patch and minor versions are non-breaking; major bumps the `COMMAND_API_VERSION` constant and is called out in the README + CHANGELOG.
 

@@ -97,8 +97,11 @@ pub fn build_feedback_payload(
 }
 
 fn feedback_http() -> Result<reqwest::Client, AppError> {
+    // R8-3: never follow a redirect — a 307/308 would re-send the reader's
+    // typed message (and email, if given) to an arbitrary Location host.
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| AppError::ai(format!("http client: {e}")))
 }
@@ -106,7 +109,7 @@ fn feedback_http() -> Result<reqwest::Client, AppError> {
 /// The exact 3 diagnostics the panel previews (and that `cmd_send_feedback` will send).
 #[tauri::command]
 pub fn cmd_feedback_diagnostics(state: State<DbState>) -> Result<FeedbackDiagnostics, AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     Ok(feedback_diagnostics(&conn))
 }
 
@@ -120,15 +123,16 @@ pub async fn cmd_send_feedback(
     email: Option<String>,
     state: State<'_, DbState>,
 ) -> Result<(), AppError> {
-    // Build the payload + resolve the relay origin under the lock, then drop it before await.
-    let (base_url, payload) = {
-        let conn = state.0.lock()?;
+    // Build the payload under the lock, then drop it before await. The relay
+    // origin is the code constant, validated at the call site (R7-2) — never
+    // a stored, reroutable value.
+    let payload = {
+        let conn = state.lock()?;
         let diag = feedback_diagnostics(&conn);
-        let payload = build_feedback_payload(&message, email.as_deref(), &diag)?;
-        (settings::get_company_base_url(&conn), payload)
+        build_feedback_payload(&message, email.as_deref(), &diag)?
     };
     let resp = feedback_http()?
-        .post(format!("{base_url}/v1/feedback"))
+        .post(crate::commands::ai::company_endpoint("/v1/feedback")?)
         .json(&payload)
         .send()
         .await
@@ -225,5 +229,52 @@ mod tests {
         let p = build_feedback_payload("panel overlaps", None, &diag("local")).unwrap();
         assert_eq!(p["mode"], "local");
         assert_eq!(p.as_object().unwrap().len(), 5);
+    }
+
+    /// R8-3: the feedback client NEVER follows a redirect — a 308 pointing at
+    /// a second listener leaves that listener with ZERO requests (the typed
+    /// message and reply email never re-send to an arbitrary Location host).
+    #[test]
+    fn feedback_client_never_follows_redirects() {
+        use std::io::{Read, Write};
+        let sink = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let sink_port = sink.local_addr().unwrap().port();
+        let hit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let hit_c = hit.clone();
+        std::thread::spawn(move || {
+            if sink.accept().is_ok() {
+                hit_c.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+
+        let redirecting = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let a_port = redirecting.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = redirecting.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 308 Permanent Redirect\r\nLocation: http://127.0.0.1:{sink_port}/v1/feedback\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let resp = feedback_http()
+                .unwrap()
+                .post(format!("http://127.0.0.1:{a_port}/v1/feedback"))
+                .json(&serde_json::json!({ "message": "the reader's words" }))
+                .send()
+                .await
+                .expect("the redirect response itself resolves");
+            assert_eq!(resp.status().as_u16(), 308, "redirect NOT followed");
+        });
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(
+            !hit.load(std::sync::atomic::Ordering::SeqCst),
+            "the redirect target must receive ZERO feedback requests"
+        );
     }
 }

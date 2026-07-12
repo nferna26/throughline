@@ -286,8 +286,6 @@ export interface SettingsDto {
   ai_key_present_openai: boolean;
   ai_key_present_anthropic: boolean;
   ai_codex_creds_present: boolean;
-  /** AI session phrases on/off (Stage 3). Off = zero phrase network calls. */
-  ai_phrases: boolean;
   // ── Appearance (settings redesign; additive) ──
   /** "light" | "dark" | "auto" | "" — empty means never chosen here (the
    *  frontend migrates the legacy tl.theme value once, else uses "auto"). */
@@ -296,6 +294,9 @@ export interface SettingsDto {
   reading_typeface: string;
   /** "comfortable" | "compact" | "open" (default comfortable). */
   reading_line_spacing: string;
+  /** R5: the library generation token — rotated by every restore/undo/
+   *  recovery; note drafts never auto-apply across a rotation. */
+  library_generation: string;
 }
 
 /** Settings › Files: the automatic-backups toggle + "last backup …" line. */
@@ -303,6 +304,8 @@ export interface BackupStatus {
   enabled: boolean;
   /** RFC3339 timestamp of the newest backup, or null when none exists yet. */
   last_backup_at: string | null;
+  /** REC-011: a pre-restore snapshot exists — the last restore can be undone. */
+  undo_available: boolean;
 }
 
 /** One restorable backup in the "Choose a backup" picker. */
@@ -322,19 +325,47 @@ export const AI_PROVIDERS: Array<{
   remote: boolean;
 }> = [
   { id: "company", label: "Throughline AI", remote: true,
-    disclosure: "Your selected passage (or section) is sent to Throughline's AI under your one-time purchase — never the whole book." },
+    disclosure: "Your selected passage (or section) is sent to Throughline's AI under your one-time purchase, with the book's title, author, and chapter name for context — never the whole book." },
   { id: "local", label: "Local (LM Studio)", remote: false,
     disclosure: "Runs entirely on this Mac. Nothing you read or select leaves your device." },
   { id: "openai", label: "OpenAI", remote: true,
-    disclosure: "Your selected passage (or section) is sent to OpenAI under your API key — never the whole book." },
+    disclosure: "Your selected passage (or section) is sent to OpenAI under your API key, with the book's title, author, and chapter name for context — never the whole book." },
   { id: "anthropic", label: "Anthropic", remote: true,
-    disclosure: "Your selected passage (or section) is sent to Anthropic under your API key — never the whole book." },
+    disclosure: "Your selected passage (or section) is sent to Anthropic under your API key, with the book's title, author, and chapter name for context — never the whole book." },
   { id: "codex", label: "Codex (ChatGPT login)", remote: true,
-    disclosure: "Your selected passage (or section) is sent to OpenAI via your Codex login — never the whole book." },
+    disclosure: "Your selected passage (or section) is sent to OpenAI via your Codex login, with the book's title, author, and chapter name for context — never the whole book." },
 ];
 
 export function aiProviderLabel(id: string): string {
   return AI_PROVIDERS.find((p) => p.id === id)?.label ?? "AI";
+}
+
+/** R7-9/R8-4: map a backend-reported destination host to its provider id —
+ *  the inverse of the Rust enum's canonical `remote_host` mapping. The
+ *  SETTLED tutor/briefing attribution derives from the host the successful
+ *  ask actually reported, never from mount-time component state. Loopback
+ *  hosts are the local server; an UNKNOWN host returns null and renders as
+ *  NEUTRAL attribution — never "local", which would be an on-device privacy
+ *  claim about a send we can't place. */
+export function providerIdForHost(host: string): string | null {
+  const bare = host.replace(/:\d+$/, "");
+  switch (bare) {
+    case "api.openai.com":
+      return "openai";
+    case "api.anthropic.com":
+      return "anthropic";
+    case "chatgpt.com":
+      return "codex";
+    case "ai.readthroughline.com":
+      return "company";
+    case "localhost":
+    case "127.0.0.1":
+    case "[::1]":
+    case "::1":
+      return "local";
+    default:
+      return null;
+  }
 }
 
 export type StreamEvent =
@@ -364,10 +395,34 @@ export interface ExportPathStatus {
 
 /** Result of exporting the whole library to Markdown (cmd_export_library):
  *  one literature note per book under the export root's Books/ folder.
- *  `exported` is the number of books written; `root` is the export folder path. */
+ *  `exported` counts the books written; `failed` names every book whose export
+ *  failed (DATA-004: never a misleading all-good count); `root` is the folder. */
 export interface LibraryExportResult {
   exported: number;
+  failed: string[];
   root: string;
+}
+
+/** Typed outcome of a Markdown-mirror write riding along with a durable DB
+ *  mutation (DATA-004). `ok: false` means the change IS saved in Throughline's
+ *  database and only the Markdown export needs attention; `message` says what
+ *  happened and what to do. */
+export interface ExportOutcome {
+  ok: boolean;
+  message: string | null;
+}
+
+/** A durable note save/update plus its Markdown export outcome
+ *  (cmd_save_note / cmd_update_note / cmd_save_ai_response_as_note). */
+export interface SavedNote {
+  note: Note;
+  export: ExportOutcome;
+}
+
+/** A durable session end plus its Markdown export outcome (cmd_end_session). */
+export interface SessionEnd {
+  session: ReadingSession;
+  export: ExportOutcome;
 }
 
 /** A pickable cloud model + its published per-Mtok price (cmd_model_catalog). */
@@ -420,7 +475,7 @@ export type AppError =
   | { kind: "Validation"; message: string }
   | { kind: "Config";     message: string }
   | { kind: "NotFound";   resource: string; id: string | null }
-  | { kind: "NeedsCloudConsent"; message: string }
+  | { kind: "NeedsCloudConsent"; message: string; host: string }
   | { kind: "CapExhausted"; message: string }
   | { kind: "Internal";   message: string };
 

@@ -364,6 +364,88 @@ describe("App remove-from-library", () => {
       vi.useRealTimers();
     }
   });
+
+  // ── DATA-005 R3: the durable stage is AWAITED — no hide, no Undo window,
+  // and no eventual delete unless staging actually succeeded ──
+
+  it("a FAILED stage keeps the book, says so, and never opens an Undo window or deletes", async () => {
+    setAppImpl({
+      cmd_today: () => Promise.resolve(NO_PLAN_FOR(BOOK)),
+      cmd_list_books: () => Promise.resolve([BOOK]),
+      cmd_library: () => Promise.resolve([libEntry(BOOK, { is_active: true })]),
+      cmd_stage_book_delete: () => Promise.reject({ message: "database is locked" }),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await rightClickRemove(user, "Confessions, Augustine, reading");
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
+
+    // Failure-visible: the reader is told, nothing was hidden, no Undo toast —
+    // a hidden book whose staging silently failed would resurrect on relaunch
+    // after the toast said "removed".
+    expect(await screen.findByText(/Couldn't remove that book/)).toBeInTheDocument();
+    expect(screen.queryByText("Confessions removed from your library.")).toBeNull();
+    expect(await screen.findByRole("button", { name: /Confessions/, expanded: false })).toBeInTheDocument();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
+  });
+
+  it("a REJECTED book-undo keeps the toast with an announced Retry; the retry undoes for real (R4)", async () => {
+    let fail = true;
+    setAppImpl({
+      cmd_today: () => Promise.resolve(NO_PLAN_FOR(BOOK)),
+      cmd_list_books: () => Promise.resolve([BOOK]),
+      cmd_library: () => Promise.resolve([libEntry(BOOK, { is_active: true })]),
+      cmd_unstage_book_delete: () =>
+        fail ? Promise.reject({ message: "database is locked" }) : Promise.resolve(null),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await rightClickRemove(user, "Confessions, Augustine, reading");
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
+    await screen.findByText("Confessions removed from your library.");
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+
+    // Failure-visible: the toast STAYS (the staged deletion stands — a
+    // relaunch would commit it), the book stays hidden, and Undo is a retry.
+    expect(await screen.findByText(/Couldn't undo that/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Confessions/, expanded: false })).toBeNull();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
+
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "Retry undo" }));
+    await waitFor(() => expect(screen.queryByText(/Couldn't undo that/)).toBeNull());
+    // Undone for real: the book is visible again and nothing was deleted.
+    expect(await screen.findByRole("button", { name: /Confessions/, expanded: false })).toBeInTheDocument();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
+    expect(
+      mocks.invoke.mock.calls.filter((c) => c[0] === "cmd_unstage_book_delete"),
+    ).toHaveLength(2);
+  });
+
+  it("nothing hides while the stage call is STILL IN FLIGHT; success then opens the window", async () => {
+    let resolveStage: ((v: unknown) => void) | null = null;
+    setAppImpl({
+      cmd_today: () => Promise.resolve(NO_PLAN_FOR(BOOK)),
+      cmd_list_books: () => Promise.resolve([BOOK]),
+      cmd_library: () => Promise.resolve([libEntry(BOOK, { is_active: true })]),
+      cmd_stage_book_delete: () => new Promise((res) => { resolveStage = res; }),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await rightClickRemove(user, "Confessions, Augustine, reading");
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
+
+    // Stage unresolved → no removal toast yet (and so no Undo to race the
+    // in-flight stage), and certainly no delete.
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("cmd_stage_book_delete", { bookId: "b1" }));
+    expect(screen.queryByText("Confessions removed from your library.")).toBeNull();
+    expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_delete_book", expect.anything());
+
+    // Staging confirms durably → the book hides and the Undo window opens.
+    await act(async () => { resolveStage!(null); });
+    expect(await screen.findByText("Confessions removed from your library.")).toBeInTheDocument();
+  });
 });
 
 describe("App update-relaunch focus handoff", () => {

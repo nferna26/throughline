@@ -10,14 +10,15 @@
 
 use chrono::Utc;
 use rusqlite::params;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::State;
 use uuid::Uuid;
 
 use crate::commands::db_helpers::*;
 use crate::db::DbState;
 use crate::error::AppError;
-use crate::models::{AiRequest, Note};
+use crate::models::AiRequest;
 use crate::{ai_client, ai_retention, ai_stub, export, log, settings};
 
 // ── Public response types ──────────────────────────────────────────────
@@ -91,7 +92,7 @@ pub fn cmd_generate_prompt_preview(
         ));
     }
 
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     let book = fetch_book(&conn, &book_id)?
         .ok_or_else(|| AppError::not_found("book", Some(book_id.clone())))?;
 
@@ -192,8 +193,8 @@ pub fn cmd_save_ai_preview_as_note(
     anchored_text: Option<String>,
     session_id: Option<String>,
     state: State<DbState>,
-) -> Result<Note, AppError> {
-    let conn = state.0.lock()?;
+) -> Result<crate::commands::notes::SavedNote, AppError> {
+    let conn = state.lock()?;
     save_preview_as_note_inner(
         &conn,
         &ai_request_id,
@@ -225,7 +226,43 @@ fn save_preview_as_note_inner(
     anchor_end: Option<String>,
     anchored_text: Option<String>,
     session_id: Option<String>,
-) -> Result<Note, AppError> {
+) -> Result<crate::commands::notes::SavedNote, AppError> {
+    save_ai_note_inner(
+        conn,
+        ai_request_id,
+        &[],
+        note_type,
+        body,
+        locator,
+        chapter_label,
+        anchor_start,
+        anchor_end,
+        anchored_text,
+        session_id,
+    )
+}
+
+/// R11-6: the full save, with EVERY contributing AI request audited. A tutor
+/// card's saved body can combine the BRIEF and the DEEP tier — two separate
+/// `cmd_ai_ask` calls, two audit rows. Each contributing row must exist and
+/// belong to the SAME BOOK as the primary (a cross-book id is a caller bug —
+/// the whole save refuses), and every one is flipped `wrote_to_memory = 1`
+/// in the SAME transaction as the note insert: the audit invariant covers
+/// all contributors, not just the primary.
+#[allow(clippy::too_many_arguments)]
+fn save_ai_note_inner(
+    conn: &rusqlite::Connection,
+    ai_request_id: &str,
+    contributing_request_ids: &[String],
+    note_type: &str,
+    body: &str,
+    locator: &str,
+    chapter_label: Option<String>,
+    anchor_start: Option<String>,
+    anchor_end: Option<String>,
+    anchored_text: Option<String>,
+    session_id: Option<String>,
+) -> Result<crate::commands::notes::SavedNote, AppError> {
     if body.trim().is_empty() {
         return Err(AppError::validation("note body is empty"));
     }
@@ -236,19 +273,51 @@ fn save_preview_as_note_inner(
             |r| r.get(0),
         )
         .map_err(|_| AppError::not_found("ai_request", Some(ai_request_id.to_string())))?;
+    // R11-6: validate every contributor BEFORE anything mutates — same book,
+    // real row. Duplicates and the primary itself are tolerated (dedup below).
+    let mut contributors: Vec<&str> = vec![ai_request_id];
+    for extra in contributing_request_ids {
+        if !contributors.contains(&extra.as_str()) {
+            contributors.push(extra.as_str());
+        }
+    }
+    for cid in &contributors {
+        let contributor_book: String = conn
+            .query_row(
+                "SELECT book_id FROM ai_requests WHERE id = ?1",
+                params![cid],
+                |r| r.get(0),
+            )
+            .map_err(|_| AppError::not_found("ai_request", Some((*cid).to_string())))?;
+        if contributor_book != book_id {
+            return Err(AppError::validation(format!(
+                "contributing AI request {cid} belongs to a different book — refusing to save a cross-book note"
+            )));
+        }
+    }
 
     let id = format!("note_{}", Uuid::new_v4().simple());
     let now = Utc::now().to_rfc3339();
-    conn.execute(
+    // R4 crash-safe mirror contract: the note INSERT, the audit flag, and the
+    // durable dirty-book mark commit in ONE transaction, before the export
+    // attempt — a crash before the export leaves the mark, and launch heals
+    // the mirror (same contract as commands::notes::commit_note_insert).
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "INSERT INTO notes (id, book_id, session_id, note_type, locator, chapter_label, body, short_quote, created_at, updated_at, exported_markdown_path, anchor_start, anchor_end, anchored_text)
          VALUES (?1, ?2, ?8, ?3, ?4, ?5, ?6, NULL, ?7, ?7, NULL, ?9, ?10, ?11)",
         params![id, book_id, note_type, locator, chapter_label, body, now, session_id, anchor_start, anchor_end, anchored_text],
     )?;
-
-    conn.execute(
-        "UPDATE ai_requests SET wrote_to_memory = 1 WHERE id = ?1",
-        params![ai_request_id],
-    )?;
+    // R11-6: EVERY contributor becomes memory in this same transaction.
+    for cid in &contributors {
+        tx.execute(
+            "UPDATE ai_requests SET wrote_to_memory = 1 WHERE id = ?1",
+            params![cid],
+        )?;
+    }
+    crate::settings::ledger_add(&tx, crate::settings::KEY_PENDING_BOOK_EXPORTS, &book_id)
+        .map_err(AppError::from)?;
+    tx.commit()?;
 
     let mut note_stmt = conn.prepare(
         "SELECT id, book_id, session_id, note_type, locator, chapter_label, body, short_quote, created_at, updated_at, exported_markdown_path, anchor_start, anchor_end, anchored_text FROM notes WHERE id = ?1",
@@ -256,19 +325,28 @@ fn save_preview_as_note_inner(
     let mut note = note_stmt.query_row(params![id], note_from_row)?;
 
     // Regenerate the book's literature note (per-book, idempotent merge) and point
-    // the row's mirror path at the shared book file.
+    // the row's mirror path at the shared book file. A failed export is TYPED,
+    // never swallowed (DATA-004): the note is durable in SQLite either way, and
+    // the card shows the export outcome with a retry.
     let now_export = Utc::now().to_rfc3339();
-    if let Ok(path) =
-        export::export_book_literature_note(conn, &export::root_for(conn), &book_id, &now_export)
-    {
-        log::log_export("book", &path.to_string_lossy());
-        note.exported_markdown_path = Some(path.to_string_lossy().to_string());
-        conn.execute(
-            "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
-            params![note.exported_markdown_path, note.id],
-        )?;
+    match export::export_book_durably(conn, &export::root_for(conn), &book_id, &now_export) {
+        Ok(path) => {
+            log::log_export("book", &path.to_string_lossy());
+            note.exported_markdown_path = Some(path.to_string_lossy().to_string());
+            conn.execute(
+                "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
+                params![note.exported_markdown_path, note.id],
+            )?;
+            Ok(crate::commands::notes::SavedNote {
+                note,
+                export: export::ExportOutcome::exported(),
+            })
+        }
+        Err(e) => Ok(crate::commands::notes::SavedNote {
+            note,
+            export: export::ExportOutcome::failed(&e),
+        }),
     }
-    Ok(note)
 }
 
 /// AI request history viewer (adr-001). Returns every audit row, newest first,
@@ -277,7 +355,7 @@ fn save_preview_as_note_inner(
 /// host a real Ask call was sent to.
 #[tauri::command]
 pub fn cmd_list_ai_requests(state: State<DbState>) -> Result<Vec<AiRequest>, AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     Ok(list_ai_requests(&conn)?)
 }
 
@@ -286,7 +364,7 @@ pub fn cmd_list_ai_requests(state: State<DbState>) -> Result<Vec<AiRequest>, App
 /// Rows with `wrote_to_memory = 1` are kept. Returns the number of rows removed.
 #[tauri::command]
 pub fn cmd_forget_ai_history(state: State<DbState>) -> Result<usize, AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     let days = settings::get_ai_retention_days(&conn);
     Ok(ai_retention::sweep(&conn, days)?)
 }
@@ -360,6 +438,10 @@ pub async fn cmd_ai_ask(
     // Answer depth for the reading lenses: "brief" (default) or "deep". Brief is
     // the small unblock-and-return answer; deep is the reader-pulled elaboration.
     depth: Option<String>,
+    // R6-1: the consent binding from the sheet's EnvelopePreview, present only
+    // on the retry that follows a NeedsCloudConsent rejection. Validated at
+    // THIS send boundary against what this call actually resolves to.
+    consent: Option<ConsentBinding>,
     on_event: tauri::ipc::Channel<ai_client::StreamEvent>,
     app: tauri::AppHandle,
     state: State<'_, DbState>,
@@ -377,7 +459,7 @@ pub async fn cmd_ai_ask(
 
     // Pull provider + settings + book under the lock, then drop it before awaiting.
     let (provider, model, base_url, ai_id, prompt, provider_host) = {
-        let conn = state.0.lock()?;
+        let conn = state.lock()?;
         let book = fetch_book(&conn, &book_id)?
             .ok_or_else(|| AppError::not_found("book", Some(book_id.clone())))?;
 
@@ -420,7 +502,10 @@ pub async fn cmd_ai_ask(
             ));
         }
         let base_url = if matches!(provider, settings::AiProvider::Company) {
-            settings::get_company_base_url(&conn)
+            // R7-2: the company origin is a code constant — never a stored,
+            // reroutable value. run_provider_call re-validates it at the
+            // send boundary.
+            settings::company_base_url()
         } else {
             settings::get_ai_base_url(&conn)
         };
@@ -428,36 +513,31 @@ pub async fn cmd_ai_ask(
         if matches!(provider, settings::AiProvider::Local) {
             ai_client::validate_base_url(&base_url, true).map_err(AppError::from)?;
         }
-        let provider_host = match provider {
-            settings::AiProvider::Local => url::Url::parse(&base_url)
-                .ok()
-                .and_then(|u| u.host_str().map(str::to_string))
-                .unwrap_or_default(),
-            settings::AiProvider::OpenAi => "api.openai.com".to_string(),
-            settings::AiProvider::Anthropic => "api.anthropic.com".to_string(),
-            settings::AiProvider::Codex => "chatgpt.com".to_string(),
-            settings::AiProvider::Company => "ai.readthroughline.com".to_string(),
-            _ => String::new(),
-        };
 
-        // First-cloud-call consent (C2 / CORE-1177): a remote provider must be
-        // confirmed once before the first send. The frontend catches this, shows a
-        // consent sheet with the passage, then retries after cmd_confirm_cloud_send.
-        // This now fires for freshly-activated company users too (activation no longer
-        // pre-stamps consent), so the privacy promise is delivered at first egress.
-        if cloud_consent_required(&conn, provider) {
-            return Err(AppError::needs_cloud_consent(provider_host.clone()));
-        }
-
-        let ctx = ai_stub::PromptContext {
-            book_title: book.title.clone(),
-            author: book.author.clone(),
-            chapter: chapter.clone(),
-            locator: locator.clone(),
-            selection: trimmed.to_string(),
+        // ONE authoritative resolution for this call: provider, canonical host,
+        // exact envelope, fingerprint — the same constructor the consent sheet
+        // previewed (PRIV-A11Y-009: what the reader confirmed is what is sent).
+        let resolved = resolve_outbound(
+            &conn,
+            &book.title,
+            book.author.clone(),
+            stub_mode,
+            answer_depth,
+            trimmed,
+            chapter.clone(),
             user_note,
-        };
-        let prompt = ai_stub::build_prompt_with_depth(stub_mode, answer_depth, &ctx);
+        );
+
+        // First-cloud-call consent (C2 / CORE-1177 / R6-1): a remote provider
+        // must be confirmed before the first send. The frontend catches the
+        // NeedsCloudConsent rejection, shows the consent sheet with the exact
+        // envelope, then retries THIS command carrying the sheet's binding —
+        // validated just above the dispatch, against this very call. Fires for
+        // freshly-activated company users too (activation never writes consent).
+        enforce_bound_cloud_consent(&conn, &resolved, consent.as_ref())?;
+
+        let provider_host = resolved.host.clone();
+        let prompt = resolved.envelope.prompt;
 
         let ai_id = format!("ai_{}", Uuid::new_v4().simple());
         let now = Utc::now().to_rfc3339();
@@ -558,7 +638,7 @@ pub async fn cmd_ai_ask(
                     cache_read_tokens,
                     cache_creation_tokens,
                 };
-                if let Ok(conn) = app.state::<DbState>().0.lock() {
+                if let Ok(conn) = app.state::<DbState>().lock() {
                     record_stream_usage_row(&conn, &rec_ai_id, &rec_provider, &rec_model, &usage);
                 }
                 continue;
@@ -634,7 +714,7 @@ fn month_to_date_micros(conn: &rusqlite::Connection) -> i64 {
 /// Aggregate recorded usage for the Settings AI-usage card.
 #[tauri::command]
 pub fn cmd_get_usage_summary(state: State<DbState>) -> Result<UsageSummary, AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     let (total_calls, total_cost_micros): (i64, i64) = conn
         .query_row(
             "SELECT COUNT(*), COALESCE(SUM(cost_usd_micros), 0) FROM ai_request_usage",
@@ -683,7 +763,7 @@ pub fn cmd_get_usage_summary(state: State<DbState>) -> Result<UsageSummary, AppE
 /// Set the monthly cloud-AI spend ceiling in whole cents (0 = off, clamped ≥ 0).
 #[tauri::command]
 pub fn cmd_set_monthly_spend_cap(cents: i64, state: State<DbState>) -> Result<(), AppError> {
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     settings::set_string(
         &conn,
         settings::KEY_AI_SPEND_CAP_CENTS,
@@ -692,17 +772,120 @@ pub fn cmd_set_monthly_spend_cap(cents: i64, state: State<DbState>) -> Result<()
     .map_err(AppError::from)
 }
 
-/// Record the reader's first-cloud-call consent (Epic C2). After this, cmd_ai_ask
-/// no longer gates cloud calls behind the consent sheet.
-#[tauri::command]
-pub fn cmd_confirm_cloud_send(state: State<DbState>) -> Result<(), AppError> {
-    let conn = state.0.lock()?;
+// ── First-cloud consent, bound to the exact ask (R6-1 / CORE-1177) ──────
+
+/// What the reader confirmed on the consent sheet, passed back with the ask
+/// itself. Captured verbatim from `cmd_outbound_envelope`'s `EnvelopePreview`,
+/// so the sheet can only ever confirm a binding the backend itself issued.
+#[derive(Deserialize)]
+pub struct ConsentBinding {
+    pub provider: String,
+    pub host: String,
+    pub fingerprint: String,
+}
+
+/// The authoritative outbound resolution for one ask: active provider, the
+/// canonical destination host, the EXACT envelope, and a fingerprint over all
+/// three. Both the consent preview (`cmd_outbound_envelope`) and the send gate
+/// inside `cmd_ai_ask` resolve through THIS function, so what the reader
+/// reviewed and what the gate validates can never be two constructions.
+pub(crate) struct ResolvedSend {
+    pub provider: settings::AiProvider,
+    pub host: String,
+    pub envelope: ai_stub::OutboundEnvelope,
+    pub fingerprint: String,
+}
+
+/// SHA-256 over provider id, destination host, and the complete prompt —
+/// NUL-separated so no field can masquerade as another's suffix.
+fn send_fingerprint(provider: settings::AiProvider, host: &str, prompt: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(provider.as_str().as_bytes());
+    h.update([0u8]);
+    h.update(host.as_bytes());
+    h.update([0u8]);
+    h.update(prompt.as_bytes());
+    format!("{:x}", h.finalize())
+}
+
+fn resolve_outbound(
+    conn: &rusqlite::Connection,
+    book_title: &str,
+    author: Option<String>,
+    stub_mode: ai_stub::StubMode,
+    answer_depth: ai_stub::Depth,
+    selection: &str,
+    chapter: Option<String>,
+    user_note: Option<String>,
+) -> ResolvedSend {
+    let provider = settings::get_ai_provider(conn);
+    // ONE host derivation for previews, gates, and audit rows: the enum's
+    // canonical remote host, or the local base URL's host for Local.
+    let host = match provider {
+        settings::AiProvider::Local => url::Url::parse(&settings::get_ai_base_url(conn))
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_default(),
+        p => p.remote_host().unwrap_or_default().to_string(),
+    };
+    let ctx = ai_stub::PromptContext {
+        book_title: book_title.to_string(),
+        author,
+        chapter,
+        locator: None, // never rides in the outbound prompt (pinned in ai_stub tests)
+        selection: selection.trim().to_string(),
+        user_note,
+    };
+    let envelope = ai_stub::build_envelope(stub_mode, answer_depth, &ctx);
+    let fingerprint = send_fingerprint(provider, &host, &envelope.prompt);
+    ResolvedSend {
+        provider,
+        host,
+        envelope,
+        fingerprint,
+    }
+}
+
+/// The first-cloud-consent gate, bound to the exact ask (R6-1). A remote send
+/// requires remembered consent; absent that, the ask may carry the binding the
+/// reader confirmed on the consent sheet. The binding must equal — provider,
+/// canonical host, AND envelope fingerprint — what THIS call is about to send.
+/// Any drift (provider switched, destination changed, selection edited between
+/// preview and dispatch) fails closed: nothing egresses, no consent is
+/// recorded, and the error names the CURRENT destination so the sheet shows a
+/// fresh matching preview. `KEY_FIRST_CLOUD_CONFIRMED_AT` is written here and
+/// only here, only after a binding validates — consent is remembered exactly
+/// when the confirmed send is the send that happens (CORE-1177's promise,
+/// delivered without the old confirm→ask race).
+fn enforce_bound_cloud_consent(
+    conn: &rusqlite::Connection,
+    current: &ResolvedSend,
+    provided: Option<&ConsentBinding>,
+) -> Result<(), AppError> {
+    if !cloud_consent_required(conn, current.provider) {
+        return Ok(());
+    }
+    let Some(b) = provided else {
+        return Err(AppError::needs_cloud_consent(current.host.clone()));
+    };
+    if b.provider != current.provider.as_str()
+        || b.host != current.host
+        || b.fingerprint != current.fingerprint
+    {
+        return Err(AppError::NeedsCloudConsent {
+            host: current.host.clone(),
+            message: format!(
+                "The destination or passage changed since you reviewed this send — nothing was sent. Review the fresh preview for {} and confirm again.",
+                current.host
+            ),
+        });
+    }
     settings::set_string(
-        &conn,
+        conn,
         settings::KEY_FIRST_CLOUD_CONFIRMED_AT,
         &Utc::now().to_rfc3339(),
-    )
-    .map_err(AppError::from)
+    )?;
+    Ok(())
 }
 
 // ── Company mode (the $20 bundle) ────────────────────────────────────────
@@ -752,10 +935,23 @@ fn parse_company_credits(body: &serde_json::Value) -> CompanyCredits {
 }
 
 fn company_http() -> Result<reqwest::Client, AppError> {
+    // R8-3: never follow a redirect — a 307/308 would re-send activation
+    // tokens or the Bearer license to an arbitrary Location host.
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| AppError::ai(format!("http client: {e}")))
+}
+
+/// R7-2: EVERY company relay endpoint is built here — from the code-constant
+/// origin, gated by `validate_company_destination` at the call site — so no
+/// stored value can reroute a passage or the Keychain license.
+pub(crate) fn company_endpoint(path: &str) -> Result<String, AppError> {
+    let url = format!("{}{path}", settings::company_base_url());
+    crate::ai_client::validate_company_destination(&url)
+        .map_err(|e| AppError::config(format!("{e:#}")))?;
+    Ok(url)
 }
 
 /// Reader-facing transport-failure copy for every company relay call. A fixed
@@ -779,14 +975,68 @@ fn activation_error_message(status: u16) -> &'static str {
     }
 }
 
+/// The consent/preview surface for a tutor ask (PRIV-A11Y-009): the EXACT
+/// outbound envelope `cmd_ai_ask` would send for these arguments — destination
+/// host, every book-derived field, the FULL bounded selection, and the complete
+/// prompt text. Pure read: writes no consent, no audit row, sends nothing.
+#[derive(serde::Serialize)]
+pub struct EnvelopePreview {
+    /// The host the request would go to (the provider mapping the ask uses).
+    pub host: String,
+    /// The active provider id the envelope was resolved for (R6-1) — the
+    /// consent sheet's disclosure/attribution derive from THIS, never from
+    /// separately-cached frontend state.
+    pub provider: String,
+    /// Fingerprint over provider + host + exact prompt. The frontend passes it
+    /// back verbatim as the ConsentBinding; cmd_ai_ask recomputes and compares
+    /// at the send boundary, so a confirm can only ever authorize THIS send.
+    pub fingerprint: String,
+    pub envelope: ai_stub::OutboundEnvelope,
+}
+
+#[tauri::command]
+pub fn cmd_outbound_envelope(
+    book_id: String,
+    mode: String,
+    selection: String,
+    chapter: Option<String>,
+    user_note: Option<String>,
+    depth: Option<String>,
+    state: State<DbState>,
+) -> Result<EnvelopePreview, AppError> {
+    let stub_mode = ai_stub::StubMode::from_str(&mode)
+        .ok_or_else(|| AppError::validation(format!("unknown AI stub mode: {}", mode)))?;
+    let answer_depth = ai_stub::Depth::from_str(depth.as_deref().unwrap_or("brief"))
+        .unwrap_or(ai_stub::Depth::Brief);
+    let conn = state.lock()?;
+    let book = fetch_book(&conn, &book_id)?
+        .ok_or_else(|| AppError::not_found("book", Some(book_id.clone())))?;
+    let resolved = resolve_outbound(
+        &conn,
+        &book.title,
+        book.author,
+        stub_mode,
+        answer_depth,
+        &selection,
+        chapter,
+        user_note,
+    );
+    Ok(EnvelopePreview {
+        host: resolved.host,
+        provider: resolved.provider.as_str().to_string(),
+        fingerprint: resolved.fingerprint,
+        envelope: resolved.envelope,
+    })
+}
+
 /// Exchange a single-use activation token (deep link or typed code) for a durable
 /// license, store it in the Keychain, and switch the active provider to Company.
 ///
 /// CORE-1177: activation grants the ENTITLEMENT (license, provider, LOCAL_ONLY off) but
 /// NOT cloud-send consent. Consent is a separate, explicit act captured at the reader's
-/// first real send by cmd_confirm_cloud_send, so the privacy promise is actually delivered
-/// (the consent sheet shows the passage before anything leaves the Mac). This fn must never
-/// write KEY_FIRST_CLOUD_CONFIRMED_AT.
+/// first real send by cmd_ai_ask's bound-consent gate (enforce_bound_cloud_consent), so
+/// the privacy promise is actually delivered (the consent sheet shows the passage before
+/// anything leaves the Mac). This fn must never write KEY_FIRST_CLOUD_CONFIRMED_AT.
 #[tauri::command]
 pub async fn cmd_activate_company(
     activation_token: String,
@@ -796,12 +1046,8 @@ pub async fn cmd_activate_company(
     if token.is_empty() {
         return Err(AppError::validation("Enter your activation code."));
     }
-    let base_url = {
-        let conn = state.0.lock()?;
-        settings::get_company_base_url(&conn)
-    };
     let resp = company_http()?
-        .post(format!("{base_url}/v1/activate"))
+        .post(company_endpoint("/v1/activate")?)
         .json(&serde_json::json!({ "activation_token": token }))
         .send()
         .await
@@ -821,10 +1067,8 @@ pub async fn cmd_activate_company(
         return Err(AppError::ai("Activation returned no license."));
     }
     crate::keystore::set_key("company", &license).map_err(|e| AppError::io(format!("{e}")))?;
-    // Re-activation clears any phrase auth/cap stop (docs/PHRASES_API.md §Errors).
-    crate::phrases::reset_backoff();
     {
-        let conn = state.0.lock()?;
+        let conn = state.lock()?;
         apply_company_activation(&conn, &Utc::now().to_rfc3339())?;
     }
     Ok(CompanyStatus {
@@ -836,8 +1080,9 @@ pub async fn cmd_activate_company(
 /// Apply the ENTITLEMENT settings for company activation (CORE-1177): the active provider,
 /// the activated flag, LOCAL_ONLY off, and (first time only) the provider-chosen stamp.
 /// It deliberately writes NO consent flag: KEY_FIRST_CLOUD_CONFIRMED_AT is owned solely by
-/// cmd_confirm_cloud_send, so cloud-send consent is captured at the reader's first real send
-/// (where the sheet shows the passage), never granted as a side effect of activation.
+/// cmd_ai_ask's bound-consent gate (enforce_bound_cloud_consent), so cloud-send consent is
+/// captured at the reader's first real send — validated against the exact envelope the
+/// sheet showed — never granted as a side effect of activation.
 fn apply_company_activation(conn: &rusqlite::Connection, now: &str) -> Result<(), AppError> {
     settings::set_string(conn, settings::KEY_AI_PROVIDER, "company")?;
     settings::set_string(conn, settings::KEY_COMPANY_ACTIVATED, "1")?;
@@ -850,9 +1095,10 @@ fn apply_company_activation(conn: &rusqlite::Connection, now: &str) -> Result<()
 
 /// The first-cloud-consent gate (Epic C2 / CORE-1177): a remote provider must have an
 /// explicit in-app confirmation (KEY_FIRST_CLOUD_CONFIRMED_AT, written only by
-/// cmd_confirm_cloud_send) before ANY relay egress. Because activation grants the
-/// entitlement but not consent, this stays true right after activation until the reader
-/// confirms the first send. Pure, so cmd_ai_ask's gate is unit-testable.
+/// enforce_bound_cloud_consent after a binding validates) before ANY relay egress.
+/// Because activation grants the entitlement but not consent, this stays true right
+/// after activation until the reader confirms the first send. Pure, so cmd_ai_ask's
+/// gate is unit-testable.
 fn cloud_consent_required(conn: &rusqlite::Connection, provider: settings::AiProvider) -> bool {
     provider.is_remote()
         && settings::get_string(conn, settings::KEY_FIRST_CLOUD_CONFIRMED_AT).is_none()
@@ -885,7 +1131,7 @@ fn company_status_from_bits(
 #[tauri::command]
 pub fn cmd_company_status(state: State<DbState>) -> Result<CompanyStatus, AppError> {
     let (provider_active, activation_flag) = {
-        let conn = state.0.lock()?;
+        let conn = state.lock()?;
         company_status_db_bits(&conn)
     };
     Ok(company_status_from_bits(
@@ -907,13 +1153,9 @@ fn open_in_browser(_url: &str) {}
 /// Start a $20 Checkout: ask the proxy for a session URL and open it in the
 /// browser. Returns the URL too, so the UI can offer a "continue here" fallback.
 #[tauri::command]
-pub async fn cmd_company_checkout(state: State<'_, DbState>) -> Result<String, AppError> {
-    let base_url = {
-        let conn = state.0.lock()?;
-        settings::get_company_base_url(&conn)
-    };
+pub async fn cmd_company_checkout(_state: State<'_, DbState>) -> Result<String, AppError> {
     let resp = company_http()?
-        .post(format!("{base_url}/v1/checkout"))
+        .post(company_endpoint("/v1/checkout")?)
         .send()
         .await
         .map_err(|_| AppError::ai(COMPANY_UNREACHABLE_MSG))?;
@@ -937,15 +1179,11 @@ pub async fn cmd_company_checkout(state: State<'_, DbState>) -> Result<String, A
 
 /// Read-only credits view for the fuel gauge (the server is authoritative).
 #[tauri::command]
-pub async fn cmd_company_credits(state: State<'_, DbState>) -> Result<CompanyCredits, AppError> {
-    let base_url = {
-        let conn = state.0.lock()?;
-        settings::get_company_base_url(&conn)
-    };
+pub async fn cmd_company_credits(_state: State<'_, DbState>) -> Result<CompanyCredits, AppError> {
     let license = crate::keystore::get_key("company")
         .ok_or_else(|| AppError::config("Throughline AI isn't activated."))?;
     let resp = company_http()?
-        .get(format!("{base_url}/v1/credits"))
+        .get(company_endpoint("/v1/credits")?)
         .header("authorization", format!("Bearer {license}"))
         .send()
         .await
@@ -994,7 +1232,7 @@ pub fn cmd_finalize_ai_request(
         cache_read_tokens: cache_read_tokens.unwrap_or(0),
         cache_creation_tokens: cache_creation_tokens.unwrap_or(0),
     };
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     write_usage_row(&conn, &request_id, &provider, &model, &usage).map_err(AppError::from)
 }
 
@@ -1066,7 +1304,7 @@ pub async fn cmd_list_ai_models(
     state: State<'_, DbState>,
 ) -> Result<Vec<String>, AppError> {
     let (prov, saved_base) = {
-        let conn = state.0.lock()?;
+        let conn = state.lock()?;
         let prov = match provider.as_deref() {
             Some(p) => settings::AiProvider::from_str(p),
             None => settings::get_ai_provider(&conn),
@@ -1121,7 +1359,7 @@ fn resolve_conn_test_inputs(
     // loopback-validated downstream exactly like the saved path — WITHOUT
     // writing it. Everything else probes the saved base URL.
     let base_url = match prov {
-        settings::AiProvider::Company => settings::get_company_base_url(conn),
+        settings::AiProvider::Company => settings::company_base_url(),
         settings::AiProvider::Local => base_url
             .as_deref()
             .map(str::trim)
@@ -1156,7 +1394,7 @@ pub async fn cmd_test_ai_connection(
     state: State<'_, DbState>,
 ) -> Result<ConnTestResult, AppError> {
     let (prov, resolved_key, base_url, model) = {
-        let conn = state.0.lock()?;
+        let conn = state.lock()?;
         resolve_conn_test_inputs(&conn, provider.as_deref(), key, base_url)
     };
 
@@ -1197,7 +1435,7 @@ pub async fn cmd_codex_device_poll(
         .await
         .map_err(|e| AppError::ai(format!("{e}")))?;
     if poll.status == "complete" {
-        let conn = state.0.lock()?;
+        let conn = state.lock()?;
         settings::mark_codex_creds_present(&conn, true);
     }
     Ok(poll)
@@ -1207,7 +1445,7 @@ pub async fn cmd_codex_device_poll(
 #[tauri::command]
 pub fn cmd_codex_logout(state: State<DbState>) -> Result<settings::SettingsDto, AppError> {
     crate::keystore::clear_codex_creds().map_err(|e| AppError::config(format!("{e}")))?;
-    let conn = state.0.lock()?;
+    let conn = state.lock()?;
     settings::mark_codex_creds_present(&conn, false);
     settings::build_dto(&conn).map_err(AppError::from)
 }
@@ -1458,6 +1696,9 @@ mod tests {
     /// draft applies to the Local arm only; Company keeps its relay endpoint.
     #[test]
     fn conn_test_draft_base_url_probes_without_persisting() {
+        // Env lock: company_base_url() has a test-only env seam another test
+        // exercises — serialize so this test's constant assertion can't race it.
+        let _g = crate::paths::lock_env_for_test();
         let conn = Connection::open_in_memory().unwrap();
         crate::migrations::apply_pending(&conn).unwrap();
         // A reader running their local server on a custom port.
@@ -1517,8 +1758,330 @@ mod tests {
         .unwrap();
         assert!(
             confirmed(&conn),
-            "confirmed after cmd_confirm_cloud_send → gate clears"
+            "confirmed after a validated bound consent → gate clears"
         );
+    }
+
+    /// R6-1: the consent gate is bound to the EXACT ask. A binding whose
+    /// provider, host, or envelope fingerprint differs from what THIS call
+    /// resolves to fails closed — NeedsCloudConsent naming the CURRENT host,
+    /// and no consent recorded. Only the matching binding records consent.
+    #[test]
+    fn bound_consent_rejects_every_drift_and_records_only_on_match() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        settings::set_string(&conn, settings::KEY_AI_PROVIDER, "anthropic").unwrap();
+
+        let resolve = |conn: &Connection, selection: &str| {
+            resolve_outbound(
+                conn,
+                "Confessions",
+                Some("Augustine".to_string()),
+                ai_stub::StubMode::Explain,
+                ai_stub::Depth::Brief,
+                selection,
+                Some("Book I".to_string()),
+                None,
+            )
+        };
+        let consented = |conn: &Connection| {
+            settings::get_string(conn, settings::KEY_FIRST_CLOUD_CONFIRMED_AT).is_some()
+        };
+        let current = resolve(&conn, "the weight of habit drags the soul");
+        assert_eq!(current.host, "api.anthropic.com");
+
+        // No binding at all → the plain consent rejection (the sheet trigger).
+        let err = enforce_bound_cloud_consent(&conn, &current, None).unwrap_err();
+        assert_eq!(err.kind(), "NeedsCloudConsent");
+        assert!(!consented(&conn), "no binding → nothing recorded");
+
+        // Provider drift: the reader confirmed OpenAI, the call resolves Anthropic.
+        let drifted_provider = ConsentBinding {
+            provider: "openai".to_string(),
+            host: current.host.clone(),
+            fingerprint: current.fingerprint.clone(),
+        };
+        let err =
+            enforce_bound_cloud_consent(&conn, &current, Some(&drifted_provider)).unwrap_err();
+        match &err {
+            AppError::NeedsCloudConsent { host, message } => {
+                assert_eq!(host, "api.anthropic.com", "error names the CURRENT host");
+                assert!(message.contains("nothing was sent"));
+            }
+            other => panic!("expected NeedsCloudConsent, got {other:?}"),
+        }
+        assert!(!consented(&conn), "provider drift → no consent armed");
+
+        // Host drift (e.g. the provider row changed under the sheet).
+        let drifted_host = ConsentBinding {
+            provider: "anthropic".to_string(),
+            host: "api.openai.com".to_string(),
+            fingerprint: current.fingerprint.clone(),
+        };
+        assert!(enforce_bound_cloud_consent(&conn, &current, Some(&drifted_host)).is_err());
+        assert!(!consented(&conn), "host drift → no consent armed");
+
+        // Envelope drift: the selection changed between preview and dispatch.
+        let stale_envelope = resolve(&conn, "a DIFFERENT passage entirely");
+        let drifted_fp = ConsentBinding {
+            provider: "anthropic".to_string(),
+            host: current.host.clone(),
+            fingerprint: stale_envelope.fingerprint,
+        };
+        assert!(enforce_bound_cloud_consent(&conn, &current, Some(&drifted_fp)).is_err());
+        assert!(!consented(&conn), "fingerprint drift → no consent armed");
+
+        // The exact binding the preview issued → send authorized, consent recorded.
+        let bound = ConsentBinding {
+            provider: current.provider.as_str().to_string(),
+            host: current.host.clone(),
+            fingerprint: current.fingerprint.clone(),
+        };
+        enforce_bound_cloud_consent(&conn, &current, Some(&bound)).unwrap();
+        assert!(consented(&conn), "validated bound ask records consent");
+
+        // Once remembered, later asks pass with no binding at all.
+        enforce_bound_cloud_consent(&conn, &current, None).unwrap();
+    }
+
+    /// R6-1: the fingerprint is deterministic for identical asks and distinct
+    /// across provider, host, and prompt — the three drift axes it must catch.
+    /// Local (on-device) asks never gate regardless of binding presence.
+    #[test]
+    fn send_fingerprint_covers_all_three_axes_and_local_never_gates() {
+        let a = send_fingerprint(settings::AiProvider::Anthropic, "api.anthropic.com", "P");
+        assert_eq!(
+            a,
+            send_fingerprint(settings::AiProvider::Anthropic, "api.anthropic.com", "P"),
+            "deterministic"
+        );
+        assert_ne!(
+            a,
+            send_fingerprint(settings::AiProvider::OpenAi, "api.anthropic.com", "P"),
+            "provider-sensitive"
+        );
+        assert_ne!(
+            a,
+            send_fingerprint(settings::AiProvider::Anthropic, "api.openai.com", "P"),
+            "host-sensitive"
+        );
+        assert_ne!(
+            a,
+            send_fingerprint(settings::AiProvider::Anthropic, "api.anthropic.com", "Q"),
+            "prompt-sensitive"
+        );
+
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        settings::set_string(&conn, settings::KEY_AI_PROVIDER, "local").unwrap();
+        let local = resolve_outbound(
+            &conn,
+            "Confessions",
+            None,
+            ai_stub::StubMode::Explain,
+            ai_stub::Depth::Brief,
+            "some passage",
+            None,
+            None,
+        );
+        enforce_bound_cloud_consent(&conn, &local, None).unwrap();
+        assert!(
+            settings::get_string(&conn, settings::KEY_FIRST_CLOUD_CONFIRMED_AT).is_none(),
+            "local asks neither require nor record cloud consent"
+        );
+    }
+
+    /// R7-2: a HOSTILE origin planted in the database — with remembered
+    /// consent already granted — reroutes NOTHING. The company origin is a
+    /// code constant (the old `company_base_url` row is inert), and even a
+    /// hostile URL reaching the send boundary is refused by the destination
+    /// gate BEFORE any request is built or the license attached: zero
+    /// request, zero license disclosure.
+    #[test]
+    fn hostile_company_origin_with_remembered_consent_sends_nothing() {
+        let _g = crate::paths::lock_env_for_test();
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        settings::set_string(&conn, settings::KEY_AI_PROVIDER, "company").unwrap();
+        settings::set_string(
+            &conn,
+            settings::KEY_FIRST_CLOUD_CONFIRMED_AT,
+            "2026-07-01T00:00:00Z",
+        )
+        .unwrap();
+        // The poisoned row (the removed override key): nothing reads it.
+        settings::set_string(&conn, "company_base_url", "https://evil.example").unwrap();
+
+        assert_eq!(
+            settings::company_base_url(),
+            settings::DEFAULT_COMPANY_BASE_URL,
+            "the stored row is inert — the origin is the code constant"
+        );
+        let (_, _, resolved_base, _) = resolve_conn_test_inputs(&conn, Some("company"), None, None);
+        assert_eq!(
+            resolved_base,
+            settings::DEFAULT_COMPANY_BASE_URL,
+            "the probe/ask resolution ignores the poisoned row too"
+        );
+
+        // The send-boundary gate: every non-canonical destination is refused
+        // before a request exists to carry anything.
+        for hostile in [
+            "https://evil.example/v1/messages",
+            "http://ai.readthroughline.com/v1/messages", // scheme downgrade
+            "https://ai.readthroughline.com:8443/v1/messages", // explicit port
+            "https://ai.readthroughline.com.evil.example/v1/messages", // suffix trick
+            "https://evil.example/?u=ai.readthroughline.com", // host in query
+        ] {
+            assert!(
+                crate::ai_client::validate_company_destination(hostile).is_err(),
+                "{hostile} must be refused"
+            );
+        }
+        crate::ai_client::validate_company_destination(&format!(
+            "{}/v1/messages",
+            settings::DEFAULT_COMPANY_BASE_URL
+        ))
+        .expect("the canonical origin passes");
+    }
+
+    /// R7-2: preview host, consent binding, audit provider_host, and every
+    /// company endpoint (activation / credits / checkout / feedback / tutor)
+    /// derive from ONE constant — they cannot disagree.
+    #[test]
+    fn company_destinations_cannot_disagree() {
+        let _g = crate::paths::lock_env_for_test();
+        let origin_host = url::Url::parse(&settings::company_base_url())
+            .unwrap()
+            .host_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            Some(origin_host.as_str()),
+            settings::AiProvider::Company.remote_host(),
+            "the request origin host IS the consent/audit host"
+        );
+        for path in [
+            "/v1/activate",
+            "/v1/credits",
+            "/v1/checkout",
+            "/v1/feedback",
+            "/v1/messages",
+        ] {
+            let url = company_endpoint(path).expect("canonical endpoint validates");
+            assert_eq!(
+                url,
+                format!("{}{path}", settings::DEFAULT_COMPANY_BASE_URL),
+                "every endpoint is built from the one constant"
+            );
+        }
+    }
+
+    /// R7-2: the TEST-ONLY origin seam exists for hermetic relay mocks (it is
+    /// compiled out of production builds), and the destination gate follows
+    /// it — loopback http allowed only there.
+    #[test]
+    fn test_origin_seam_is_followed_by_the_destination_gate() {
+        let _g = crate::paths::lock_env_for_test();
+        // SAFETY: env vars are process-global; the lock above serializes access.
+        unsafe { std::env::set_var("THROUGHLINE_TEST_COMPANY_ORIGIN", "http://127.0.0.1:8099") };
+        let seam = settings::company_base_url();
+        let gate = crate::ai_client::validate_company_destination(&format!("{seam}/v1/messages"));
+        let mismatched =
+            crate::ai_client::validate_company_destination("https://evil.example/v1/messages");
+        unsafe { std::env::remove_var("THROUGHLINE_TEST_COMPANY_ORIGIN") };
+        assert_eq!(seam, "http://127.0.0.1:8099");
+        gate.expect("the injected loopback mock origin is usable under cfg(test)");
+        assert!(
+            mismatched.is_err(),
+            "a non-seam destination still fails the gate"
+        );
+    }
+
+    /// R8-3: the activation/credits/checkout client NEVER follows a redirect
+    /// — a 307 pointing at a second listener leaves that listener with ZERO
+    /// requests (activation tokens and the Bearer license never re-send to
+    /// an arbitrary Location host).
+    #[test]
+    fn company_client_never_follows_redirects() {
+        use std::io::{Read, Write};
+        let sink = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let sink_port = sink.local_addr().unwrap().port();
+        let hit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let hit_c = hit.clone();
+        std::thread::spawn(move || {
+            if sink.accept().is_ok() {
+                hit_c.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+
+        let redirecting = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let a_port = redirecting.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = redirecting.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:{sink_port}/v1/activate\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let resp = company_http()
+                .unwrap()
+                .post(format!("http://127.0.0.1:{a_port}/v1/activate"))
+                .header("authorization", "Bearer lic_test.deadbeef")
+                .json(&serde_json::json!({ "activation_token": "tok_secret" }))
+                .send()
+                .await
+                .expect("the redirect response itself resolves");
+            assert_eq!(resp.status().as_u16(), 307, "redirect NOT followed");
+        });
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(
+            !hit.load(std::sync::atomic::Ordering::SeqCst),
+            "the redirect target must receive ZERO token/license requests"
+        );
+    }
+
+    /// R6-1: the preview command and the ask gate resolve through the SAME
+    /// constructor — same provider, host, and fingerprint for the same inputs —
+    /// so the sheet can never preview one send while the gate validates another.
+    #[test]
+    fn preview_and_gate_resolve_identically() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        settings::set_string(&conn, settings::KEY_AI_PROVIDER, "company").unwrap();
+        let once = resolve_outbound(
+            &conn,
+            "Confessions",
+            Some("Augustine".to_string()),
+            ai_stub::StubMode::SectionBriefing,
+            ai_stub::Depth::Brief,
+            "  the section text  ",
+            Some("Book II".to_string()),
+            None,
+        );
+        let twice = resolve_outbound(
+            &conn,
+            "Confessions",
+            Some("Augustine".to_string()),
+            ai_stub::StubMode::SectionBriefing,
+            ai_stub::Depth::Brief,
+            "the section text",
+            Some("Book II".to_string()),
+            None,
+        );
+        assert_eq!(once.host, "ai.readthroughline.com");
+        assert_eq!(once.provider.as_str(), "company");
+        assert_eq!(
+            once.fingerprint, twice.fingerprint,
+            "same inputs (modulo trim) → same fingerprint from preview and gate alike"
+        );
+        assert_eq!(once.envelope.prompt, twice.envelope.prompt);
     }
 
     /// CORE-1177: activation grants the entitlement (provider, activated flag,
@@ -1571,7 +2134,7 @@ mod tests {
         // Local is on-device and never gates.
         assert!(!cloud_consent_required(&conn, settings::AiProvider::Local));
 
-        // The explicit confirmation (written only by cmd_confirm_cloud_send) clears it.
+        // The explicit confirmation (written only by the bound-consent gate) clears it.
         settings::set_string(
             &conn,
             settings::KEY_FIRST_CLOUD_CONFIRMED_AT,
@@ -1795,6 +2358,106 @@ mod tests {
         assert_eq!(a3.book_title, None, "orphaned request has no joined title");
     }
 
+    /// R11-6: a save whose body combines the BRIEF and DEEP tiers marks
+    /// EVERY contributing audit row `wrote_to_memory = 1` in the SAME
+    /// transaction — and refuses a contributor from a different book with
+    /// NOTHING marked or inserted.
+    #[test]
+    fn save_marks_every_contributing_ai_request_and_refuses_cross_book_ids() {
+        let _g = crate::paths::lock_env_for_test();
+        let export_dir =
+            std::env::temp_dir().join(format!("tl-contrib-save-{}", std::process::id()));
+        std::fs::remove_dir_all(&export_dir).ok();
+        std::fs::create_dir_all(&export_dir).unwrap();
+        // SAFETY: env vars are process-global; the lock above serializes access.
+        unsafe {
+            std::env::set_var("THROUGHLINE_EXPORT_DIR", &export_dir);
+        }
+
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, source_type, source_path, source_sha256, created_at, last_opened_at)
+             VALUES ('b1','Confessions','Augustine','txt','/x','sha-abc','2026-05-01',NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, source_type, source_path, source_sha256, created_at, last_opened_at)
+             VALUES ('b2','Meditations','Marcus','txt','/y','sha-def','2026-05-01',NULL)",
+            [],
+        )
+        .unwrap();
+        for (id, book) in [("ai_brief", "b1"), ("ai_deep", "b1"), ("ai_foreign", "b2")] {
+            conn.execute(
+                "INSERT INTO ai_requests (id, book_id, mode, locator, context_char_count, provider, created_at, wrote_to_memory)
+                 VALUES (?1, ?2, 'explain', 'char:10', 42, 'localhost', '2026-05-10T10:00:00Z', 0)",
+                params![id, book],
+            )
+            .unwrap();
+        }
+        let wrote = |id: &str| -> bool {
+            conn.query_row(
+                "SELECT wrote_to_memory FROM ai_requests WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, bool>(0),
+            )
+            .unwrap()
+        };
+
+        // A CROSS-BOOK contributor refuses the WHOLE save: nothing inserted,
+        // nothing marked.
+        let err = save_ai_note_inner(
+            &conn,
+            "ai_brief",
+            &["ai_foreign".to_string()],
+            "TutorNote",
+            "brief text\n\ndeep text",
+            "char:10",
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let refusal = err
+            .err()
+            .expect("cross-book contributor must refuse the save");
+        assert!(
+            format!("{refusal:?}").contains("different book"),
+            "the refusal names the cause: {refusal:?}"
+        );
+        let notes: i64 = conn
+            .query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(notes, 0, "nothing was inserted");
+        assert!(!wrote("ai_brief") && !wrote("ai_deep") && !wrote("ai_foreign"));
+
+        // BRIEF + DEEP from the same book: BOTH rows become memory.
+        save_ai_note_inner(
+            &conn,
+            "ai_brief",
+            &["ai_deep".to_string(), "ai_brief".to_string()], // dupes tolerated
+            "TutorNote",
+            "brief text\n\ndeep text",
+            "char:10",
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("brief+deep save succeeds");
+        assert!(wrote("ai_brief"), "the brief contributor is marked");
+        assert!(wrote("ai_deep"), "the deep contributor is marked TOO");
+        assert!(!wrote("ai_foreign"), "the foreign row is untouched");
+
+        std::fs::remove_dir_all(&export_dir).ok();
+        unsafe {
+            std::env::remove_var("THROUGHLINE_EXPORT_DIR");
+        }
+    }
+
     /// Saving a margin **tutor** preview persists the selection anchors + session,
     /// exports a Markdown mirror, and flips the audit row to `wrote_to_memory = 1`
     /// — the contract the Companion-Margin tutor card relies on. Runs against an
@@ -1845,6 +2508,11 @@ mod tests {
             Some("sess_1".to_string()),
         )
         .expect("save_preview_as_note_inner");
+        assert!(
+            note.export.ok,
+            "isolated export dir -> mirror write succeeds"
+        );
+        let note = note.note;
 
         // Anchors + type + session round-trip onto the returned Note.
         assert_eq!(note.note_type, "TutorNote");
@@ -1986,49 +2654,26 @@ pub fn cmd_save_ai_response_as_note(
     anchor_end: Option<String>,
     anchored_text: Option<String>,
     session_id: Option<String>,
+    // R11-6 (additive, optional): every OTHER AI request whose output is part
+    // of the saved body (the deep tier beside the brief). Each must belong to
+    // the same book; each is marked wrote_to_memory with the note's insert.
+    contributing_request_ids: Option<Vec<String>>,
     state: State<DbState>,
-) -> Result<Note, AppError> {
-    if body.trim().is_empty() {
-        return Err(AppError::validation("note body is empty"));
-    }
-    let conn = state.0.lock()?;
-    let book_id: String = conn
-        .query_row(
-            "SELECT book_id FROM ai_requests WHERE id = ?1",
-            params![ai_request_id],
-            |r| r.get(0),
-        )
-        .map_err(|_| AppError::not_found("ai_request", Some(ai_request_id.clone())))?;
-
-    let id = format!("note_{}", Uuid::new_v4().simple());
-    let now = Utc::now().to_rfc3339();
-    conn.execute(
-        "INSERT INTO notes (id, book_id, session_id, note_type, locator, chapter_label, body, short_quote, created_at, updated_at, exported_markdown_path, anchor_start, anchor_end, anchored_text)
-         VALUES (?1, ?2, ?8, ?3, ?4, ?5, ?6, NULL, ?7, ?7, NULL, ?9, ?10, ?11)",
-        params![id, book_id, note_type, locator, chapter_label, body, now, session_id, anchor_start, anchor_end, anchored_text],
-    )?;
-
-    conn.execute(
-        "UPDATE ai_requests SET wrote_to_memory = 1 WHERE id = ?1",
-        params![ai_request_id],
-    )?;
-
-    let mut note_stmt = conn.prepare(
-        "SELECT id, book_id, session_id, note_type, locator, chapter_label, body, short_quote, created_at, updated_at, exported_markdown_path, anchor_start, anchor_end, anchored_text FROM notes WHERE id = ?1",
-    )?;
-    let mut note = note_stmt.query_row(params![id], note_from_row)?;
-
-    // Regenerate the book's literature note (per-book, idempotent merge).
-    let now_export = Utc::now().to_rfc3339();
-    if let Ok(path) =
-        export::export_book_literature_note(&conn, &export::root_for(&conn), &book_id, &now_export)
-    {
-        log::log_export("book", &path.to_string_lossy());
-        note.exported_markdown_path = Some(path.to_string_lossy().to_string());
-        conn.execute(
-            "UPDATE notes SET exported_markdown_path = ?1 WHERE id = ?2",
-            params![note.exported_markdown_path, note.id],
-        )?;
-    }
-    Ok(note)
+) -> Result<crate::commands::notes::SavedNote, AppError> {
+    let conn = state.lock()?;
+    // Same contract as cmd_save_ai_preview_as_note (this command was a verbatim
+    // duplicate of it before the DATA-004 typed-outcome change unified them).
+    save_ai_note_inner(
+        &conn,
+        &ai_request_id,
+        &contributing_request_ids.unwrap_or_default(),
+        &note_type,
+        &body,
+        &locator,
+        chapter_label,
+        anchor_start,
+        anchor_end,
+        anchored_text,
+        session_id,
+    )
 }

@@ -46,7 +46,8 @@ test("front-door-first-run", async ({ page }) => {
   await expect(page.getByRole("heading", { name: /Begin with a book you mean to finish/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Browse the library/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Import a \.txt or \.epub/i })).toBeVisible();
-  await expect(page.getByText(/Everything stays on this Mac, no account, no cloud, nothing tracked/i)).toBeVisible();
+  await expect(page.getByText(/Your books and notes stay on this Mac/i)).toBeVisible();
+  await expect(page.getByText(/only after you confirm it/i)).toBeVisible();
   await expect(page.getByRole("button", { name: /Bought Throughline\? Enter your code/i })).toBeVisible();
   // A starter cover resolves into a real "Start reading" button (the cover thread).
   await expect(page.getByRole("button", { name: /Start reading Meditations by Marcus Aurelius/i })).toBeVisible();
@@ -436,10 +437,20 @@ test("cloud-consent-gate", async ({ page }) => {
   });
   await page.getByRole("button", { name: /^Explain/ }).click();
   // The first cloud send is gated by the consent sheet (nothing left the Mac yet).
-  await expect(page.getByRole("dialog", { name: /confirm cloud ai/i })).toBeVisible();
+  const consent = page.getByRole("dialog", { name: /send this passage to/i });
+  await expect(consent).toBeVisible();
   await expect(page.getByText(/api\.anthropic\.com/i).first()).toBeVisible();
   await expect(page.getByText(/book file never leaves this Mac/i)).toBeVisible();
+  // PRIV-A11Y-009: the safe choice holds initial focus and the exact outbound
+  // fields + full passage are disclosed.
+  await expect(consent.getByRole("button", { name: "Not now" })).toBeFocused();
+  await expect(consent.getByText(/exactly as it will be sent/i)).toBeVisible();
   await shoot(page, "16-cloud-consent");
+  // R6-1: Send carries the backend-issued consent binding WITH the ask — no
+  // separate confirm round-trip. The fake validates provider + host +
+  // fingerprint exactly like the real send boundary, then streams the answer.
+  await consent.getByRole("button", { name: /^Send to/ }).click();
+  await expect(page.getByText(/bracing himself before the day/)).toBeVisible();
 });
 
 test("cap-exhausted-fallback", async ({ page }) => {
@@ -572,7 +583,7 @@ test("cloud-trust-copy", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Privacy" }).click();
-  await expect(page.getByText("Everything stays on this Mac")).toBeVisible();
+  await expect(page.getByText("Your books and notes stay on this Mac")).toBeVisible();
   await expect(page.getByText(/your own Anthropic/)).toBeVisible();
   await expect(page.getByText(/are sent there to be answered/)).toBeVisible();
   await expect(page.getByText(/api\.anthropic\.com/i)).toHaveCount(0);
@@ -788,16 +799,14 @@ test("activation-door-reachable-from-any-mode", async ({ page }) => {
   await expect(page.getByLabel("Activation code")).toBeVisible();
 });
 
-test("session-names-toggle-in-settings", async ({ page }) => {
-  // The phrases on/off switch round-trips through cmd_set_ai_settings.
+test("no-session-names-control", async ({ page }) => {
+  // PRIV-001: background phrase generation was removed. No control may imply
+  // the old automatic behavior is an acceptable opt-in.
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Assistant" }).click();
-  const toggle = page.getByRole("switch", { name: "Session names" });
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-checked", "false");
-  await shoot(page, "28-session-names-toggle");
+  await expect(page.getByRole("switch", { name: "Tutor in the margin" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Session names" })).toHaveCount(0);
 });
 
 test("settings", async ({ page }) => {

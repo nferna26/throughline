@@ -69,19 +69,36 @@ export function briefingTextReady(
  *  New code never writes it. */
 const LEGACY_BRIEFING_PREFIX = `${LEGACY_PREFIX}.briefing.`;
 
+/** R8-4: a cached briefing carries its ATTRIBUTION — the provider id the
+ *  answer actually came from (null = unknown → neutral). A replay attributes
+ *  from here, never from current Settings. */
+export type CachedBriefing = { text: string; answeredProvider: string | null };
+
 /** Session-only store. Process memory by design — see the module header. */
-const cache = new Map<string, string>();
+const cache = new Map<string, CachedBriefing>();
 
 function cacheKey(bookId: string, sectionId: string, sha: string, mode: string): string {
   return `${bookId}|${sectionId}|${sha}|${mode}`;
 }
 
-export function getCachedBriefing(bookId: string, sectionId: string, sha: string, mode: string): string | null {
+export function getCachedBriefing(
+  bookId: string,
+  sectionId: string,
+  sha: string,
+  mode: string,
+): CachedBriefing | null {
   return cache.get(cacheKey(bookId, sectionId, sha, mode)) ?? null;
 }
 
-export function setCachedBriefing(bookId: string, sectionId: string, sha: string, mode: string, text: string): void {
-  cache.set(cacheKey(bookId, sectionId, sha, mode), text);
+export function setCachedBriefing(
+  bookId: string,
+  sectionId: string,
+  sha: string,
+  mode: string,
+  text: string,
+  answeredProvider: string | null = null,
+): void {
+  cache.set(cacheKey(bookId, sectionId, sha, mode), { text, answeredProvider });
 }
 
 export function clearCachedBriefing(bookId: string, sectionId: string, sha: string, mode: string): void {
@@ -141,6 +158,56 @@ export function clearBriefingAttempt(
 /** Drop every attempt marker this session. Test hook (module-level map). */
 export function resetBriefingAttempts(): void {
   attempts.clear();
+}
+
+// ── Session PENDING markers (R10-4) ─────────────────────────────────────────
+// Armed IMMEDIATELY BEFORE a briefing's cmd_ai_ask dispatches, carrying that
+// attempt's token. A remount that finds a pending marker (and no cache) knows
+// an ask for this exact section is already in flight or was interrupted — it
+// must NOT auto-fire a second one (dispatch → unmount → remount = exactly one
+// ask). The marker clears when ITS attempt reaches a terminal outcome, or
+// when a late PRE-EGRESS refusal (NeedsCloudConsent) reconciles it — matched
+// by token, so a late outcome never clears a NEWER attempt's marker.
+// Session-only by the same policy as the cache.
+const pendingAsks = new Map<string, number>();
+
+export function setBriefingPending(
+  bookId: string,
+  sectionId: string,
+  sha: string,
+  mode: string,
+  attemptToken: number,
+): void {
+  pendingAsks.set(cacheKey(bookId, sectionId, sha, mode), attemptToken);
+}
+
+export function getBriefingPending(
+  bookId: string,
+  sectionId: string,
+  sha: string,
+  mode: string,
+): number | null {
+  return pendingAsks.get(cacheKey(bookId, sectionId, sha, mode)) ?? null;
+}
+
+/** Clear the pending marker — only when it still belongs to `attemptToken`
+ *  (omit the token for a deliberate reader action like Try again). */
+export function clearBriefingPending(
+  bookId: string,
+  sectionId: string,
+  sha: string,
+  mode: string,
+  attemptToken?: number,
+): void {
+  const key = cacheKey(bookId, sectionId, sha, mode);
+  if (attemptToken === undefined || pendingAsks.get(key) === attemptToken) {
+    pendingAsks.delete(key);
+  }
+}
+
+/** Drop every pending marker this session. Test hook (module-level map). */
+export function resetBriefingPending(): void {
+  pendingAsks.clear();
 }
 
 /** One-time startup cleanup (App.tsx): earlier builds persisted briefings in

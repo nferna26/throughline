@@ -461,3 +461,101 @@ async fn company_test_fails_when_unreachable() {
     assert!(model.is_none());
     assert_eq!(message, "Can't reach Throughline AI right now.");
 }
+
+// ── R8-3: redirects are NEVER followed ──────────────────────────────────────
+
+/// A listener whose only job is to prove it was NEVER contacted.
+fn sink_listener() -> (String, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let hit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hit_c = hit.clone();
+    std::thread::spawn(move || {
+        if listener.accept().is_ok() {
+            hit_c.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), hit)
+}
+
+fn redirect_response(status: &str, target: &str) -> &'static str {
+    Box::leak(
+        format!(
+            "HTTP/1.1 {status}\r\nLocation: {target}/v1/anywhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .into_boxed_str(),
+    )
+}
+
+/// R8-3: the TUTOR arm (passage + Bearer license) never follows a 307/308 —
+/// the redirect target receives ZERO requests.
+#[tokio::test]
+async fn tutor_arm_never_follows_relay_redirects() {
+    let _g = company_breaker_test_guard();
+    for status in ["307 Temporary Redirect", "308 Permanent Redirect"] {
+        let (evil_url, hit) = sink_listener();
+        let (base_url, captured) = mock_proxy(redirect_response(status, &evil_url));
+
+        let outcome = run_provider_call(company_call(base_url)).await;
+        if let Ok(mut rx) = outcome {
+            while rx.recv().await.is_some() {}
+        }
+        let req = captured.lock().unwrap().clone();
+        assert!(
+            req.contains("POST /v1/tutor"),
+            "{status}: listener A saw the ask: {req}"
+        );
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            !hit.load(std::sync::atomic::Ordering::SeqCst),
+            "{status}: the redirect target must receive ZERO tutor/license requests"
+        );
+        breaker_for(AiProvider::Company).on_success(); // reset to Closed
+    }
+}
+
+/// R8-3: the connection TEST (Bearer license) never follows a 307/308 either,
+/// and a hostile base_url is refused BEFORE the license is attached.
+#[tokio::test]
+async fn test_company_never_follows_redirects_and_gates_before_the_license() {
+    let _g = company_breaker_test_guard();
+    for status in ["307 Temporary Redirect", "308 Permanent Redirect"] {
+        let (evil_url, hit) = sink_listener();
+        let (base_url, _captured) = mock_proxy(redirect_response(status, &evil_url));
+
+        let (ok, _model, _msg) = test_provider(
+            AiProvider::Company,
+            Some("lic_test.deadbeef".to_string()),
+            &base_url,
+            "unused-model",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(!ok, "{status}: a redirect is not a healthy relay");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            !hit.load(std::sync::atomic::Ordering::SeqCst),
+            "{status}: the redirect target must receive ZERO credential requests"
+        );
+        breaker_for(AiProvider::Company).on_success(); // reset to Closed
+    }
+
+    // The pre-license destination gate: a non-loopback, non-canonical origin
+    // is refused with ZERO requests anywhere.
+    let (evil_url, hit) = sink_listener();
+    let evil_https = evil_url.replace("http://127.0.0.1", "https://evil.example");
+    let (ok, _model, msg) = test_provider(
+        AiProvider::Company,
+        Some("lic_test.deadbeef".to_string()),
+        &evil_https,
+        "unused-model",
+        Duration::from_secs(2),
+    )
+    .await;
+    assert!(!ok, "hostile origin refused");
+    assert!(msg.contains("refused"), "the refusal is named: {msg}");
+    assert!(
+        !hit.load(std::sync::atomic::Ordering::SeqCst),
+        "zero requests for a refused destination"
+    );
+}

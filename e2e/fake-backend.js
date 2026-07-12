@@ -47,13 +47,11 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
     },
   ];
 
-  let AI_PHRASES_ON = true;
   // Settings redesign: appearance prefs + automatic backups (Files pane).
   const APPEARANCE = { ui_theme: "", reading_typeface: "newsreader", reading_line_spacing: "comfortable" };
   let BACKUPS_ON = true;
   const LAST_BACKUP_AT = "2026-07-08T09:12:00-07:00";
   const SETTINGS = {
-    ai_phrases: true,
     export_path: "/Users/demo/GBrain/Reading", export_path_is_default: true,
     app_data_path: "/Users/demo/Library/Application Support/Throughline",
     ai_posture: "local", ai_base_url: "http://localhost:1234/v1", ai_model: "local-model",
@@ -220,7 +218,7 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
           : card;
       }
       case "cmd_get_settings": {
-        const base = Object.assign({}, SETTINGS, { ai_phrases: AI_PHRASES_ON }, APPEARANCE);
+        const base = Object.assign({}, SETTINGS, APPEARANCE);
         if (window.__TL_FAKE_COMPANY_ACTIVE__ || window.__TL_FAKE_COMPANY_UNLICENSED__)
           return Object.assign(base, { ai_provider: "company", ai_remote_allowed: true, ai_local_only: false, ai_posture: "Sends your selection to ai.readthroughline.com", ai_model_anthropic: "claude-sonnet-4-6" });
         return window.__TL_FAKE_CLOUD__
@@ -299,7 +297,11 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_save_section_progress": return null;
       case "cmd_start_session":
         return { id: "sess_1", book_id: BOOK.id, started_at: nowIso(), ended_at: null, start_locator: "char:0", end_locator: null, minutes: null, completed_assignment: false, subjective_difficulty: null };
-      case "cmd_end_session": return null;
+      case "cmd_end_session":
+        return {
+          session: { id: (args && args.sessionId) || "sess_1", book_id: BOOK.id, started_at: nowIso(), ended_at: nowIso(), start_locator: "char:0", end_locator: (args && args.endLocator) || null, minutes: (args && args.minutes) || null, completed_assignment: true, subjective_difficulty: null },
+          export: { ok: true, message: null },
+        };
       case "cmd_save_note": {
         const n = {
           id: "note_" + ++noteSeq, book_id: BOOK.id, session_id: args && args.sessionId ? args.sessionId : null,
@@ -311,16 +313,16 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
           anchored_text: (args && args.anchoredText) || null,
         };
         NOTES.push(n);
-        return n;
+        return { note: n, export: { ok: true, message: null } };
       }
       case "cmd_update_note": {
         const n = NOTES.find((x) => x.id === (args && args.noteId));
         if (n) { if (args.body != null) n.body = args.body; n.updated_at = nowIso(); }
-        return n || null;
+        return n ? { note: n, export: { ok: true, message: null } } : null;
       }
       case "cmd_delete_note":
         NOTES = NOTES.filter((x) => x.id !== (args && args.noteId));
-        return null;
+        return { ok: true, message: null };
       case "cmd_ai_preview":
         return { ai_request_id: "req_preview", mode: (args && args.mode) || "explain", mode_label: "Explain this passage", prompt: "Explain this passage from Meditations by Marcus Aurelius:\n\n“" + ((args && args.selection) || "") + "”", wrote_to_memory: false, provider: null };
       case "cmd_test_ai_connection":
@@ -334,7 +336,6 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
           by_lens: [{ key: "explain", calls: 18, cost_micros: 360000 }, { key: "historical", calls: 9, cost_micros: 180000 }],
         };
       case "cmd_set_monthly_spend_cap": return null;
-      case "cmd_confirm_cloud_send": window.__cloud_confirmed__ = true; return null;
       case "cmd_model_catalog": {
         const cat = {
           anthropic: [
@@ -392,7 +393,6 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_restore_plan": case "cmd_start_new_plan":
         return null;
       case "cmd_set_ai_settings":
-        if (args && typeof args.aiPhrases === "boolean") AI_PHRASES_ON = args.aiPhrases;
         return handle("cmd_get_settings", {});
       // ── Settings redesign: appearance + backups + rail-footer version ──
       case "cmd_set_appearance":
@@ -403,10 +403,10 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       case "cmd_feedback_diagnostics":
         return { app_version: "0.8.4", macos_version: "15.5", mode: "included" };
       case "cmd_backup_status":
-        return { enabled: BACKUPS_ON, last_backup_at: BACKUPS_ON ? LAST_BACKUP_AT : null };
+        return { enabled: BACKUPS_ON, last_backup_at: BACKUPS_ON ? LAST_BACKUP_AT : null, undo_available: false };
       case "cmd_set_backups_enabled":
         BACKUPS_ON = !!(args && args.enabled);
-        return { enabled: BACKUPS_ON, last_backup_at: BACKUPS_ON ? LAST_BACKUP_AT : null };
+        return { enabled: BACKUPS_ON, last_backup_at: BACKUPS_ON ? LAST_BACKUP_AT : null, undo_available: false };
       case "cmd_list_backups":
         return [
           { id: "reading-20260708-091200.db", taken_at: LAST_BACKUP_AT },
@@ -465,6 +465,22 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
         return { book: BOOK, created: false };
       // Tauri dialog plugin (file picker) — return no selection.
       case "plugin:dialog|open": return null;
+      case "cmd_outbound_envelope":
+        return {
+          host: "api.anthropic.com",
+          provider: "anthropic",
+          // R6-1: the backend-issued consent binding. The fake accepts exactly
+          // this value back in cmd_ai_ask's consent arg, mirroring the real
+          // send-boundary validation.
+          fingerprint: "fake-fingerprint-anthropic-" + ((args && args.selection) || "").length,
+          envelope: {
+            book_title: BOOK.title,
+            author: BOOK.author,
+            chapter: (args && args.chapter) || null,
+            selection_bounded: (args && args.selection) || "",
+            prompt: "You are a patient tutor.\n\n<<<UNTRUSTED_PASSAGE>>>\n" + ((args && args.selection) || "") + "\n<<<END_UNTRUSTED_PASSAGE>>>",
+          },
+        };
       default:
         // eslint-disable-next-line no-console
         console.warn("[fake-backend] unhandled command:", cmd, args);
@@ -474,9 +490,21 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
 
   // cmd_ai_ask streams via the Channel passed as args.onEvent, then resolves a handle.
   function handleAsk(args) {
-    // C2: first cloud send gated until confirmed (cmd_confirm_cloud_send).
+    // C2/R6-1: first cloud send gated until a consent BINDING matching the
+    // envelope this fake issued rides in with the ask (the real backend
+    // validates provider + host + fingerprint at the send boundary and
+    // records consent only on a match).
     if (window.__TL_FAKE_NEEDS_CONSENT__ && !window.__cloud_confirmed__) {
-      return Promise.reject({ kind: "NeedsCloudConsent", host: "api.anthropic.com" });
+      const b = args && args.consent;
+      const bound =
+        b &&
+        b.provider === "anthropic" &&
+        b.host === "api.anthropic.com" &&
+        b.fingerprint === "fake-fingerprint-anthropic-" + (((args && args.selection) || "").length);
+      if (!bound) {
+        return Promise.reject({ kind: "NeedsCloudConsent", host: "api.anthropic.com" });
+      }
+      window.__cloud_confirmed__ = true;
     }
     // CM6: company-paid cap spent.
     if (window.__TL_FAKE_CAP_EXHAUSTED__) {

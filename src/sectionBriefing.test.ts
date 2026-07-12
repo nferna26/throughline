@@ -70,8 +70,12 @@ describe("parseBriefing", () => {
 
 describe("section briefing cache", () => {
   it("round-trips by book|section|sha|mode and misses on any key change", () => {
-    setCachedBriefing("bk", "s1", "sha1", "deep_study", "BRIEF");
-    expect(getCachedBriefing("bk", "s1", "sha1", "deep_study")).toBe("BRIEF");
+    setCachedBriefing("bk", "s1", "sha1", "deep_study", "BRIEF", "anthropic");
+    // R8-4: the cache round-trips the text AND the answered attribution.
+    expect(getCachedBriefing("bk", "s1", "sha1", "deep_study")).toEqual({
+      text: "BRIEF",
+      answeredProvider: "anthropic",
+    });
     // A different section / sha / mode is a cache miss (re-prepare).
     expect(getCachedBriefing("bk", "s2", "sha1", "deep_study")).toBeNull();
     expect(getCachedBriefing("bk", "s1", "sha2", "deep_study")).toBeNull();
@@ -90,7 +94,7 @@ describe("section briefing cache", () => {
   // localStorage, so nothing AI-derived survives an app restart unsaved.
   it("persists nothing to localStorage (session-only cache)", () => {
     setCachedBriefing("bk", "s9", "sha9", "deep_study", "TEXT");
-    expect(getCachedBriefing("bk", "s9", "sha9", "deep_study")).toBe("TEXT");
+    expect(getCachedBriefing("bk", "s9", "sha9", "deep_study")?.text).toBe("TEXT");
     // The round-trip above must be served from process memory: scan ALL of
     // localStorage and assert no briefing key (legacy `rg.briefing.*` or any
     // future spelling) was written.

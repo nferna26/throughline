@@ -5,6 +5,14 @@ document via a local mock; the relay session (throughline-ai-proxy repo) impleme
 it verbatim. Any change after first post is surfaced explicitly to the operator —
 it is the one thing the standing Stage-3 authorization requires surfacing.
 
+> **App-side status (2026-07, PRIV-001/TRUST-002):** the app no longer calls this
+> endpoint. Background phrase generation — spawned by plan configuration and
+> session end, default-on, unconsented — was removed as a public-beta blocker
+> (see `src-tauri/src/phrases.rs`). This document remains the frozen relay
+> contract; phrases cached before the removal still display from the local
+> `phrases` table. Any future client would need a reader-initiated, disclosed,
+> consent-gated design before touching `/v1/phrases` again.
+
 ## What this is
 
 Evocative session names ("the pear tree and the gang") for the Today screen's

@@ -215,8 +215,10 @@ export default function FrontDoor({ onDiscover, onImport, onPicked }: Props) {
         </div>
 
         <p className="tl-fd-trust">
-          Thousands of free public-domain books. Everything stays on this Mac, no account, no
-          cloud, nothing tracked.
+          Thousands of free public-domain books. Your books and notes stay on this Mac — no
+          account, nothing tracked. The tutor sends only what you choose — a selected passage,
+          or the section you're starting in Deep Study, along with the book's title, author,
+          and chapter name for context — and only after you confirm it.
         </p>
 
         {/* ── Activation: a whisper, never a gate. ── */}

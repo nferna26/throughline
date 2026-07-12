@@ -74,6 +74,36 @@ export function isContentsItem(kind: string | null): boolean {
   return kind === "contents-item";
 }
 
+/** ARIA heading level for a block role, or null when the role is not a heading.
+ *  A11Y-010: every paragraph KEEPS its `p[data-offset]` tag (selection anchoring
+ *  is load-bearing), so heading semantics ride as `role="heading"` +
+ *  `aria-level` on the SAME element — screen readers get the outline, char
+ *  offsets never move. The book title is level 1; chapter openings are level 2
+ *  (matching the exported Markdown's `##` chapters); EPUB h1..h6 map through. */
+export function headingLevelFor(kind: string | null): number | null {
+  switch (kind) {
+    case "title":
+      return 1;
+    case "h1":
+      return 1;
+    case "chapter-label":
+    case "chapter-title":
+      return 2;
+    case "h2":
+      return 2;
+    case "h3":
+      return 3;
+    case "h4":
+      return 4;
+    case "h5":
+      return 5;
+    case "h6":
+      return 6;
+    default:
+      return null;
+  }
+}
+
 /** The block role for a paragraph, if a block range covers it. Heading/blockquote
  *  ranges are emitted to span exactly their paragraph's text, so "covers" means
  *  the range contains the paragraph's [start, end). Returns the first match (by
