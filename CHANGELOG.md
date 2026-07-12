@@ -5,7 +5,7 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 8)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
-## [Unreleased]
+## [0.9.3] - 2026-07-12
 
 Public-beta blocker repairs from the 2026-07 end-to-end audit
 (`COMMAND_API_VERSION` 6 → 8 — see docs/IPC.md for the full contract diff).
