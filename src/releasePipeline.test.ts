@@ -337,6 +337,14 @@ describe("supply chain — actions and tooling pinned to immutable revisions (RE
     }
   });
 
+  it("every third-party action in release-candidate.yml is pinned to a full commit SHA", () => {
+    const uses = candidateWorkflow.match(/uses:\s+\S+/g) ?? [];
+    expect(uses.length).toBeGreaterThan(0);
+    for (const line of uses) {
+      expect(line, `${line} must be pinned to a 40-char commit SHA`).toMatch(shaPin);
+    }
+  });
+
   it("wrangler is pinned exactly in package.json (locked via npm ci)", async () => {
     const pkg = await import("../package.json");
     expect(pkg.devDependencies.wrangler).toMatch(/^\d+\.\d+\.\d+$/);
