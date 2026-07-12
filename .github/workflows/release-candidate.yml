@@ -1,0 +1,274 @@
+name: Release Candidate
+
+# Manual, non-publishing RC build. This workflow may read only the Apple and
+# updater-signing secrets needed to produce a candidate artifact. It has no
+# Cloudflare credentials, no R2 path, and no permission to create a release.
+# The repository is public, so the artifact is encrypted on the runner to the
+# committed RC certificate; its private key never enters GitHub or the repo.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: Version expected in package.json and the bundled app
+        required: true
+        default: "0.9.3"
+        type: string
+
+run-name: RC v${{ inputs.expected_version }} @ ${{ github.sha }}
+
+concurrency:
+  group: release-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-and-verify:
+    name: Build, notarize, and verify encrypted RC
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Preflight — exact green main SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Release candidates must run from main (got $GITHUB_REF)."
+            exit 1
+          fi
+          GREEN=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=completed&per_page=20" \
+            --jq '[.workflow_runs[] | select(.conclusion=="success")] | length')
+          if [ "$GREEN" -lt 1 ]; then
+            echo "::error::No successful full CI run exists for exact candidate SHA ${GITHUB_SHA}."
+            exit 1
+          fi
+          echo "✓ exact candidate SHA has green full CI"
+
+      - name: Preflight — signing and notarization secrets exist
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          MISSING=""
+          for NAME in TAURI_SIGNING_PRIVATE_KEY APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            VALUE=$(printenv "$NAME" || true)
+            if [ -z "$VALUE" ]; then MISSING="$MISSING $NAME"; fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Candidate secrets missing:$MISSING"
+            exit 1
+          fi
+          echo "✓ candidate signing secrets present"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable branch, reviewed pin
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Require the requested version
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: |
+          set -euo pipefail
+          npm run version:check
+          if ! printf '%s' "$EXPECTED_VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::expected_version must be canonical x.y.z (got $EXPECTED_VERSION)."
+            exit 1
+          fi
+          ACTUAL_VERSION=$(jq -r .version package.json)
+          if [ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "::error::repo version $ACTUAL_VERSION does not match requested candidate $EXPECTED_VERSION."
+            exit 1
+          fi
+          echo "✓ candidate version is $ACTUAL_VERSION"
+
+      # Build-only: no tagName or releaseName means tauri-action cannot create a
+      # GitHub release. Apple credentials sign, notarize, and staple the app;
+      # the updater private key signs the .app.tar.gz.
+      - name: Build + sign + notarize app
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          args: --target universal-apple-darwin
+
+      - name: Locate candidate artifacts
+        id: artifacts
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: |
+          set -euo pipefail
+          APP=$(find src-tauri/target/universal-apple-darwin -type d -name '*.app' -path '*bundle/macos/*' | head -n 1)
+          DMG=$(find src-tauri/target/universal-apple-darwin -path '*bundle/dmg/*.dmg' | head -n 1)
+          UPDATE_TAR=$(find src-tauri/target/universal-apple-darwin -path '*bundle/macos/*.app.tar.gz' | head -n 1)
+          SIG="${UPDATE_TAR}.sig"
+          for VALUE in "$APP" "$DMG" "$UPDATE_TAR" "$SIG"; do
+            if [ -z "$VALUE" ] || [ ! -e "$VALUE" ]; then
+              echo "::error::candidate artifact missing: $VALUE"
+              exit 1
+            fi
+          done
+          PUB_DATE=$(git log -1 --format=%cI "$GITHUB_SHA")
+          mkdir -p candidate-output
+          node scripts/generate-latest-json.mjs \
+            --sig "$SIG" \
+            --version "v${EXPECTED_VERSION}" \
+            --pub-date "$PUB_DATE" \
+            --out candidate-output/latest.json
+          {
+            echo "app=$APP"
+            echo "dmg=$DMG"
+            echo "update_tar=$UPDATE_TAR"
+            echo "sig=$SIG"
+            echo "manifest=$PWD/candidate-output/latest.json"
+            echo "version=$EXPECTED_VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify app signature, architecture, version, and notarization
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          APP: ${{ steps.artifacts.outputs.app }}
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          INFO=$(codesign -dvv "$APP" 2>&1)
+          printf '%s\n' "$INFO" | grep -E 'Authority=Developer ID Application' >/dev/null
+          printf '%s\n' "$INFO" | grep -E "TeamIdentifier=${APPLE_TEAM_ID}" >/dev/null
+          codesign -d --verbose=2 "$APP" 2>&1 | grep -E 'flags=.*runtime' >/dev/null
+          BIN="$APP/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")"
+          ARCHS=$(lipo -archs "$BIN")
+          case "$ARCHS" in
+            *x86_64*arm64*|*arm64*x86_64*) ;;
+            *) echo "::error::candidate is not universal (got: $ARCHS)"; exit 1 ;;
+          esac
+          APP_VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
+          test "$APP_VERSION" = "$EXPECTED_VERSION"
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute --verbose=2 "$APP"
+          echo "✓ app signature, universal binary, version, and notarization verified"
+
+      - name: Verify updater signature cryptographically
+        env:
+          UPDATE_TAR: ${{ steps.artifacts.outputs.update_tar }}
+          SIG: ${{ steps.artifacts.outputs.sig }}
+          MANIFEST: ${{ steps.artifacts.outputs.manifest }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: |
+          set -euo pipefail
+          cargo run --locked --manifest-path src-tauri/Cargo.toml --example verify_minisign -- \
+            --payload "$UPDATE_TAR" \
+            --sig "$SIG" \
+            --pubkey-from-tauri-conf src-tauri/tauri.conf.json
+          node scripts/verify-release-assets.mjs \
+            --local-payload "$UPDATE_TAR" \
+            --local-sig "$SIG" \
+            --local-manifest "$MANIFEST" \
+            --pubkey-from-tauri-conf src-tauri/tauri.conf.json \
+            --expected-version "v${EXPECTED_VERSION}"
+
+      - name: Notarize, staple, and verify DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DMG: ${{ steps.artifacts.outputs.dmg }}
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict --verbose=2 "$DMG"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
+          echo "✓ DMG signature and notarization verified"
+
+      - name: Assemble candidate payload
+        env:
+          APP: ${{ steps.artifacts.outputs.app }}
+          DMG: ${{ steps.artifacts.outputs.dmg }}
+          UPDATE_TAR: ${{ steps.artifacts.outputs.update_tar }}
+          SIG: ${{ steps.artifacts.outputs.sig }}
+          MANIFEST: ${{ steps.artifacts.outputs.manifest }}
+          VERSION: ${{ steps.artifacts.outputs.version }}
+        run: |
+          set -euo pipefail
+          OUT=candidate-output/private-artifact
+          mkdir -p "$OUT"
+          cp "$DMG" "$OUT/Throughline_${VERSION}_universal.dmg"
+          cp "$UPDATE_TAR" "$OUT/Throughline.app.tar.gz"
+          cp "$SIG" "$OUT/Throughline.app.tar.gz.sig"
+          cp "$MANIFEST" "$OUT/latest.json"
+          printf 'commit=%s\nversion=%s\n' "$GITHUB_SHA" "$VERSION" > "$OUT/BUILD.txt"
+          (cd "$OUT" && shasum -a 256 Throughline_* Throughline.app.tar.gz Throughline.app.tar.gz.sig latest.json > SHA256SUMS.txt)
+
+      - name: Encrypt candidate before it leaves the runner
+        id: encrypted
+        env:
+          VERSION: ${{ steps.artifacts.outputs.version }}
+        run: |
+          set -euo pipefail
+          PLAIN=candidate-output/private-artifact
+          TAR="candidate-output/Throughline-v${VERSION}-rc.tar"
+          CIPHERTEXT="${TAR}.cms"
+          tar -C "$PLAIN" -cf "$TAR" .
+          openssl cms -encrypt -binary -aes-256-cbc -outform DER \
+            -in "$TAR" \
+            -out "$CIPHERTEXT" \
+            .github/rc-artifact-encryption.crt
+          rm -rf "$PLAIN" "$TAR"
+          test -s "$CIPHERTEXT"
+          shasum -a 256 "$CIPHERTEXT" > "${CIPHERTEXT}.sha256"
+          echo "ciphertext=$CIPHERTEXT" >> "$GITHUB_OUTPUT"
+          echo "checksum=${CIPHERTEXT}.sha256" >> "$GITHUB_OUTPUT"
+          echo "✓ only encrypted candidate bytes remain for upload"
+
+      - name: Upload encrypted candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Throughline-v${{ steps.artifacts.outputs.version }}-rc-encrypted-${{ github.sha }}
+          path: |
+            ${{ steps.encrypted.outputs.ciphertext }}
+            ${{ steps.encrypted.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
