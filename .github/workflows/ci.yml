@@ -80,9 +80,51 @@ jobs:
         working-directory: src-tauri
         run: cargo build --bin throughline
 
-      - name: Dependency audit (advisory, non-blocking)
+      # ── Dependency audits ────────────────────────────────────────────────
+      # A suite outside a gate is documentation, not protection (CLAUDE.md) —
+      # so the audits that matter BLOCK. Production deps ship inside the app:
+      # any advisory, at any severity, is a red build. The release toolchain
+      # (wrangler, @tauri-apps/cli) runs with publication credentials, so its
+      # subtrees block too (scripts/audit-release-tool.mjs). Only the residual
+      # dev-only tree (vite/vitest/etc. never shipped, never credentialed)
+      # stays advisory. The Rust half of this gate is the rust-advisories job.
+      - name: Production dependency audit (BLOCKING — these packages ship in the app)
+        run: npm audit --omit=dev --audit-level=low
+
+      - name: Release-tool dependency audit (BLOCKING — wrangler + @tauri-apps/cli subtrees)
+        run: node scripts/audit-release-tool.mjs
+
+      - name: Dev-only dependency audit (advisory, non-blocking — dev tree outside the gates above)
         run: npm audit --audit-level=high
         continue-on-error: true
+
+  rust-advisories:
+    # RustSec advisory gate over src-tauri/Cargo.lock — a REQUIRED gate, not
+    # advice. `cargo audit` fails on any known VULNERABILITY; --deny elevates
+    # `unsound` and `yanked` to failures too. The ONLY exceptions live in
+    # src-tauri/.cargo/audit.toml, each documented with its reason + revisit
+    # condition (currently one: RUSTSEC-2024-0429, glib — Linux-only subtree
+    # of Tauri 2's GTK3 stack, compiled into no macOS artifact). Plain
+    # `unmaintained` advisories stay visible warnings. Lockfile-only → ubuntu
+    # is fine and fast; the binary is release-built musl, pinned by sha256
+    # (no mutable tag, no compile step, and — per this repo's supply-chain
+    # rule — nothing executable fetched without a reviewed pin).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install cargo-audit (prebuilt, checksum-pinned)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o cargo-audit.tgz \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv0.22.2/cargo-audit-x86_64-unknown-linux-musl-v0.22.2.tgz"
+          echo "7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428  cargo-audit.tgz" | sha256sum -c -
+          tar -xzf cargo-audit.tgz --strip-components=1
+          ./cargo-audit --version
+
+      - name: Rust advisory audit (BLOCKING — vulnerabilities, unsound, yanked)
+        working-directory: src-tauri
+        run: ../cargo-audit audit --deny unsound --deny yanked
 
   plain-language-gate:
     # CORE-1169: the plain-language eval harness (Python) is a REQUIRED gate, not just

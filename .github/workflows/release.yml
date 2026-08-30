@@ -149,10 +149,10 @@ jobs:
       - name: Install Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          # Locked wrangler 4.110.0 declares engines.node >=22 — Node 20 would
-          # fail the publish step at the worst possible moment. Keep this in
-          # sync with devDependencies.wrangler's engine requirement (pinned by
-          # src/releasePipeline.test.ts).
+          # The LOCKED wrangler (exact-pinned in devDependencies) declares
+          # engines.node >=22 — Node 20 would fail the publish step at the
+          # worst possible moment. src/releasePipeline.test.ts pins this
+          # node-version against the locked wrangler's actual engines range.
           node-version: 22
           cache: npm
 

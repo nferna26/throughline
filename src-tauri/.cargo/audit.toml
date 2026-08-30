@@ -1,0 +1,30 @@
+# cargo-audit configuration — the Rust advisory gate's ONLY exceptions.
+#
+# CI runs `cargo audit --deny unsound --deny yanked` from src-tauri/ (ci.yml,
+# `rust-advisories` job — BLOCKING): real vulnerabilities always fail the
+# build; `unsound` and `yanked` advisories fail unless narrowly excepted HERE,
+# each entry carrying its reason and its revisit condition. Keep this list as
+# close to empty as the dependency graph allows, and reconcile it in
+# docs/AUDIT.md whenever it changes.
+#
+# Plain `unmaintained` advisories remain non-fatal warnings (visible in the CI
+# log, not gating). As of 2026-08-30 those are: the GTK3 binding stack
+# (RUSTSEC-2024-0411..0420, gtk-rs GTK3 bindings) plus proc-macro-error
+# (RUSTSEC-2024-0370, via glib-macros) — Linux-only dependencies of Tauri 2's
+# tao/wry/muda, compiled into no macOS artifact — and the unic-* crates
+# (RUSTSEC-2025-0075/0080/0081/0098/0100, via urlpattern ← tauri-utils), which
+# ARE compiled on macOS but carry no vulnerability. All of them are pinned by
+# the Tauri 2 dependency graph; re-check on every Tauri upgrade.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2024-0429 (unsound): glib::VariantStrIter's Iterator impls.
+    # UNAVOIDABLE: glib 0.18 is pinned by Tauri 2's Linux GTK3 stack
+    # (tao/wry/muda → gtk 0.18 → glib 0.18); the fixed release line
+    # (glib >= 0.20) is unreachable until Tauri itself moves off GTK3.
+    # NOT SHIPPED: the whole gtk/glib subtree is cfg(target_os = "linux") —
+    # it is compiled into no macOS artifact, and Throughline ships macOS-only
+    # (README "Platform support"; CI + release build on macOS runners).
+    # Revisit: delete this entry on any Tauri upgrade that moves glib >= 0.20.
+    "RUSTSEC-2024-0429",
+]
