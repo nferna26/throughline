@@ -15,7 +15,9 @@ value is in what it refuses to do. See the full list in `CLAUDE.md`.
 
 ## Development setup
 
-Prereqs: Node 20+, Rust + Cargo, Xcode Command Line Tools, macOS.
+Prereqs: Node 20+ (Node 22+ to run the release tooling — the exact-pinned
+`wrangler` declares `engines.node >= 22`), Rust + Cargo, Xcode Command Line
+Tools, macOS.
 
 ```bash
 git clone https://github.com/nferna26/throughline
@@ -30,26 +32,51 @@ rest of the app works without it.
 
 ## Before you open a PR
 
-Run the full check locally — CI runs the same on macOS:
+CI (`.github/workflows/ci.yml`, required on PRs to `main`) runs the gates
+below on macOS — run them locally first; CI will reject a red build:
 
 ```bash
+npm run version:check                      # tauri.conf / package.json / Cargo.toml agree
 npm run typecheck                          # tsc --noEmit
 npm run build                              # vite production build
-cd src-tauri && cargo test --all-targets   # 71 unit + 2 integration tests
+npm test                                   # Vitest (frontend + pipeline-invariant suites)
+npx playwright test                        # UI walkthrough + a11y (real frontend, faked IPC)
+cd src-tauri
+cargo test --all-targets                   # Rust unit + integration tests
+cargo run --example stage2_golden_loop     # the golden loop, isolated data dir
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
 ```
 
-All three must pass. CI will reject a red build.
+Dependency advisories **block** CI too (see `docs/AUDIT.md`):
+
+```bash
+npm audit --omit=dev --audit-level=low     # production deps: any advisory is red
+node scripts/audit-release-tool.mjs        # wrangler + @tauri-apps/cli subtrees
+cd src-tauri && cargo audit --deny unsound --deny yanked   # RustSec gate
+```
+
+The Python plain-language eval harness is a required gate as well
+(`eval/plain-language/`): `python -m pytest tests/ -q && python verify_gate.py`
+reproduces the committed-fixture result with no model calls.
 
 ## Architecture map
 
 - **Backend** (`src-tauri/src/`): `lib.rs` wires everything; commands live in
-  `commands/{books,sessions,notes,ai,settings_cmds}.rs`. Primitives:
-  `db.rs`, `migrations.rs`, `paths.rs`, `error.rs`, `log.rs`. Feature logic:
-  `import*.rs`, `epub_classify.rs`, `plan.rs`, `recovery.rs`, `ai_stub.rs`,
-  `ai_client.rs`, `circuit_breaker.rs`, `export.rs`, `settings.rs`.
-- **Frontend** (`src/`): `App.tsx` routes between `screens/{Today,Reader,Settings}`.
-  Reader splits into `TextReader` / `EpubReader`. Shared modal accessibility in
-  `hooks/useDialog.ts`.
+  `commands/{ai,backups,books,discover,feedback,notes,plans,sessions,settings_cmds}.rs`
+  (+ `db_helpers.rs`). Primitives: `db.rs`, `migrations.rs`, `paths.rs`,
+  `error.rs`, `log.rs`, `keystore.rs`. Feature logic: `import.rs` /
+  `import_epub.rs` / `epub_classify.rs` / `gutenberg_markup.rs` (ingest),
+  `book_structure.rs`, `chunker.rs`, `plan.rs`, `sittings.rs`, `phrases.rs`,
+  `ai_client.rs` / `ai_providers.rs` / `ai_stub.rs` / `ai_retention.rs`,
+  `circuit_breaker.rs`, `backup.rs`, `export.rs`, `settings.rs`,
+  `relaunch_focus.rs`.
+- **Frontend** (`src/`): `App.tsx` routes between `screens/` (`FrontDoor`,
+  `Today`, `TextReader`, `Library`, `Discover`, `NotesBrowser`,
+  `BookSwitcher`, `BookSetupSheet`, `Settings`). The Companion Margin lives in
+  `components/` (`MarginTutorCard`, `MarginNoteCard`, `SectionBriefingCard`,
+  `CloudConsentSheet` — a portaled real modal, `AiSetupSheet`). Shared modal
+  accessibility in `hooks/useDialog.ts`.
 - **IPC contract**: [`docs/IPC.md`](./docs/IPC.md). Changing a command's args or
   return shape is a breaking change — bump `COMMAND_API_VERSION` and note it in
   the CHANGELOG.
@@ -66,6 +93,11 @@ All three must pass. CI will reject a red build.
 - **AI calls**: any new path that reaches the network MUST route through
   `ai_client::validate_base_url` so the local-only invariant can't be bypassed.
   `tauri-plugin-http` / `tauri-plugin-shell` are banned (a test enforces this).
+- **Dependencies**: new dependencies are ask-first (`CLAUDE.md`), and every
+  dependency change must leave the blocking audits green — production npm
+  tree, release-tool subtrees, and the RustSec gate. Exceptions live only in
+  `src-tauri/.cargo/audit.toml`, each with a written reason and revisit
+  condition.
 - **Exports**: write through `paths::atomic_write_string`. Never `fs::write`
   user-facing artifacts directly.
 

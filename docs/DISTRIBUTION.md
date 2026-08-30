@@ -51,7 +51,11 @@ Two related-but-separate docs:
 > **Locked tooling.** `wrangler` is an exact-pinned devDependency installed by
 > `npm ci` from `package-lock.json`; the staging engine invokes that locked
 > local executable directly. Publication credentials never run `npx --yes`
-> (i.e. never execute code fetched at publish time).
+> (i.e. never execute code fetched at publish time). The pinned toolchain is
+> also AUDITED as a blocking CI gate: `scripts/audit-release-tool.mjs` fails
+> the build on any advisory anywhere in the `wrangler` or `@tauri-apps/cli`
+> subtrees — the packages that run with these credentials (see
+> `docs/AUDIT.md`).
 >
 > **One-time operator actions (Nick):** ① create the `release` GitHub
 > **environment** (Settings → Environments → New environment → `release`),
@@ -148,8 +152,8 @@ is created last. Pushing the tag is the single switch, so all review happens
 `WEEKEND_RC_LOG.md`).
 
 ```
-git tag v0.1.0
-git push origin v0.1.0       # → CI builds, signs, notarizes, PUBLISHES the release
+git tag vX.Y.Z
+git push origin vX.Y.Z       # → CI builds, signs, notarizes, PUBLISHES the release
 ```
 
 ---
@@ -293,26 +297,30 @@ won't install.
 
 ---
 
-## Status / what's left before the first public release
+## Shipping status (current release line: v0.9.3)
 
-Done:
+This pipeline is live — the standing prerequisites are in place, and the 0.9.x
+line (through **v0.9.3**, 2026-07-12; see `CHANGELOG.md`) ships through it:
+
 - ✅ **Apple signing + notarization secrets** set, and the *Developer ID
   Application: Trainable LLC* cert is in the keychain.
 - ✅ **Updater signing key** (`TAURI_SIGNING_PRIVATE_KEY`) uploaded; its public
   half matches the `pubkey` baked into `tauri.conf.json`.
-- ✅ **Releases publish on tag.** The workflow publishes every future tag
-  directly, then uploads runtime distribution artifacts to R2.
+- ✅ **Releases publish on tag**, fail-closed: green-CI + main-ancestry gate,
+  the protected `release` environment (required reviewers), staged
+  content-addressed R2 publication, and the single atomic manifest promotion.
+- ✅ **Release tooling is pinned AND audited** — exact-pinned wrangler invoked
+  locally (never `npx`), with a blocking CI audit over the release-tool
+  subtrees (`scripts/audit-release-tool.mjs`; see `docs/AUDIT.md`).
 
-Remaining:
-- **Push the branch + a tag.** The release workflow checks out the tagged commit,
-  so the commits must be on GitHub. Bump with `npm run version:set <x.y.z>`, then
-  `git push` the branch and `git tag vX.Y.Z && git push origin vX.Y.Z`.
-- **Test the notarized `.dmg`** on a clean Mac — Gatekeeper should open it with no
+Per release, after the workflow goes green (steps 6–7 of the checklist above):
+
+- **Verify the public origin**: `/updates/latest.json` returns `200` and
+  `/download` resolves from `readthroughline.com` (the workflow's post-verify
+  step already proved the bytes cryptographically — this is the human
+  spot-check).
+- **Sanity-check the `.dmg` on a clean Mac** — Gatekeeper opens it with no
   warning and no right-click.
-- **Create the protected `release` environment** and **deploy the updated site
-  Worker** (the two operator actions in the box at the top) — the release gate
-  fails until the environment exists, and the origin check fails until the
-  Worker resolves `/download` through the manifest.
-- **Do not make the GitHub repo private** until a real release has published
-  the content-addressed tuple plus `updates/latest.json` to R2, and both
-  `/download` and `/updates/latest.json` resolve from `readthroughline.com`.
+- **Keep the repo public until R2 is proven** — if the repo is ever made
+  private, do it only while `/download` and `/updates/latest.json` serve from
+  R2, since GitHub Releases are just a convenience mirror.

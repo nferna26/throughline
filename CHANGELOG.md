@@ -5,6 +5,58 @@ All notable changes to Throughline are documented here. Format loosely follows
 Tauri command surface has its own version (`COMMAND_API_VERSION`, currently 8)
 documented in [`docs/IPC.md`](./docs/IPC.md).
 
+## [Unreleased]
+
+Prelaunch blockers from the 2026-08-30 pass. No command-surface change
+(`COMMAND_API_VERSION` stays 8).
+
+### Fixed
+
+- **The cloud-consent sheet can never be clipped or covered (PRIV-A11Y-009).**
+  `CloudConsentSheet` now renders through a React portal to `document.body`
+  instead of inside the margin rail's subtree, where the narrow-window overlay
+  drawer's `transform` re-based the full-screen scrim to the DRAWER's box (a
+  clipped "full-screen" modal) and the rail/card open animations could trap it
+  under sibling chrome — and where the always-mounted rail's `inert` could
+  reach it. Focus trapping, Escape-cancels, focus restoration, the
+  exact-envelope disclosure, and both fail-closed behaviors are unchanged
+  (component-pinned in `CloudConsentSheet.test.tsx`). The Playwright
+  walkthrough now PROVES the sheet is top-most and interactable — portal
+  placement, viewport-exact scrim geometry, and `elementFromPoint` occlusion
+  probes at the corners, center, and both action buttons — for the passage
+  lenses (`cloud-consent-gate`) AND the first-cloud Deep Study briefing in the
+  narrow drawer layout (`cloud-consent-gate-deep-study`), with screenshots
+  retained.
+
+### Changed
+
+- **Dependency audits are blocking CI gates.** Production npm tree
+  (`npm audit --omit=dev --audit-level=low` — any severity fails), the
+  release toolchain's subtrees (`scripts/audit-release-tool.mjs` — wrangler +
+  @tauri-apps/cli, the packages that run with publication credentials), and a
+  RustSec gate (`cargo audit --deny unsound --deny yanked` over
+  `src-tauri/Cargo.lock`, checksum-pinned binary) with exceptions only in the
+  documented `src-tauri/.cargo/audit.toml` (currently one: RUSTSEC-2024-0429,
+  glib — Linux-only subtree of Tauri 2's GTK3 stack, compiled into no macOS
+  artifact). The residual dev-only npm tree keeps a non-blocking advisory
+  audit; the gate wiring itself is source-pinned in
+  `src/releasePipeline.test.ts`.
+- **Conservative dependency refresh — no major migrations.** Node: wrangler
+  4.110.0 → 4.127.1 (clears the miniflare / sharp / undici advisory chain
+  behind the pinned release tool), vite → 7.3.6 plus transitive fixes
+  (nanoid, postcss, @babel/core, esbuild) — `npm audit` reports zero
+  advisories at every level. Rust (Cargo.lock only): anyhow 1.0.104
+  (RUSTSEC-2026-0190), plist 1.10.0 → quick-xml 0.41.0
+  (RUSTSEC-2026-0194/0195), quinn-proto 0.11.17 (RUSTSEC-2026-0185),
+  serde_with 3.22.0, event-listener 5.4.2 (RUSTSEC-2026-0221), and the Tauri
+  patch chain 2.11.2 → 2.11.5 with matching plugin patches — `cargo audit`
+  reports zero vulnerabilities.
+- **Docs and fixtures match v0.9.3.** CONTRIBUTING.md carries the real CI
+  gate list and current architecture map; docs/DISTRIBUTION.md reflects the
+  live 0.9.x shipping status; docs/AUDIT.md is reconciled (advisory posture
+  included); docs/v1.1-gaps.md records what has shipped; the e2e
+  fake-backend's version fixture reports 0.9.3 (was 0.8.4).
+
 ## [0.9.3] - 2026-07-12
 
 Public-beta blocker repairs from the 2026-07 end-to-end audit
