@@ -42,6 +42,7 @@ If you think something outside this list is needed, STOP and ask in plain text b
 ## Working style
 - Smallest change that advances the loop. Prefer boring, inspectable code.
 - After each phase, state the acceptance test and actually run it — don't just claim completion.
+- Review-to-PR default: once a branch receives **MOVE FORWARD** and authentication is available, push it and open the PR automatically; do not stop at a command handoff. If push or PR creation is blocked, report the exact blocker.
 - Keep imported files immutable. Never modify a source file after import.
 - Use stable IDs and predictable filenames on export so re-exporting updates rather than duplicates.
 - **Acceptance/diagnostic programs MUST NOT write to the user's real database.** They live in `src-tauri/examples/` (Cargo example targets, so they are never bundled into the shipped app). Every program under `src-tauri/examples/` must either:
