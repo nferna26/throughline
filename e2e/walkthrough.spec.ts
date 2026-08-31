@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 
 // Drives the real frontend through its key states (seeded fake backend) and
 // writes a labelled screenshot of each to e2e/shots/ — the images the agent reads
@@ -419,6 +419,80 @@ test("reader-margin-and-tutor", async ({ page }) => {
   await expect.soft(page.getByText(/Aurelius is bracing himself|telling himself|Stoic|cooperation/).first()).toBeVisible();
 });
 
+/**
+ * PRIV-A11Y-009 (prelaunch blocker): for an irreversible privacy dialog,
+ * DOM-visibility is not enough — the sheet must be the TOP-MOST, hit-testable
+ * layer, portaled out of the margin rail's subtree. Historically the sheet
+ * rendered inside the rail, where the narrow-window drawer's
+ * `transform: translateX(…)` re-based its `position: fixed` scrim to the
+ * DRAWER's box (a clipped "full-screen" scrim) and the rail/card animations
+ * trapped its z-index under sibling chrome. This helper proves, with layout +
+ * occlusion evidence, that can't happen:
+ *   1. the scrim's parent is <body> and it sits outside `.tl-margin-rail`
+ *      and every `.tl-card` (the portal actually escaped);
+ *   2. the scrim's box equals the VIEWPORT (a transformed containing block
+ *      would shrink it to the drawer);
+ *   3. hit tests: `document.elementFromPoint` at the viewport center, at all
+ *      four scrim corners, and at the center of BOTH action buttons resolves
+ *      inside the consent layer — nothing overlays, clips, or covers it.
+ */
+async function expectConsentTopmostAndInteractable(page: Page, consent: Locator) {
+  const vp = page.viewportSize()!;
+
+  const geometry = await page.evaluate(() => {
+    const scrim = document.querySelector(".tl-scrim");
+    const r = scrim?.getBoundingClientRect();
+    return {
+      parentIsBody: scrim?.parentElement === document.body,
+      insideRailOrCard: !!scrim?.closest(".tl-margin-rail, .tl-card"),
+      rect: r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null,
+    };
+  });
+  expect(geometry.parentIsBody, "consent scrim must be portaled to <body>").toBe(true);
+  expect(geometry.insideRailOrCard, "consent scrim must escape the rail/card subtree").toBe(false);
+  expect(geometry.rect, "consent scrim must exist").not.toBeNull();
+  // The scrim's box is the viewport, not a transformed ancestor's box.
+  expect(Math.abs(geometry.rect!.x - 0)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.rect!.y - 0)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.rect!.w - vp.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.rect!.h - vp.height)).toBeLessThanOrEqual(1);
+
+  // Occlusion evidence: the top-most element at the center and at every scrim
+  // corner belongs to the consent layer (scrim or sheet), never reader chrome.
+  const probes: Array<[number, number]> = [
+    [Math.floor(vp.width / 2), Math.floor(vp.height / 2)],
+    [2, 2],
+    [vp.width - 3, 2],
+    [2, vp.height - 3],
+    [vp.width - 3, vp.height - 3],
+  ];
+  for (const [x, y] of probes) {
+    const hit = await page.evaluate(([px, py]) => {
+      const el = document.elementFromPoint(px, py);
+      return {
+        inConsent: !!el?.closest(".tl-scrim"),
+        what: el ? `${el.tagName.toLowerCase()}.${String((el as HTMLElement).className)}` : "(nothing)",
+      };
+    }, [x, y]);
+    expect(hit.inConsent, `hit test at (${x},${y}) must land on the consent layer, hit ${hit.what}`).toBe(true);
+  }
+
+  // Interactability: the top-most element at each action button's center IS
+  // that button — a real pointer there reaches it (nothing covers it).
+  const actionButtons: RegExp[] = [/^Not now$/, /^Send to /];
+  for (const name of actionButtons) {
+    const btn = consent.getByRole("button", { name });
+    const box = (await btn.boundingBox())!;
+    expect(box, `button ${name} must have a layout box`).not.toBeNull();
+    const label = await btn.textContent();
+    const topHit = await page.evaluate(([x, y]) => {
+      const el = document.elementFromPoint(x, y);
+      return el?.closest("button")?.textContent ?? null;
+    }, [box.x + box.width / 2, box.y + box.height / 2]);
+    expect(topHit, `the top-most element at ${label}'s center must be the button itself`).toBe(label);
+  }
+}
+
 test("cloud-consent-gate", async ({ page }) => {
   await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__TL_FAKE_NEEDS_CONSENT__ = true; });
   await page.goto("/");
@@ -445,12 +519,55 @@ test("cloud-consent-gate", async ({ page }) => {
   // fields + full passage are disclosed.
   await expect(consent.getByRole("button", { name: "Not now" })).toBeFocused();
   await expect(consent.getByText(/exactly as it will be sent/i)).toBeVisible();
+  // Not merely DOM-visible: the sheet is the top-most, hit-testable layer —
+  // the margin rail / anchored tutor card can no longer clip or cover it.
+  await expectConsentTopmostAndInteractable(page, consent);
   await shoot(page, "16-cloud-consent");
   // R6-1: Send carries the backend-issued consent binding WITH the ask — no
   // separate confirm round-trip. The fake validates provider + host +
   // fingerprint exactly like the real send boundary, then streams the answer.
+  // A REAL (non-forced) click — Playwright's own hit-target check is further
+  // occlusion evidence that the button receives the pointer.
   await consent.getByRole("button", { name: /^Send to/ }).click();
   await expect(page.getByText(/bracing himself before the day/)).toBeVisible();
+});
+
+test("cloud-consent-gate-deep-study", async ({ page }) => {
+  // The FIRST cloud action is Deep Study's section briefing — the same
+  // fail-closed sheet, with the SECTION envelope (subject: "section"). Run at
+  // a NARROW width, where the margin rail becomes the transformed overlay
+  // drawer: exactly the layout whose `transform` used to re-base the fixed
+  // scrim and clip the sheet to the drawer's box (the prelaunch blocker).
+  await page.setViewportSize({ width: 720, height: 820 });
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TL_FAKE_NEEDS_CONSENT__ = true;
+    w.__TL_FAKE_DEEP_STUDY__ = true;
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Continue reading" }).click();
+  await expect(page.locator(".tl-readcol p").first()).toBeVisible();
+
+  // Deep Study auto-prepares once the session starts (reader-initiated by
+  // opening today's reading) → its first cloud send hits the consent gate.
+  const consent = page.getByRole("dialog", { name: /send this section to/i });
+  await expect(consent).toBeVisible();
+  // Section-scoped disclosure — never the whole book — and the exact
+  // destination host.
+  await expect(consent.getByText(/Today's section \(below\) is sent to api\.anthropic\.com/)).toBeVisible();
+  await expect(consent.getByText(/never the whole book/)).toBeVisible();
+  await expect(consent.getByText(/This is the section, exactly as it will be sent/)).toBeVisible();
+  // The FULL section text is disclosed (its opening line, not a truncation).
+  await expect(consent.locator("blockquote")).toContainText(/Begin the morning by saying to thyself/);
+  // The safe choice holds initial focus.
+  await expect(consent.getByRole("button", { name: "Not now" })).toBeFocused();
+  // Top-most + interactable in the drawer layout — the regression case.
+  await expectConsentTopmostAndInteractable(page, consent);
+  await shoot(page, "16b-cloud-consent-deep-study");
+  // Confirm → the bound ask streams the briefing into the margin drawer.
+  await consent.getByRole("button", { name: /^Send to/ }).click();
+  await expect(page.getByText(/bracing himself before the day/)).toBeVisible();
+  await shoot(page, "16c-deep-study-briefing-after-consent");
 });
 
 test("cap-exhausted-fallback", async ({ page }) => {

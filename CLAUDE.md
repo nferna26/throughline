@@ -235,10 +235,17 @@ HANDED to Nick as a ready-to-run command, never executed by the agent.
   stages because the Playwright suite ran nowhere.)
 
   Suite registry — CI gates (`.github/workflows/ci.yml`, required on PRs to main):
-  typecheck (`tsc --noEmit`) · frontend build · Vitest · `cargo test --all-targets` ·
+  version consistency (`npm run version:check`) · typecheck (`tsc --noEmit`) ·
+  frontend build · Vitest · `cargo test --all-targets` ·
   golden loop (`cargo run --example stage2_golden_loop`) · clippy `-D warnings` ·
   `cargo fmt --check` · Playwright walkthrough + a11y (`npx playwright test`) ·
-  production binary build. Registered manual: the 7 `#[ignore]` live-API checks in
+  production binary build · production dependency audit
+  (`npm audit --omit=dev --audit-level=low`, BLOCKING) · release-tool audit
+  (`node scripts/audit-release-tool.mjs`, BLOCKING) · RustSec advisory gate
+  (`cargo audit --deny unsound --deny yanked`; exceptions ONLY in
+  `src-tauri/.cargo/audit.toml`, documented — see docs/AUDIT.md) ·
+  plain-language gate (`eval/plain-language`: pytest + `verify_gate.py` over
+  committed fixtures). Registered manual: the 7 `#[ignore]` live-API checks in
   `ai_providers.rs` (need real credentials; run before shipping provider/relay
   changes); `verify:ui` screenshot review (human, per UI redesign).
 - **Platform defaults are audit surface.** Every third-party service in a request path

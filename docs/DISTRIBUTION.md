@@ -51,7 +51,11 @@ Two related-but-separate docs:
 > **Locked tooling.** `wrangler` is an exact-pinned devDependency installed by
 > `npm ci` from `package-lock.json`; the staging engine invokes that locked
 > local executable directly. Publication credentials never run `npx --yes`
-> (i.e. never execute code fetched at publish time).
+> (i.e. never execute code fetched at publish time). The pinned toolchain is
+> also AUDITED as a blocking CI gate: `scripts/audit-release-tool.mjs` fails
+> the build on any advisory anywhere in the `wrangler` or `@tauri-apps/cli`
+> subtrees — the packages that run with these credentials (see
+> `docs/AUDIT.md`).
 >
 > **One-time operator actions (Nick):** ① create the `release` GitHub
 > **environment** (Settings → Environments → New environment → `release`),
@@ -148,8 +152,8 @@ is created last. Pushing the tag is the single switch, so all review happens
 `WEEKEND_RC_LOG.md`).
 
 ```
-git tag v0.1.0
-git push origin v0.1.0       # → CI builds, signs, notarizes, PUBLISHES the release
+git tag vX.Y.Z
+git push origin vX.Y.Z       # → CI builds, signs, notarizes, PUBLISHES the release
 ```
 
 ---
@@ -293,26 +297,45 @@ won't install.
 
 ---
 
-## Status / what's left before the first public release
+## Shipping status (public: v0.9.2 · candidate: v0.9.3)
 
-Done:
+The latest PUBLIC release is **v0.9.2**. The repo's version triplet sits at
+**v0.9.3** — the UNRELEASED candidate carrying the public-beta blocker
+repairs (see `CHANGELOG.md`). The fail-closed publication pipeline above and
+the blocking dependency-audit gates are **implemented but have not yet
+carried a real v0.9.3 production release** — treat their first live run as
+part of the release, not as something already proven in production.
+
+Standing prerequisites in place:
+
 - ✅ **Apple signing + notarization secrets** set, and the *Developer ID
   Application: Trainable LLC* cert is in the keychain.
 - ✅ **Updater signing key** (`TAURI_SIGNING_PRIVATE_KEY`) uploaded; its public
   half matches the `pubkey` baked into `tauri.conf.json`.
-- ✅ **Releases publish on tag.** The workflow publishes every future tag
-  directly, then uploads runtime distribution artifacts to R2.
+- ✅ **Release tooling pinned AND audited** — exact-pinned wrangler invoked
+  locally (never `npx`), with a blocking CI audit over the release-tool
+  subtrees (`scripts/audit-release-tool.mjs`; see `docs/AUDIT.md`).
 
-Remaining:
-- **Push the branch + a tag.** The release workflow checks out the tagged commit,
-  so the commits must be on GitHub. Bump with `npm run version:set <x.y.z>`, then
-  `git push` the branch and `git tag vX.Y.Z && git push origin vX.Y.Z`.
-- **Test the notarized `.dmg`** on a clean Mac — Gatekeeper should open it with no
-  warning and no right-click.
-- **Create the protected `release` environment** and **deploy the updated site
-  Worker** (the two operator actions in the box at the top) — the release gate
-  fails until the environment exists, and the origin check fails until the
-  Worker resolves `/download` through the manifest.
-- **Do not make the GitHub repo private** until a real release has published
-  the content-addressed tuple plus `updates/latest.json` to R2, and both
-  `/download` and `/updates/latest.json` resolve from `readthroughline.com`.
+Still required before v0.9.3 ships:
+
+- **A fresh release candidate from the final merged SHA**
+  (`release-candidate.yml`) — never from a pre-merge branch build.
+- **Clean-Mac `.dmg` test** — Gatekeeper opens it with no warning and no
+  right-click, on a Mac that never had the dev build.
+- **Public-origin verification** after the pointer switch —
+  `/updates/latest.json` returns `200` and `/download` resolves from
+  `readthroughline.com` (the workflow's post-verify step proves the bytes
+  cryptographically; this is the human spot-check on top).
+- **The packaged accessibility checklist**
+  (`docs/A11Y_MANUAL_CHECKLIST.md`) run against the candidate build.
+
+The one-time operator actions in the box at the top (the protected `release`
+environment; the manifest-resolving site Worker) are verified at run time by
+the gate job and the capability preflight — the run fails closed if either is
+missing.
+
+On repo visibility: the repository **stays public** — the open-source build
+is part of the product (readers bring their own key, sign in through Codex,
+or run local). Making it private would be a deliberate product/licensing
+decision with its own review, NOT a step this pipeline enables by merely
+proving R2 serves `/download` and `/updates/latest.json`.

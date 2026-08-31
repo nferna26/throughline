@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { errorMessage } from "../types";
 import { useDialog } from "../hooks/useDialog";
 
@@ -108,7 +109,24 @@ export default function CloudConsentSheet(props: {
       ]
     : [];
 
-  return (
+  // PORTALED to document.body (a real full-screen modal, not a card overlay).
+  // Both invokers mount this sheet from deep inside the margin rail — the
+  // anchored tutor card and Deep Study's briefing card — and that subtree is
+  // hostile territory for a `position: fixed` scrim:
+  //   - the narrow-window overlay drawer puts `transform: translateX(…)` on
+  //     `.tl-margin-rail`, which makes the RAIL the containing block for fixed
+  //     descendants — the "full-screen" scrim then sizes/clips to the drawer;
+  //   - the rail's opacity transition and the anchored card's open animation
+  //     each create transient stacking contexts, trapping the scrim's z-index
+  //     under sibling chrome while they run;
+  //   - the always-mounted rail is `inert` + `overflow: hidden` when closed.
+  // An irreversible privacy decision must never render partially covered,
+  // clipped, or inert, so the sheet escapes to <body>. React portals keep
+  // SYNTHETIC event bubbling through the component tree (unchanged behavior
+  // for the cards' onClick handlers); focus trapping, Escape, initial focus,
+  // and focus restoration all live on the sheet's own node via useDialog, so
+  // they are unaffected by where the DOM node parks.
+  return createPortal(
     <div className="tl-scrim" onClick={guardedCancel}>
       <div
         ref={sheetRef}
@@ -215,6 +233,7 @@ export default function CloudConsentSheet(props: {
           </details>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

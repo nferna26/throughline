@@ -219,6 +219,11 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
       }
       case "cmd_get_settings": {
         const base = Object.assign({}, SETTINGS, APPEARANCE);
+        // __TL_FAKE_DEEP_STUDY__ → the reader chose Deep Study margin help, so
+        // TextReader mounts SectionBriefingCard for today's section. Combined
+        // with __TL_FAKE_NEEDS_CONSENT__ this drives the FIRST-cloud briefing
+        // through the same consent gate the lenses use (subject: "section").
+        if (window.__TL_FAKE_DEEP_STUDY__) base.margin_help = "deep_study";
         if (window.__TL_FAKE_COMPANY_ACTIVE__ || window.__TL_FAKE_COMPANY_UNLICENSED__)
           return Object.assign(base, { ai_provider: "company", ai_remote_allowed: true, ai_local_only: false, ai_posture: "Sends your selection to ai.readthroughline.com", ai_model_anthropic: "claude-sonnet-4-6" });
         return window.__TL_FAKE_CLOUD__
@@ -401,7 +406,10 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
         if (args && args.lineSpacing) APPEARANCE.reading_line_spacing = args.lineSpacing;
         return handle("cmd_get_settings", {});
       case "cmd_feedback_diagnostics":
-        return { app_version: "0.8.4", macos_version: "15.5", mode: "included" };
+        // Keep in lockstep with the shipped version (package.json /
+        // tauri.conf.json / Cargo.toml — `npm run version:check`), so the
+        // Settings rail footer + feedback preview screenshots show the truth.
+        return { app_version: "0.9.3", macos_version: "15.5", mode: "included" };
       case "cmd_backup_status":
         return { enabled: BACKUPS_ON, last_backup_at: BACKUPS_ON ? LAST_BACKUP_AT : null, undo_available: false };
       case "cmd_set_backups_enabled":
@@ -428,8 +436,8 @@ For we are made for cooperation, like feet, like hands, like eyelids, like the r
         if (window.__TL_FAKE_UPDATE_AVAILABLE__ || window.__TL_FAKE_UPDATE_DOWNLOAD_FAILS__) {
           return {
             rid: 4242,
-            currentVersion: "0.8.4",
-            version: "0.9.9",
+            currentVersion: "0.9.3", // the installed build (matches the repo version)
+            version: "0.9.9", // the offered update — must stay greater than currentVersion
             date: null,
             body: null,
             rawJson: window.__TL_FAKE_UPDATE_CRITICAL__ ? { severity: "critical" } : {},

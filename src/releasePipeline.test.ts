@@ -350,3 +350,47 @@ describe("supply chain — actions and tooling pinned to immutable revisions (RE
     expect(pkg.devDependencies.wrangler).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });
+
+describe("dependency audits are BLOCKING CI gates (prelaunch hardening)", () => {
+  // CLAUDE.md: a suite outside a gate is documentation, not protection. The
+  // audits that guard shipped code and credentialed tooling must FAIL the
+  // build — these pins keep anyone from quietly re-adding continue-on-error
+  // or deleting a gate.
+  it("the production dependency audit blocks at ANY severity", () => {
+    const at = ci.indexOf("npm audit --omit=dev --audit-level=low");
+    expect(at, "production audit step must exist").toBeGreaterThan(-1);
+    // No escape hatch on the blocking steps: the only continue-on-error in
+    // the audit block belongs to the residual dev-only advisory step.
+    const window = ci.slice(at, ci.indexOf("Dev-only dependency audit"));
+    expect(window).not.toContain("continue-on-error");
+  });
+
+  it("the release-tool audit (wrangler + @tauri-apps/cli subtrees) blocks", async () => {
+    expect(ci).toContain("node scripts/audit-release-tool.mjs");
+    const audit = (await import("../scripts/audit-release-tool.mjs?raw")).default;
+    // The gate audits the tools that actually hold release credentials…
+    expect(audit).toContain('"wrangler"');
+    expect(audit).toContain('"@tauri-apps/cli"');
+    // …and fails closed on a missing root or an unreadable report.
+    expect(audit).toContain("not a declared dependency");
+    expect(audit).toContain("process.exit(1)");
+  });
+
+  it("the residual dev-only audit is explicitly advisory (and only that one)", () => {
+    const devOnly = ci.indexOf("Dev-only dependency audit");
+    expect(devOnly).toBeGreaterThan(-1);
+    expect(ci.slice(devOnly)).toMatch(/npm audit --audit-level=high\s*\n\s*continue-on-error: true/);
+  });
+
+  it("the Rust advisory gate blocks on vulnerabilities, unsound, and yanked, with exceptions ONLY in audit.toml", async () => {
+    expect(ci).toMatch(/rust-advisories:/);
+    expect(ci).toContain("cargo-audit audit --deny unsound --deny yanked");
+    // The cargo-audit binary is immutable: exact release asset + sha256.
+    expect(ci).toMatch(/cargo-audit%2Fv\d+\.\d+\.\d+\/cargo-audit-x86_64-unknown-linux-musl/);
+    expect(ci).toMatch(/[0-9a-f]{64} {2}cargo-audit\.tgz" \| sha256sum -c -/);
+    // The exception file exists and every entry is documented with a reason.
+    const auditToml = (await import("../src-tauri/.cargo/audit.toml?raw")).default;
+    expect(auditToml).toContain("[advisories]");
+    expect(auditToml).toMatch(/# RUSTSEC-2024-0429[\s\S]*?Linux[\s\S]*?"RUSTSEC-2024-0429"/);
+  });
+});
