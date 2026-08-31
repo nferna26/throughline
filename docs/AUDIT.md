@@ -25,7 +25,7 @@ Auditing is a **blocking gate**, not advice (`ci.yml`; source-pinned in `src/rel
 
 - `docs/REVIEW-2026-06-09.md` captured pre-0.6 launch risks, including missing audit index, export-root drift, and API-version history drift.
 - `docs/REVIEW-2026-06-10.md` captured the later field-test sweep. Several launch blockers from that packet have since been fixed in code, including the window drag permission, release `releaseDraft: false`, default export root, bundled Discover search, and company-relay/cap handling.
-- `docs/v1.1-gaps.md` is the 2026-06-07 persona backlog; its status header records what has shipped as of v0.9.3 and what remains open.
+- `docs/v1.1-gaps.md` is the 2026-06-07 persona backlog; its status header records what has landed as of the v0.9.3 candidate (latest public release: v0.9.2) and what remains open.
 
 ## Standing reminders
 

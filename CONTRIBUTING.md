@@ -26,14 +26,23 @@ npm install
 npm run tauri dev
 ```
 
-The AI tutor needs a local OpenAI-compatible server (LM Studio, llama.cpp, or
-any MLX server) listening on `http://localhost:1234/v1`. It's optional — the
-rest of the app works without it.
+The AI tutor is optional — the rest of the app works with no AI at all — and
+the source build supports every provider mode: **Local** (loopback-only; LM
+Studio, llama.cpp, or any OpenAI-compatible server on
+`http://localhost:1234/v1`), **your own Anthropic or OpenAI API key**, or
+**Codex sign-in** (your ChatGPT account). The **$20 signed build** is the
+same codebase preconfigured through Throughline's relay
+(`ai.readthroughline.com`) — zero setup, metered as explanations, never
+tokens. See [`docs/AI_PROVIDERS.md`](./docs/AI_PROVIDERS.md).
 
 ## Before you open a PR
 
-CI (`.github/workflows/ci.yml`, required on PRs to `main`) runs the gates
-below on macOS — run them locally first; CI will reject a red build:
+CI (`.github/workflows/ci.yml`) runs the gates below on macOS for every PR
+and push to `main` — run them locally first. A red run blocks the merge by
+agreement today, not by mechanism: `main` has no branch protection yet, so
+configuring these jobs as **required status checks** is an outstanding
+operator action. Until then, treat any red run as a hard stop even though
+GitHub won't enforce it for you:
 
 ```bash
 npm run version:check                      # tauri.conf / package.json / Cargo.toml agree
@@ -56,8 +65,8 @@ node scripts/audit-release-tool.mjs        # wrangler + @tauri-apps/cli subtrees
 cd src-tauri && cargo audit --deny unsound --deny yanked   # RustSec gate
 ```
 
-The Python plain-language eval harness is a required gate as well
-(`eval/plain-language/`): `python -m pytest tests/ -q && python verify_gate.py`
+The Python plain-language eval harness runs as its own blocking CI job as
+well (`eval/plain-language/`): `python -m pytest tests/ -q && python verify_gate.py`
 reproduces the committed-fixture result with no model calls.
 
 ## Architecture map

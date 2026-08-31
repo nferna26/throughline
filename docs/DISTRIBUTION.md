@@ -297,30 +297,45 @@ won't install.
 
 ---
 
-## Shipping status (current release line: v0.9.3)
+## Shipping status (public: v0.9.2 · candidate: v0.9.3)
 
-This pipeline is live — the standing prerequisites are in place, and the 0.9.x
-line (through **v0.9.3**, 2026-07-12; see `CHANGELOG.md`) ships through it:
+The latest PUBLIC release is **v0.9.2**. The repo's version triplet sits at
+**v0.9.3** — the UNRELEASED candidate carrying the public-beta blocker
+repairs (see `CHANGELOG.md`). The fail-closed publication pipeline above and
+the blocking dependency-audit gates are **implemented but have not yet
+carried a real v0.9.3 production release** — treat their first live run as
+part of the release, not as something already proven in production.
+
+Standing prerequisites in place:
 
 - ✅ **Apple signing + notarization secrets** set, and the *Developer ID
   Application: Trainable LLC* cert is in the keychain.
 - ✅ **Updater signing key** (`TAURI_SIGNING_PRIVATE_KEY`) uploaded; its public
   half matches the `pubkey` baked into `tauri.conf.json`.
-- ✅ **Releases publish on tag**, fail-closed: green-CI + main-ancestry gate,
-  the protected `release` environment (required reviewers), staged
-  content-addressed R2 publication, and the single atomic manifest promotion.
-- ✅ **Release tooling is pinned AND audited** — exact-pinned wrangler invoked
+- ✅ **Release tooling pinned AND audited** — exact-pinned wrangler invoked
   locally (never `npx`), with a blocking CI audit over the release-tool
   subtrees (`scripts/audit-release-tool.mjs`; see `docs/AUDIT.md`).
 
-Per release, after the workflow goes green (steps 6–7 of the checklist above):
+Still required before v0.9.3 ships:
 
-- **Verify the public origin**: `/updates/latest.json` returns `200` and
-  `/download` resolves from `readthroughline.com` (the workflow's post-verify
-  step already proved the bytes cryptographically — this is the human
-  spot-check).
-- **Sanity-check the `.dmg` on a clean Mac** — Gatekeeper opens it with no
-  warning and no right-click.
-- **Keep the repo public until R2 is proven** — if the repo is ever made
-  private, do it only while `/download` and `/updates/latest.json` serve from
-  R2, since GitHub Releases are just a convenience mirror.
+- **A fresh release candidate from the final merged SHA**
+  (`release-candidate.yml`) — never from a pre-merge branch build.
+- **Clean-Mac `.dmg` test** — Gatekeeper opens it with no warning and no
+  right-click, on a Mac that never had the dev build.
+- **Public-origin verification** after the pointer switch —
+  `/updates/latest.json` returns `200` and `/download` resolves from
+  `readthroughline.com` (the workflow's post-verify step proves the bytes
+  cryptographically; this is the human spot-check on top).
+- **The packaged accessibility checklist**
+  (`docs/A11Y_MANUAL_CHECKLIST.md`) run against the candidate build.
+
+The one-time operator actions in the box at the top (the protected `release`
+environment; the manifest-resolving site Worker) are verified at run time by
+the gate job and the capability preflight — the run fails closed if either is
+missing.
+
+On repo visibility: the repository **stays public** — the open-source build
+is part of the product (readers bring their own key, sign in through Codex,
+or run local). Making it private would be a deliberate product/licensing
+decision with its own review, NOT a step this pipeline enables by merely
+proving R2 serves `/download` and `/updates/latest.json`.

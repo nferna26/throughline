@@ -53,8 +53,8 @@ Prelaunch blockers from the 2026-08-30 pass. No command-surface change
   reports zero vulnerabilities.
 - **Docs and fixtures match v0.9.3.** CONTRIBUTING.md carries the real CI
   gate list and current architecture map; docs/DISTRIBUTION.md reflects the
-  live 0.9.x shipping status; docs/AUDIT.md is reconciled (advisory posture
-  included); docs/v1.1-gaps.md records what has shipped; the e2e
+  real shipping status (v0.9.2 public; v0.9.3 the unreleased candidate); docs/AUDIT.md is reconciled (advisory posture
+  included); docs/v1.1-gaps.md records what has landed; the e2e
   fake-backend's version fixture reports 0.9.3 (was 0.8.4).
 
 ## [0.9.3] - 2026-07-12
