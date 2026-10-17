@@ -1,3 +1,4 @@
+# Private signing dispatch: 96a28afe72fb4f70840e335bbd8ec85b
 # Nick approved this bounded signing-only bridge on 2026-10-17.
 # Reuses existing secrets without exporting them or publishing Mod.
 name: Notarize a private Mod candidate
