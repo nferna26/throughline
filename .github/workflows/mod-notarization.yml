@@ -1,4 +1,4 @@
-# Private signing dispatch: d90d9d84ed884ee0b7cbd27ed83ca406
+# Private signing dispatch: 7b7732b556e8426ea39e7a9e3f8374b8
 # Nick approved this bounded signing-only bridge on 2026-10-17.
 # Reuses existing secrets without exporting them or publishing Mod.
 name: Notarize a private Mod candidate
@@ -47,8 +47,34 @@ jobs:
           xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --output-format json > "$RUNNER_TEMP/history.json" 2> "$RUNNER_TEMP/notary-error.txt"
           ACCOUNT_EXIT=$?
           export ACCOUNT_EXIT
-          if [[ "$ACCOUNT_EXIT" == 0 && "$APPLE_TEAM_ID" == 845UL2K27Y ]]; then
-            xcrun notarytool submit "$INPUT_FILE" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait --timeout 5m --output-format json > "$RESULT_FILE" 2> "$RUNNER_TEMP/notary-error.txt"
+          export APPLE_NOTARY_ID="$APPLE_ID"
+          export ALIAS_EXIT=-1
+          # Optional, private account-rename diagnosis. No identifier or credential
+          # is embedded in the public workflow. Only Nick's exact former alias is
+          # admitted; use the same credential and unchanged developer team.
+          if [[ "$ACCOUNT_EXIT" != 0 && "$APPLE_TEAM_ID" == 845UL2K27Y ]]; then
+            npx --yes wrangler@4.148.0 r2 object get "mod-private-releases/canaries/notarization/account-alias.txt" --remote --file "$RUNNER_TEMP/account-alias.txt" > "$RUNNER_TEMP/alias-download.log" 2>&1
+            ALIAS_DOWNLOAD=$?
+            if [[ "$ALIAS_DOWNLOAD" == 0 ]]; then
+              python3 - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          value=Path(os.environ['RUNNER_TEMP']+'/account-alias.txt').read_text().strip().lower()
+          if hashlib.sha256(value.encode()).hexdigest()!='149c3e62b90cc9b672053d635c7fe01031a970e762723e53b389cbe8516fa788':
+              raise SystemExit('Unexpected private account alias')
+          PY
+              ALIAS_VALID=$?
+              if [[ "$ALIAS_VALID" == 0 ]]; then
+                ALIAS_ID=$(cat "$RUNNER_TEMP/account-alias.txt")
+                xcrun notarytool history --apple-id "$ALIAS_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --output-format json > "$RUNNER_TEMP/alias-history.json" 2> "$RUNNER_TEMP/alias-error.txt"
+                ALIAS_EXIT=$?
+                export ALIAS_EXIT
+                if [[ "$ALIAS_EXIT" == 0 ]]; then export APPLE_NOTARY_ID="$ALIAS_ID"; fi
+              fi
+            fi
+          fi
+          if [[ ( "$ACCOUNT_EXIT" == 0 || "$ALIAS_EXIT" == 0 ) && "$APPLE_TEAM_ID" == 845UL2K27Y ]]; then
+            xcrun notarytool submit "$INPUT_FILE" --apple-id "$APPLE_NOTARY_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait --timeout 5m --output-format json > "$RESULT_FILE" 2> "$RUNNER_TEMP/notary-error.txt"
             NOTARY_EXIT=$?
           else
             NOTARY_EXIT=1
@@ -64,15 +90,22 @@ jobs:
           except Exception: result={}
           error=Path(os.environ['RUNNER_TEMP']+'/notary-error.txt').read_text(errors='replace')
           detail=error+'\n'+str(result.get('message',''))
+          alias_file=Path(os.environ['RUNNER_TEMP']+'/alias-error.txt')
+          alias_detail=alias_file.read_text(errors='replace') if alias_file.exists() else ''
           for name in ('APPLE_ID','APPLE_PASSWORD','APPLE_TEAM_ID','CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID'):
-              if os.environ.get(name): detail=detail.replace(os.environ[name],'[redacted]')
+              if os.environ.get(name):
+                  detail=detail.replace(os.environ[name],'[redacted]')
+                  alias_detail=alias_detail.replace(os.environ[name],'[redacted]')
           detail=re.sub(r'[\w.+-]+@[\w.-]+','[redacted email]',detail)
           detail=re.sub(r'https?://\S+','[redacted URL]',detail)[:4096].strip()
+          alias_detail=re.sub(r'[\w.+-]+@[\w.-]+','[redacted email]',alias_detail)
+          alias_detail=re.sub(r'https?://\S+','[redacted URL]',alias_detail)[:4096].strip()
           failure='authentication_failed' if ('401' in error or 'Unable to authenticate' in error) else 'unsupported_argument' if ('Unknown' in error or 'Unexpected argument' in error) else 'provider_or_upload_error' if detail else None
           receipt={'failure_class':failure,'input_sha256':os.environ['INPUT_SHA'],'extension':os.environ['INPUT_EXTENSION'],'notarization_id':result.get('id'),'status':result.get('status','unconfirmed'),'exit_code':int(os.environ['NOTARY_EXIT']),'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_revision':os.environ['GITHUB_SHA'],'published':False}
           account_hash=hashlib.sha256(os.environ.get('APPLE_ID','').strip().lower().encode()).hexdigest()
           checks={'expected_team_matches':os.environ.get('APPLE_TEAM_ID')=='845UL2K27Y','account_holder_matches':account_hash=='ab20a3517a8615e80d6b6359b2e0e4ea0baaba3b3ecb003cccfd45a81cfd0cdd','existing_xcode_admin_matches':account_hash=='149c3e62b90cc9b672053d635c7fe01031a970e762723e53b389cbe8516fa788','account_history_exit':int(os.environ.get('ACCOUNT_EXIT','-1'))}
-          Path(os.environ['RECEIPT_FILE']).write_text(json.dumps({**receipt,'diagnostic_detail':detail,'account_checks':checks},indent=2)+'\n')
+          checks.update(alias_history_exit=int(os.environ.get('ALIAS_EXIT','-1')),used_alias=os.environ.get('APPLE_NOTARY_ID',os.environ['APPLE_ID'])!=os.environ['APPLE_ID'])
+          Path(os.environ['RECEIPT_FILE']).write_text(json.dumps({**receipt,'diagnostic_detail':detail,'alias_diagnostic_detail':alias_detail,'account_checks':checks},indent=2)+'\n')
           print(json.dumps(receipt))
           PY
           npx --yes wrangler@4.148.0 r2 object put "mod-private-releases/canaries/notarization/$INPUT_SHA-receipt-$GITHUB_RUN_ID.json" --remote --file "$RECEIPT_FILE" > "$RUNNER_TEMP/receipt-upload.log" 2>&1
@@ -87,3 +120,4 @@ jobs:
         shell: bash
         run: |
           rm -f "$RUNNER_TEMP/input.zip" "$RUNNER_TEMP/input.dmg" "$RUNNER_TEMP/notary-result.json" "$RUNNER_TEMP/receipt.json" "$RUNNER_TEMP/notary-error.txt" "$RUNNER_TEMP/history.json" "$RUNNER_TEMP/download.log" "$RUNNER_TEMP/receipt-upload.log"
+          rm -f "$RUNNER_TEMP/account-alias.txt" "$RUNNER_TEMP/alias-history.json" "$RUNNER_TEMP/alias-error.txt" "$RUNNER_TEMP/alias-download.log"
