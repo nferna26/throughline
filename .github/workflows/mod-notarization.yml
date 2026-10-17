@@ -52,7 +52,9 @@ jobs:
           from pathlib import Path
           try: result=json.loads(Path(os.environ['RESULT_FILE']).read_text())
           except Exception: result={}
-          receipt={'input_sha256':os.environ['INPUT_SHA'],'extension':os.environ['INPUT_EXTENSION'],'notarization_id':result.get('id'),'status':result.get('status','unconfirmed'),'exit_code':int(os.environ['NOTARY_EXIT']),'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_revision':os.environ['GITHUB_SHA'],'published':False}
+          error=Path(os.environ['RUNNER_TEMP']+'/notary-error.txt').read_text(errors='replace')
+          failure='authentication_failed' if ('401' in error or 'Unable to authenticate' in error) else 'unsupported_argument' if ('Unknown' in error or 'Unexpected argument' in error) else 'provider_or_upload_error' if error else None
+          receipt={'failure_class':failure,'input_sha256':os.environ['INPUT_SHA'],'extension':os.environ['INPUT_EXTENSION'],'notarization_id':result.get('id'),'status':result.get('status','unconfirmed'),'exit_code':int(os.environ['NOTARY_EXIT']),'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_revision':os.environ['GITHUB_SHA'],'published':False}
           Path(os.environ['RECEIPT_FILE']).write_text(json.dumps(receipt,indent=2)+'\n')
           print(json.dumps(receipt))
           PY
