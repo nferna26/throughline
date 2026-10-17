@@ -1,4 +1,4 @@
-# Private signing dispatch: 96a28afe72fb4f70840e335bbd8ec85b
+# Private signing dispatch: a9809ee1737c42faa12ae9e657728c8b
 # Nick approved this bounded signing-only bridge on 2026-10-17.
 # Reuses existing secrets without exporting them or publishing Mod.
 name: Notarize a private Mod candidate
@@ -50,13 +50,19 @@ jobs:
           export NOTARY_EXIT
           python3 - <<'PY'
           import json,os
+          import re
           from pathlib import Path
           try: result=json.loads(Path(os.environ['RESULT_FILE']).read_text())
           except Exception: result={}
           error=Path(os.environ['RUNNER_TEMP']+'/notary-error.txt').read_text(errors='replace')
-          failure='authentication_failed' if ('401' in error or 'Unable to authenticate' in error) else 'unsupported_argument' if ('Unknown' in error or 'Unexpected argument' in error) else 'provider_or_upload_error' if error else None
+          detail=error+'\n'+str(result.get('message',''))
+          for name in ('APPLE_ID','APPLE_PASSWORD','APPLE_TEAM_ID','CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID'):
+              if os.environ.get(name): detail=detail.replace(os.environ[name],'[redacted]')
+          detail=re.sub(r'[\w.+-]+@[\w.-]+','[redacted email]',detail)
+          detail=re.sub(r'https?://\S+','[redacted URL]',detail)[:4096].strip()
+          failure='authentication_failed' if ('401' in error or 'Unable to authenticate' in error) else 'unsupported_argument' if ('Unknown' in error or 'Unexpected argument' in error) else 'provider_or_upload_error' if detail else None
           receipt={'failure_class':failure,'input_sha256':os.environ['INPUT_SHA'],'extension':os.environ['INPUT_EXTENSION'],'notarization_id':result.get('id'),'status':result.get('status','unconfirmed'),'exit_code':int(os.environ['NOTARY_EXIT']),'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_revision':os.environ['GITHUB_SHA'],'published':False}
-          Path(os.environ['RECEIPT_FILE']).write_text(json.dumps(receipt,indent=2)+'\n')
+          Path(os.environ['RECEIPT_FILE']).write_text(json.dumps({**receipt,'diagnostic_detail':detail},indent=2)+'\n')
           print(json.dumps(receipt))
           PY
           npx --yes wrangler@4.148.0 r2 object put "mod-private-releases/canaries/notarization/$INPUT_SHA-receipt-$GITHUB_RUN_ID.json" --remote --file "$RECEIPT_FILE" > "$RUNNER_TEMP/receipt-upload.log" 2>&1
