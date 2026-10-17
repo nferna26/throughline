@@ -1,0 +1,70 @@
+# Nick approved this bounded signing-only bridge on 2026-10-17.
+# Reuses existing secrets without exporting them or publishing Mod.
+name: Notarize a private Mod candidate
+on:
+  push:
+    branches: [codex/mod-private-notary-jobs]
+    paths: [.github/workflows/mod-notarization.yml]
+permissions:
+  contents: read
+concurrency:
+  group: mod-notarization-only
+  cancel-in-progress: false
+jobs:
+  notarize:
+    runs-on: macos-26
+    timeout-minutes: 10
+    env:
+      INPUT_SHA: bb17d32f810b2f877909d0ab11b72f5a104b891a89410eb442b9d77bf9766428
+      INPUT_EXTENSION: zip
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      # No checkout, builds, repository changes, releases, GitHub artifacts,
+      # public download, secret export or stable-pointer writes in this job.
+      - name: Validate fixed private input and notarize with existing Apple credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$INPUT_SHA" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$INPUT_EXTENSION" == zip || "$INPUT_EXTENSION" == dmg ]]
+          export INPUT_FILE="$RUNNER_TEMP/input.$INPUT_EXTENSION"
+          export RESULT_FILE="$RUNNER_TEMP/notary-result.json"
+          export RECEIPT_FILE="$RUNNER_TEMP/receipt.json"
+          npx --yes wrangler@4.148.0 r2 object get "mod-private-releases/canaries/notarization/$INPUT_SHA.$INPUT_EXTENSION" --remote --file "$INPUT_FILE" > "$RUNNER_TEMP/download.log" 2>&1
+          python3 - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          if hashlib.sha256(Path(os.environ['INPUT_FILE']).read_bytes()).hexdigest()!=os.environ['INPUT_SHA']:
+              raise SystemExit('Input hash mismatch; no Apple submission')
+          PY
+          set +e
+          xcrun notarytool submit "$INPUT_FILE" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait --timeout 5m --output-format json > "$RESULT_FILE" 2> "$RUNNER_TEMP/notary-error.txt"
+          NOTARY_EXIT=$?
+          set -e
+          export NOTARY_EXIT
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          try: result=json.loads(Path(os.environ['RESULT_FILE']).read_text())
+          except Exception: result={}
+          receipt={'input_sha256':os.environ['INPUT_SHA'],'extension':os.environ['INPUT_EXTENSION'],'notarization_id':result.get('id'),'status':result.get('status','unconfirmed'),'exit_code':int(os.environ['NOTARY_EXIT']),'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_revision':os.environ['GITHUB_SHA'],'published':False}
+          Path(os.environ['RECEIPT_FILE']).write_text(json.dumps(receipt,indent=2)+'\n')
+          print(json.dumps(receipt))
+          PY
+          npx --yes wrangler@4.148.0 r2 object put "mod-private-releases/canaries/notarization/$INPUT_SHA-receipt-$GITHUB_RUN_ID.json" --remote --file "$RECEIPT_FILE" > "$RUNNER_TEMP/receipt-upload.log" 2>&1
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          r=json.loads(Path(os.environ['RECEIPT_FILE']).read_text())
+          if r['status']!='Accepted' or r['exit_code']!=0: raise SystemExit('Notarization unconfirmed; candidate is not ready')
+          PY
+      - name: Remove local candidate and logs
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/input.zip" "$RUNNER_TEMP/input.dmg" "$RUNNER_TEMP/notary-result.json" "$RUNNER_TEMP/receipt.json" "$RUNNER_TEMP/notary-error.txt" "$RUNNER_TEMP/download.log" "$RUNNER_TEMP/receipt-upload.log"
